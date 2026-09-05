@@ -198,8 +198,8 @@ class TrayApp:
                     dg_luids = ", ".join(self._gpu_name(l)
                                          for l in snap["dgpu_luids"]) or "-"
                     tip.config(text=f"核显: {ig_luids}    独显: {dg_luids}"
-                                    f"    刷新: 3 秒")
-                root.after(3000, refresh)
+                                    f"    刷新: 1 秒")
+                root.after(1000, refresh)
 
             def on_close():
                 self.panel_open = False

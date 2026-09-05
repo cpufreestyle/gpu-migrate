@@ -1,7 +1,7 @@
 {
   "threshold_percent": 20.0,
-  "sustain_samples": 5,
-  "interval_seconds": 5,
+  "sustain_samples": 20,
+  "interval_seconds": 1,
   "auto_restart": false,
   "notify": true,
   "exclude_processes": [],

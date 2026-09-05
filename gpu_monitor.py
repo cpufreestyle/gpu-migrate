@@ -144,6 +144,12 @@ def collect_gpu_sample():
                         usage[key] += v
             else:  # mem (Dedicated Usage): raw count, 取当前值
                 mem_usage[key] += r2[0]
+        # GPU 整体只有 100% 可分: 各引擎(各进程)利用率总和超过 100% 时
+        # 按比例归一化, 保持进程间相对占比不变
+        total = sum(usage.values())
+        if total > 100.0:
+            k = 100.0 / total
+            usage = {kk: v * k for kk, v in usage.items()}
         return dict(usage), dict(mem_usage), gpu_index
     finally:
         pdh.PdhCloseQuery(q)
@@ -729,7 +735,9 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
             if full not in active:
                 streak[full] = 0
 
-        time.sleep(cfg["interval_seconds"])
+        # 周期对齐: 扣除本轮采样耗时, 使显示频率与任务管理器一致
+        elapsed = time.time() - cycle_start
+        time.sleep(max(0.05, cfg["interval_seconds"] - elapsed))
 
 
 def cmd_set(paths):
