@@ -138,7 +138,9 @@ def collect_gpu_sample():
                 d = r2[1] - r1[1]
                 if d > 0 and n > 0:
                     v = 100.0 * n / d
-                    if v > 0.5:
+                    # >100% 说明 GPU Engine 实例在窗口内被销毁重建、
+                    # 句柄读到重排后的脏数据, 丢弃
+                    if 0.5 < v <= 100.0:
                         usage[key] += v
             else:  # mem (Dedicated Usage): raw count, 取当前值
                 mem_usage[key] += r2[0]
