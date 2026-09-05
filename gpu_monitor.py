@@ -113,28 +113,56 @@ def collect_gpu_sample():
                 handles.append((key, kind, h))
         if pdh.PdhCollectQueryData(q) != 0:
             raise OSError("PdhCollectQueryData #1 failed")
-        time.sleep(0.5)  # 利用率需要两个采样点
+        raw1 = {}
+        for key, kind, h in handles:
+            r = _pdh_read_raw(h)
+            if r:
+                raw1[(key, kind)] = r
+        time.sleep(0.5)  # 利用率窗口
         if pdh.PdhCollectQueryData(q) != 0:
             raise OSError("PdhCollectQueryData #2 failed")
-        val = wt.DOUBLE()
-        vtype = wt.DWORD()
         usage = defaultdict(float)
         mem_usage = defaultdict(float)
         for key, kind, h in handles:
-            if pdh.PdhGetFormattedCounterValue(h, PDH_FMT_DOUBLE, None,
-                                               ctypes.byref(val)) != 0:
+            r2 = _pdh_read_raw(h)
+            if not r2:
                 continue
             if kind == "util":
-                if val.value > 0.5:
-                    usage[key] += val.value
-            else:  # mem: 原始字节数，取当前值
-                mem_usage[key] += val.value
+                r1 = raw1.get((key, kind))
+                if not r1:
+                    continue
+                # PERF_100NSEC_TIMER: FirstValue=引擎活跃100ns数,
+                # SecondValue=挂钟100ns数。本机 PDH formatted rate 失效
+                # (恒返回0, 疑与虚拟显示环境时间戳有关), 故手动计算。
+                n = r2[0] - r1[0]
+                d = r2[1] - r1[1]
+                if d > 0 and n > 0:
+                    v = 100.0 * n / d
+                    if v > 0.5:
+                        usage[key] += v
+            else:  # mem (Dedicated Usage): raw count, 取当前值
+                mem_usage[key] += r2[0]
         return dict(usage), dict(mem_usage), gpu_index
     finally:
         pdh.PdhCloseQuery(q)
 
 
 # ================================================================ D3DKMT 显卡信息
+
+
+class _PDH_RAW_COUNTER(ctypes.Structure):
+    _fields_ = [("CStatus", wt.DWORD),
+                ("TimeStamp", wt.FILETIME),
+                ("FirstValue", ctypes.c_longlong),
+                ("SecondValue", ctypes.c_longlong),
+                ("MultiCount", wt.DWORD)]
+
+
+def _pdh_read_raw(handle):
+    raw = _PDH_RAW_COUNTER()
+    if pdh.PdhGetRawCounterValue(handle, None, ctypes.byref(raw)) != 0:
+        return None
+    return raw.FirstValue, raw.SecondValue
 
 gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 
