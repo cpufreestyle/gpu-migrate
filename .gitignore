@@ -1,3 +1,9 @@
 gpu_monitor.log
+gpu_monitor.log.1
+tray_error.log
+tray_debug.log
 __pycache__/
 *.pyc
+build/
+dist/
+GPUMigrate.exe

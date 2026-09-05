@@ -361,8 +361,12 @@ DEFAULT_CONFIG = {
     "sustain_samples": 5,        # 连续多少个采样周期超标才迁移
     "interval_seconds": 5,       # 采样周期
     "auto_restart": False,       # 自动结束并重启超标进程（使设置立即生效）
+    "auto_restart_processes": [],  # 仅对这些进程自动重启；留空 = 对所有超标进程
     "confirm_mode": False,       # 迁移前弹窗确认（确认/忽略都会被记住）
     "ignore_processes": [],      # 确认模式下选择“忽略”的进程名，不再询问
+    "power_saver_notify": False, # 独显上低负载程序提醒（可切回核显省电）
+    "power_saver_idle_percent": 10.0,  # 独显利用率低于该值视为低负载
+    "power_saver_samples": 60,   # 低负载持续多少个采样周期才提醒（60*5s=5分钟）
     "exclude_processes": [],     # 按进程名排除，如 ["chrome.exe"]
     "exclude_full_paths": [],    # 按完整路径前缀排除
     "force_igpu_names": [],      # 手动指定哪些显卡名算核显（覆盖自动判定）
@@ -379,19 +383,31 @@ def load_config(path):
     return cfg
 
 
+LOG_MAX_BYTES = 5 * 1024 * 1024  # 超过后滚动为 .log.1
+
+
 def log(msg, logfile=None):
     line = time.strftime("[%Y-%m-%d %H:%M:%S] ") + msg
-    print(line, flush=True)
+    try:
+        print(line, flush=True)
+    except (OSError, ValueError, AttributeError):
+        pass  # --noconsole / 重定向句柄失效时静默
     if logfile:
         try:
+            if os.path.exists(logfile) \
+                    and os.path.getsize(logfile) > LOG_MAX_BYTES:
+                os.replace(logfile, logfile + ".1")
             with open(logfile, "a", encoding="utf-8") as f:
                 f.write(line + "\n")
         except OSError:
             pass
 
 
-TOAST_PS1 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                         "show_toast.ps1")
+_DIR = (os.path.dirname(os.path.abspath(sys.executable))
+        if getattr(sys, "frozen", False)  # PyInstaller: exe 所在目录
+        else os.path.dirname(os.path.abspath(__file__)))
+
+TOAST_PS1 = os.path.join(_DIR, "show_toast.ps1")
 
 
 def notify(title, msg):
@@ -487,14 +503,17 @@ def kind_of_luid(luid, cache, forced):
 _CONFIG_PATH = None
 
 
-def cmd_monitor(cfg, config_path=None):
+def cmd_monitor(cfg, config_path=None, hooks=None):
+    """监控主循环。hooks 可选字段:
+      before_cycle() -> 返回 False 时退出循环
+      on_sample(snapshot)  每轮采样后回调（托盘/面板用）
+    """
     global _CONFIG_PATH
     _CONFIG_PATH = config_path
-    logfile = (os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "gpu_monitor.log")
+    logfile = (os.path.join(_DIR, "gpu_monitor.log")
                if cfg["log_to_file"] else None)
-    log(f"启动监控: 阈值 {cfg['threshold_percent']}%, "
-        f"持续 {cfg['sustain_samples']} 次采样 (间隔 {cfg['interval_seconds']}s), "
+    log(f"启动监控: 阈值 {cfg['threshold_percent']}%, 显存阈值 "
+        f"{cfg.get('vram_threshold_mb', 0)}MB, 确认模式={cfg['confirm_mode']}, "
         f"自动重启={cfg['auto_restart']}", logfile)
     log("提示: 迁移通过写入图形首选项实现，进程重启后生效。", logfile)
 
@@ -503,9 +522,38 @@ def cmd_monitor(cfg, config_path=None):
     done = set()
     kind_cache = {}
     ignore = {n.lower() for n in cfg["ignore_processes"]}
+    ps_notified = set()   # 省电提醒过的 exe，只提醒一次
+    ps_streak = defaultdict(int)
+    last_mtime = None
+    if config_path and os.path.exists(config_path):
+        try:
+            last_mtime = os.path.getmtime(config_path)
+        except OSError:
+            pass
     vram_mb = cfg.get("vram_threshold_mb", 1024)
 
+    def apply_config(new_cfg):
+        nonlocal cfg, forced, vram_mb, ignore
+        cfg = new_cfg
+        forced = {n.lower() for n in cfg["force_igpu_names"]}
+        vram_mb = cfg.get("vram_threshold_mb", 1024)
+        ignore = {n.lower() for n in cfg["ignore_processes"]}
+        log("检测到配置修改，已热重载", logfile)
+
     while True:
+        if hooks and hooks.get("before_cycle") \
+                and hooks["before_cycle"]() is False:
+            break
+        # 配置热重载 (mtime 变化即重新加载)
+        if config_path and os.path.exists(config_path):
+            try:
+                mtime = os.path.getmtime(config_path)
+                if last_mtime is not None and mtime != last_mtime:
+                    apply_config(load_config(config_path))
+                last_mtime = mtime
+            except OSError:
+                pass
+
         try:
             usage, mem_usage, gpu_index = collect_gpu_sample()
         except OSError as e:
@@ -513,22 +561,66 @@ def cmd_monitor(cfg, config_path=None):
             time.sleep(cfg["interval_seconds"])
             continue
 
-        # 识别本次采样中的核显 LUID
-        igpu_luids = set()
+        # 识别本次采样中的核显/独显 LUID
+        igpu_luids, dgpu_luids = set(), set()
         for (luid, _phys) in gpu_index:
             kind, _name = kind_of_luid(luid, kind_cache, forced)
             if kind == "igpu":
                 igpu_luids.add(luid)
+            elif kind == "dgpu":
+                dgpu_luids.add(luid)
 
-        # 按进程汇总核显上的利用率和专用显存
+        # 按进程汇总核显/独显上的利用率与专用显存
         util_by_pid = defaultdict(float)
         mem_by_pid = defaultdict(float)
+        dgpu_util_by_pid = defaultdict(float)
         for (pid, luid, _phys), v in usage.items():
             if luid in igpu_luids:
                 util_by_pid[pid] += v
+            elif luid in dgpu_luids:
+                dgpu_util_by_pid[pid] += v
         for (pid, luid, _phys), v in mem_usage.items():
             if luid in igpu_luids:
                 mem_by_pid[pid] += v
+
+        if hooks and hooks.get("on_sample"):
+            hooks["on_sample"]({
+                "util_by_pid": dict(util_by_pid),
+                "mem_by_pid": dict(mem_by_pid),
+                "dgpu_util_by_pid": dict(dgpu_util_by_pid),
+                "igpu_luids": set(igpu_luids),
+                "dgpu_luids": set(dgpu_luids),
+                "kind_cache": dict(kind_cache),
+            })
+
+        # 省电提醒: 独显上持续低负载且已迁移过的程序 (可切回核显省电)
+        if cfg.get("power_saver_notify"):
+            idle_pct = cfg.get("power_saver_idle_percent", 10.0)
+            need = cfg.get("power_saver_samples", 60)
+            for pid in list(ps_streak):
+                if pid not in dgpu_util_by_pid:
+                    ps_streak[pid] = 0
+            for pid, u in dgpu_util_by_pid.items():
+                if u >= idle_pct:
+                    ps_streak[pid] = 0
+                    continue
+                info = pid_to_name(pid)
+                if not info:
+                    continue
+                pname, full = info
+                if full in ps_notified:
+                    continue
+                if get_gpu_preference(full) != "GpuPreference=2;":
+                    continue
+                ps_streak[pid] += 1
+                if ps_streak[pid] >= need:
+                    ps_notified.add(full)
+                    log(f"省电提醒: {pname} 在独显上持续低负载({u:.0f}%)", logfile)
+                    if cfg["notify"]:
+                        notify("省电提醒",
+                               f"{pname} 在独显上持续低负载，"
+                               "不用时可切回核显省电（--unset 后重开程序）")
+                break  # 每轮最多推进一个进程的计数
 
         hot = []
         for pid in set(util_by_pid) | set(mem_by_pid):
@@ -574,13 +666,17 @@ def cmd_monitor(cfg, config_path=None):
                     set_gpu_preference(full)
                     done.add(full)
                     log(f"  -> 已设置 {full} 为高性能GPU(GpuPreference=2;)", logfile)
-                    if cfg["auto_restart"]:
+                    ar_list = {x.lower()
+                               for x in cfg.get("auto_restart_processes", [])}
+                    if cfg["auto_restart"] and (not ar_list
+                                                or pname.lower() in ar_list):
                         ok = restart_process(pid, full)
                         log(f"  -> {'已自动重启 ' + pname if ok else '自动重启失败，请手动重启'}",
                             logfile)
                         if cfg["notify"]:
                             notify("GPU 迁移成功",
-                                   f"{pname} 已设为独显运行" + ("，进程已自动重启" if ok else "，自动重启失败请手动重启"))
+                                   f"{pname} 已设为独显运行"
+                                   + ("，进程已自动重启" if ok else "，自动重启失败请手动重启"))
                     elif cfg["notify"]:
                         notify("GPU 迁移成功",
                                f"{pname} {reason}，已设为独显。重启该程序后生效。")
@@ -665,16 +761,23 @@ def main():
     ap = argparse.ArgumentParser(description="核显高占用进程 -> 独显迁移工具")
     ap.add_argument("--list", action="store_true", help="列出显卡和当前占用")
     ap.add_argument("--once", action="store_true", help="采样一次退出")
+    ap.add_argument("--tray", action="store_true",
+                    help="托盘模式: 后台监控 + 托盘图标 + 实时面板")
     ap.add_argument("--set", nargs="+", metavar="EXE", help="手动把 exe 设为独显")
     ap.add_argument("--unset", nargs="+", metavar="EXE", help="清除 exe 的独显设置")
     ap.add_argument("--status", action="store_true",
                     help="列出所有已设置 GPU 首选项的程序")
     ap.add_argument("--unset-all", action="store_true",
                     help="清除全部独显设置（GpuPreference=2）")
-    ap.add_argument("--config", default=os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "config.json"))
+    ap.add_argument("--config", default=os.path.join(_DIR, "config.json"))
+    if getattr(sys, "frozen", False) and len(sys.argv) == 1:
+        sys.argv.append("--tray")  # 打包版双击直接进托盘模式
     args = ap.parse_args()
 
+    if args.tray:
+        import gpu_tray
+        gpu_tray.run_tray(args.config)
+        return
     if args.set:
         cmd_set(args.set)
         return
