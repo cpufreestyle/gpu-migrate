@@ -491,6 +491,12 @@ def cmd_unset(paths):
 
 
 def main():
+    # pythonw（开机自启/无窗口模式）下没有 stdout，print 会崩，重定向到空设备
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+
     ap = argparse.ArgumentParser(description="核显高占用进程 -> 独显迁移工具")
     ap.add_argument("--list", action="store_true", help="列出显卡和当前占用")
     ap.add_argument("--once", action="store_true", help="采样一次退出")
