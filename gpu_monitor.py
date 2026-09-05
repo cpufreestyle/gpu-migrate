@@ -440,6 +440,9 @@ DEFAULT_CONFIG = {
     "exclude_full_paths": [],    # 按完整路径前缀排除
     "force_igpu_names": [],      # 手动指定哪些显卡名算核显（覆盖自动判定）
     "notify": True,              # 迁移成功/失败时弹 Windows 通知
+    "notify_fullscreen_ignore": True,  # 前台全屏(游戏/视频)时不弹通知
+    "power_saver_auto": False,   # 低负载自动把独显设置改回核显 (省电)
+    "history": True,             # 每 10 秒记录核显总占用到 history.jsonl
     "log_to_file": True,
 }
 
@@ -479,6 +482,53 @@ _DIR = (os.path.dirname(os.path.abspath(sys.executable))
 TOAST_PS1 = os.path.join(_DIR, "show_toast.ps1")
 
 
+_user32 = ctypes.WinDLL("user32")
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", _RECT),
+                ("rcWork", _RECT), ("dwFlags", wt.DWORD)]
+
+
+def is_foreground_fullscreen():
+    """前台窗口是否覆盖了整个显示器 (全屏游戏/视频)。"""
+    try:
+        hwnd = _user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        buf = ctypes.create_unicode_buffer(256)
+        _user32.GetClassNameW(hwnd, buf, 256)
+        if buf.value in ("Progman", "WorkerW", "Shell_TrayWnd"):
+            return False
+        rect = _RECT()
+        if not _user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return False
+        mi = _MONITORINFO()
+        mi.cbSize = ctypes.sizeof(_MONITORINFO)
+        if not _user32.GetMonitorInfoW(
+                _user32.MonitorFromWindow(hwnd, 2), ctypes.byref(mi)):
+            return False
+        m = mi.rcMonitor
+        return (rect.left <= m.left and rect.top <= m.top
+                and rect.right >= m.right and rect.bottom >= m.bottom)
+    except Exception:
+        return False
+
+
+def notify_cfg(cfg, title, msg):
+    """带开关与全屏免打扰判断的通知。"""
+    if not cfg.get("notify"):
+        return
+    if cfg.get("notify_fullscreen_ignore", True) and is_foreground_fullscreen():
+        return
+    notify(title, msg)
+
+
 def notify(title, msg):
     """发 Windows Toast 通知（异步、失败静默，不阻塞监控）。"""
     if not os.path.isfile(TOAST_PS1):
@@ -494,17 +544,18 @@ def notify(title, msg):
 
 
 def restart_process(pid, full_path):
+    """结束进程并重启, 成功返回新 pid, 失败返回 None。"""
     try:
         subprocess.run(["taskkill", "/PID", str(pid), "/F"],
                        capture_output=True, check=True)
     except subprocess.CalledProcessError:
-        return False
+        return None
     time.sleep(1)
     try:
-        subprocess.Popen([full_path], cwd=os.path.dirname(full_path))
-        return True
+        proc = subprocess.Popen([full_path], cwd=os.path.dirname(full_path))
+        return proc.pid
     except OSError:
-        return False
+        return None
 
 
 def discover_gpus(gpu_index):
@@ -591,8 +642,10 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
     done = set()
     kind_cache = {}
     ignore = {n.lower() for n in cfg["ignore_processes"]}
-    ps_notified = set()   # 省电提醒过的 exe，只提醒一次
+    ps_notified = set()   # 省电处理过的 exe，只处理一次
     ps_streak = defaultdict(int)
+    pending_verify = {}   # full -> {pid, since, name}: 迁移重启后的验证队列
+    hist_last = 0.0
     last_mtime = None
     if config_path and os.path.exists(config_path):
         try:
@@ -610,6 +663,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
         log("检测到配置修改，已热重载", logfile)
 
     while True:
+        cycle_start = time.time()
         if hooks and hooks.get("before_cycle") \
                 and hooks["before_cycle"]() is False:
             break
@@ -660,6 +714,25 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
             if luid in igpu_luids:
                 mem_by_pid[pid] += v
 
+        # 历史记录: 每 10 秒记录核显总占用 (内存环形队列给面板画趋势,
+        # history.jsonl 落盘供事后分析, 超 1MB 滚动)
+        now_ts = time.time()
+        if cfg.get("history", True) and now_ts - hist_last >= 10:
+            hist_last = now_ts
+            total_util = sum(util_by_pid.values())
+            if hooks and hooks.get("on_history_point"):
+                hooks["on_history_point"](now_ts, total_util)
+            hist_file = os.path.join(_DIR, "history.jsonl")
+            try:
+                if os.path.exists(hist_file) \
+                        and os.path.getsize(hist_file) > 1_000_000:
+                    os.replace(hist_file, hist_file + ".1")
+                with open(hist_file, "a", encoding="utf-8") as f:
+                    f.write(json.dumps({"ts": int(now_ts),
+                                        "total": round(total_util, 1)}) + "\n")
+            except OSError:
+                pass
+
         if hooks and hooks.get("on_sample"):
             hooks["on_sample"]({
                 "util_by_pid": dict(util_by_pid),
@@ -671,8 +744,29 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                 "kind_cache": dict(kind_cache),
             })
 
-        # 省电提醒: 独显上持续低负载且已迁移过的程序 (可切回核显省电)
-        if cfg.get("power_saver_notify"):
+        # 迁移效果闭环: 观察重启后的进程实际挂在哪块显卡上
+        for full, pv in list(pending_verify.items()):
+            age = time.time() - pv["since"]
+            if age > 90:
+                del pending_verify[full]   # 一直没有 GPU 活动, 放弃验证
+                continue
+            luids_seen = {luid for (pid2, luid, _ph) in usage.items()
+                          if pid2 == pv["pid"]}
+            if not luids_seen:
+                continue
+            if luids_seen & dgpu_luids:
+                del pending_verify[full]
+                log(f"迁移验证: {pv['name']} 已确认运行在独显上", logfile)
+                notify_cfg(cfg, "迁移验证成功", f"{pv['name']} 已确认运行在独显上")
+            elif (luids_seen & igpu_luids) and age > 20:
+                del pending_verify[full]
+                log(f"迁移验证: {pv['name']} 重启后仍在核显上运行", logfile)
+                notify_cfg(cfg, "迁移未生效",
+                           f"{pv['name']} 重启后仍在核显上，"
+                           "可能被显卡驱动策略覆盖，可到系统图形设置手动确认")
+
+        # 省电: 独显上持续低负载且已迁移过的程序 (提醒或自动切回核显)
+        if cfg.get("power_saver_notify") or cfg.get("power_saver_auto"):
             idle_pct = cfg.get("power_saver_idle_percent", 10.0)
             need = cfg.get("power_saver_samples", 60)
             for pid in list(ps_streak):
@@ -693,11 +787,21 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                 ps_streak[pid] += 1
                 if ps_streak[pid] >= need:
                     ps_notified.add(full)
-                    log(f"省电提醒: {pname} 在独显上持续低负载({u:.0f}%)", logfile)
-                    if cfg["notify"]:
-                        notify("省电提醒",
-                               f"{pname} 在独显上持续低负载，"
-                               "不用时可切回核显省电（--unset 后重开程序）")
+                    log(f"省电: {pname} 在独显上持续低负载({u:.0f}%)", logfile)
+                    if cfg.get("power_saver_auto"):
+                        try:
+                            set_gpu_preference(full, "GpuPreference=1;")
+                            log(f"  -> 已把 {full} 改回核显设置(GpuPreference=1;)",
+                                logfile)
+                            notify_cfg(cfg, "已切回核显省电",
+                                       f"{pname} 长期低负载，已改回核显设置，"
+                                       "重启该程序后生效")
+                        except OSError as e:
+                            log(f"  -> 改回核显失败: {e}", logfile)
+                    else:
+                        notify_cfg(cfg, "省电提醒",
+                                   f"{pname} 在独显上持续低负载，"
+                                   "不用时可切回核显省电（--unset 后重开程序）")
                 break  # 每轮最多推进一个进程的计数
 
         hot = []
@@ -751,22 +855,23 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                                for x in cfg.get("auto_restart_processes", [])}
                     if cfg["auto_restart"] and (not ar_list
                                                 or pname.lower() in ar_list):
-                        ok = restart_process(pid, full)
-                        log(f"  -> {'已自动重启 ' + pname if ok else '自动重启失败，请手动重启'}",
+                        new_pid = restart_process(pid, full)
+                        log(f"  -> {'已自动重启 ' + pname if new_pid else '自动重启失败，请手动重启'}",
                             logfile)
-                        if cfg["notify"]:
-                            notify("GPU 迁移成功",
+                        if new_pid:
+                            pending_verify[full] = {
+                                "pid": new_pid, "since": time.time(),
+                                "name": pname}
+                        notify_cfg(cfg, "GPU 迁移成功",
                                    f"{pname} 已设为独显运行"
-                                   + ("，进程已自动重启" if ok else "，自动重启失败请手动重启"))
-                    elif cfg["notify"]:
-                        notify("GPU 迁移成功",
-                               f"{pname} {reason}，已设为独显。重启该程序后生效。")
+                                   + ("，进程已自动重启" if new_pid else "，自动重启失败请手动重启"))
                     else:
+                        notify_cfg(cfg, "GPU 迁移成功",
+                                   f"{pname} {reason}，已设为独显。重启该程序后生效。")
                         log("  -> 重启该程序后即可运行在独显上", logfile)
                 except OSError as e:
                     log(f"  -> 写注册表失败: {e}", logfile)
-                    if cfg["notify"]:
-                        notify("GPU 迁移失败", f"{pname}: {e}")
+                    notify_cfg(cfg, "GPU 迁移失败", f"{pname}: {e}")
                 streak[full] = 0
             else:
                 log(f"检测到 {pname} (pid {pid}) {reason} "
@@ -846,6 +951,8 @@ def main():
     ap.add_argument("--once", action="store_true", help="采样一次退出")
     ap.add_argument("--tray", action="store_true",
                     help="托盘模式: 后台监控 + 托盘图标 + 实时面板")
+    ap.add_argument("--ensure", action="store_true",
+                    help="确保托盘实例在运行 (已在运行则退出), 供看门狗调用")
     ap.add_argument("--set", nargs="+", metavar="EXE", help="手动把 exe 设为独显")
     ap.add_argument("--unset", nargs="+", metavar="EXE", help="清除 exe 的独显设置")
     ap.add_argument("--status", action="store_true",
@@ -857,7 +964,12 @@ def main():
         sys.argv.append("--tray")  # 打包版双击直接进托盘模式
     args = ap.parse_args()
 
-    if args.tray:
+    if args.tray or args.ensure:
+        k32 = ctypes.WinDLL("kernel32")
+        k32.CreateMutexW.argtypes = [wt.LPCVOID, wt.BOOL, wt.LPCWSTR]
+        k32.CreateMutexW(None, False, "GPUMigrate_Singleton")
+        if k32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            return
         import gpu_tray
         gpu_tray.run_tray(args.config)
         return

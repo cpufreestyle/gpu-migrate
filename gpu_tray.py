@@ -8,6 +8,7 @@ gpu_tray.py — 托盘模式：系统托盘图标 + 后台监控 + 实时占用�
 import os
 import threading
 import time
+from collections import deque
 import tkinter as tk
 from tkinter import ttk
 
@@ -21,6 +22,8 @@ import sys
 _DIR = (os.path.dirname(os.path.abspath(sys.executable))
         if getattr(sys, "frozen", False)
         else os.path.dirname(os.path.abspath(__file__)))
+
+_UI_FILE = os.path.join(_DIR, "panel_ui.json")
 _CONFIG_PATH = os.path.join(_DIR, "config.json")
 
 
@@ -60,6 +63,9 @@ class TrayApp:
         self._name_cache = {}
         self._pref_cache = {}       # exe -> 迁移状态, 10 秒过期
         self._pref_ts = 0.0
+        self.history = deque(maxlen=600)   # (ts, 核显总占用%) 每 10 秒一点
+        self.sort_state = {"col": "igpu", "desc": True}
+        self._root_ref = None
 
         self.icon = pystray.Icon(
             "GPUMigrate",
@@ -121,7 +127,8 @@ class TrayApp:
         try:
             cmd_monitor(self.cfg, self.config_path,
                         hooks={"before_cycle": self._before_cycle,
-                               "on_sample": self._on_sample})
+                               "on_sample": self._on_sample,
+                               "on_history_point": self._on_history_point})
         except Exception:  # 后台线程兜底，错误落盘便于排查
             import traceback
             try:
@@ -130,6 +137,41 @@ class TrayApp:
                     f.write(traceback.format_exc())
             except OSError:
                 pass
+
+    def _on_history_point(self, ts, total):
+        self.history.append((ts, total))
+        if self._root_ref is not None:
+            try:
+                self._root_ref.after(0, self._redraw_sparkline)
+            except Exception:
+                pass
+
+    _SORT_NUM_COLS = {"pid", "igpu", "imem", "dgpu"}
+
+    def _toggle_sort(self, col):
+        st = self.sort_state
+        if st["col"] == col:
+            st["desc"] = not st["desc"]
+        else:
+            st["col"], st["desc"] = col, True
+
+    def _sort_rows(self, rows):
+        col = self.sort_state["col"]
+        desc = self.sort_state["desc"]
+        idx = {"name": 0, "pid": 1, "igpu": 2, "imem": 3,
+               "dgpu": 4, "pref": 5}.get(col, 2)
+        numeric = col in self._SORT_NUM_COLS
+
+        def key(row):
+            v = row[1][idx]
+            if numeric:
+                try:
+                    return float(str(v).replace("%", "").replace(" MB", ""))
+                except ValueError:
+                    return -1.0
+            return str(v)
+
+        return sorted(rows, key=key, reverse=desc)
 
     # ---- 实时面板 (tkinter, 独立线程) ----
 
@@ -159,18 +201,36 @@ class TrayApp:
             return
         try:
             root.title("GPU 占用监控")
-            root.geometry("880x360")
+            self._root_ref = root
+
+            # 恢复上次窗口位置/大小/列宽
+            ui = {}
+            try:
+                import json as _json
+                with open(_UI_FILE, "r", encoding="utf-8") as f:
+                    ui = _json.load(f)
+            except (OSError, ValueError):
+                pass
+            root.geometry(ui.get("geometry", "880x360"))
             root.attributes("-topmost", True)
 
             cols = ("name", "pid", "igpu", "imem", "dgpu", "pref")
+            widths = {c: w for c, w in ui.get("widths", {}).items()}
+            defaults = {"name": 220, "pid": 60, "igpu": 60, "imem": 80,
+                        "dgpu": 60, "pref": 170}
             tree = ttk.Treeview(root, columns=cols, show="headings", height=12)
-            for cid, text, w in (("name", "进程", 220), ("pid", "PID", 60),
-                                 ("igpu", "核显%", 60), ("imem", "显存MB", 80),
-                                 ("dgpu", "独显%", 60),
-                                 ("pref", "迁移状态", 170)):
-                tree.heading(cid, text=text)
-                tree.column(cid, width=w, anchor="center")
-            tree.pack(fill="both", expand=True, padx=6, pady=6)
+            for cid, text in (("name", "进程"), ("pid", "PID"),
+                              ("igpu", "核显%"), ("imem", "显存MB"),
+                              ("dgpu", "独显%"), ("pref", "迁移状态")):
+                tree.heading(cid, text=text,
+                             command=lambda c=cid: self._toggle_sort(c))
+                tree.column(cid, width=widths.get(cid, defaults[cid]),
+                            anchor="center")
+            tree.pack(fill="both", expand=True, padx=6, pady=(6, 0))
+
+            spark = tk.Canvas(root, height=46, bg="#1e1e28",
+                              highlightthickness=0)
+            spark.pack(fill="x", padx=6, pady=(0, 0))
 
             tip = tk.Label(root, text="", anchor="w", fg="#666")
             tip.pack(fill="x", padx=8, pady=(0, 6))
@@ -203,6 +263,7 @@ class TrayApp:
                 # 任何异常都不允许中断 after 链, 否则面板从此不再刷新
                 try:
                     self._refresh_tree(tree, tip)
+                    self._draw_sparkline(spark)
                 except Exception:
                     pass
                 if self.panel_open and not self.stop:
@@ -210,6 +271,15 @@ class TrayApp:
 
             def on_close():
                 self.panel_open = False
+                try:
+                    import json as _json
+                    ui = {"geometry": root.geometry(),
+                          "widths": {c: tree.column(c, width=None)
+                                     for c in cols}}
+                    with open(_UI_FILE, "w", encoding="utf-8") as f:
+                        _json.dump(ui, f, ensure_ascii=False)
+                except (OSError, ValueError):
+                    pass
                 root.destroy()
 
             root.protocol("WM_DELETE_WINDOW", on_close)
@@ -219,6 +289,30 @@ class TrayApp:
             pass
         finally:
             self.panel_open = False
+
+    def _draw_sparkline(self, canvas):
+        try:
+            canvas.delete("all")
+            pts = list(self.history)[-180:]   # 最近 30 分钟
+            w = int(canvas.winfo_width() or 860)
+            h = int(canvas.winfo_height() or 46)
+            if len(pts) < 2:
+                canvas.create_text(w / 2, h / 2, fill="#667",
+                                   text="核显占用趋势 (每 10 秒一点)")
+                return
+            ymax = max(30.0, max(v for _t, v in pts))
+            step = w / (len(pts) - 1)
+            coords = []
+            for i, (_t, v) in enumerate(pts):
+                coords += [i * step, h - 4 - (h - 10) * v / ymax]
+            canvas.create_line(coords, fill="#4cd964", width=2)
+            canvas.create_text(w - 6, 6, anchor="ne", fill="#99a",
+                               text=f"近{len(pts)*10//60}分钟 核显占用 峰值{max(v for _t, v in pts):.0f}%")
+        except Exception:
+            pass
+
+    def _redraw_sparkline(self):
+        pass   # 趋势图随 1 秒刷新周期自动重绘, 历史点无需额外触发
 
     def _refresh_tree(self, tree, tip):
         with self.lock:
@@ -240,7 +334,7 @@ class TrayApp:
                     pref = "已设独显(重启生效)"
                 rows.append((max(ig, dg), (name, pid, f"{ig:.0f}%",
                                            f"{im:.0f} MB", f"{dg:.0f}%", pref)))
-        rows.sort(key=lambda r: -r[0])
+        rows = self._sort_rows(rows)
         tree.delete(*tree.get_children())
         for _ig, row in rows[:30]:
             tree.insert("", "end", values=row)
