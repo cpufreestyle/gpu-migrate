@@ -26,6 +26,10 @@ python gpu_monitor.py
 # 手动把某个 exe 设为独显 / 撤销
 python gpu_monitor.py --set "D:\Games\game.exe"
 python gpu_monitor.py --unset "D:\Games\game.exe"
+
+# 查看所有已迁移的程序 / 一键清空（带确认）
+python gpu_monitor.py --status
+python gpu_monitor.py --unset-all
 ```
 
 ## 配置（config.json）
@@ -33,9 +37,12 @@ python gpu_monitor.py --unset "D:\Games\game.exe"
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `threshold_percent` | 50 | 核显利用率超过该百分比视为高占用 |
+| `vram_threshold_mb` | 1024 | 核显专用显存超过该 MB 也触发迁移（0 = 关闭），适合 Stable Diffusion / 本地大模型等吃显存程序 |
 | `sustain_samples` | 5 | 连续超标多少个采样周期才迁移 |
 | `interval_seconds` | 5 | 采样周期 |
 | `auto_restart` | false | 迁移后自动结束并重启该进程（慎用，进程会中断） |
+| `confirm_mode` | false | 迁移前弹窗询问；选择“忽略”的进程会记住，不再询问 |
+| `ignore_processes` | [] | 确认模式下被忽略的进程名（也可手动编辑） |
 | `exclude_processes` | [] | 按进程名排除，如 `["chrome.exe"]` |
 | `exclude_full_paths` | [] | 按完整路径前缀排除 |
 | `force_igpu_names` | [] | 手动指定哪些显卡名按核显处理（自动判定失败时用） |
