@@ -498,7 +498,7 @@ def cmd_list():
     mem_by_pid = defaultdict(float)
     for (pid, luid, _phys), v in usage.items():
         if gpus[luid]["kind"] == "igpu":
-            per_pid[pid] += v
+            per_pid[pid] = max(per_pid[pid], v)
     for (pid, luid, _phys), v in mem_usage.items():
         if gpus[luid]["kind"] == "igpu" and v > 1024 * 1024:  # 忽略 <1MB 噪音
             mem_by_pid[pid] += v
@@ -599,17 +599,18 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                 dgpu_luids.add(luid)
 
         # 按进程汇总核显/独显/其他GPU(WARP、虚拟)上的利用率与专用显存
+        # 口径与任务管理器一致: 进程利用率 = 单引擎最大值 (多引擎求和会虚高)
         util_by_pid = defaultdict(float)
         mem_by_pid = defaultdict(float)
         dgpu_util_by_pid = defaultdict(float)
         other_util_by_pid = defaultdict(float)
         for (pid, luid, _phys), v in usage.items():
             if luid in igpu_luids:
-                util_by_pid[pid] += v
+                util_by_pid[pid] = max(util_by_pid[pid], v)
             elif luid in dgpu_luids:
-                dgpu_util_by_pid[pid] += v
+                dgpu_util_by_pid[pid] = max(dgpu_util_by_pid[pid], v)
             else:
-                other_util_by_pid[pid] += v
+                other_util_by_pid[pid] = max(other_util_by_pid[pid], v)
         for (pid, luid, _phys), v in mem_usage.items():
             if luid in igpu_luids:
                 mem_by_pid[pid] += v
