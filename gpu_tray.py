@@ -143,15 +143,15 @@ class TrayApp:
         try:
             root = tk.Tk()
             root.title("GPU 占用监控")
-            root.geometry("760x360")
+            root.geometry("880x360")
             root.attributes("-topmost", True)
 
             cols = ("name", "pid", "igpu", "imem", "dgpu", "other", "pref")
             tree = ttk.Treeview(root, columns=cols, show="headings", height=12)
-            for cid, text, w in (("name", "进程", 200), ("pid", "PID", 65),
-                                 ("igpu", "核显 %", 65), ("imem", "核显显存", 85),
-                                 ("dgpu", "独显 %", 65), ("other", "其他GPU %", 80),
-                                 ("pref", "迁移状态", 160)):
+            for cid, text, w in (("name", "进程", 210), ("pid", "PID", 55),
+                                 ("igpu", "核显%", 60), ("imem", "显存MB", 75),
+                                 ("dgpu", "独显%", 60), ("other", "其他GPU%", 80),
+                                 ("pref", "迁移状态", 170)):
                 tree.heading(cid, text=text)
                 tree.column(cid, width=w, anchor="center")
             tree.pack(fill="both", expand=True, padx=6, pady=6)
