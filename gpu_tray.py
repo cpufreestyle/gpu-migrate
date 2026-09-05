@@ -139,12 +139,8 @@ class TrayApp:
                 pass
 
     def _on_history_point(self, ts, total):
+        # 只写队列; 严禁从监控线程调用 tkinter (跨线程会让面板消息循环卡死)
         self.history.append((ts, total))
-        if self._root_ref is not None:
-            try:
-                self._root_ref.after(0, self._redraw_sparkline)
-            except Exception:
-                pass
 
     _SORT_NUM_COLS = {"pid", "igpu", "imem", "dgpu"}
 
@@ -310,9 +306,6 @@ class TrayApp:
                                text=f"近{len(pts)*10//60}分钟 核显占用 峰值{max(v for _t, v in pts):.0f}%")
         except Exception:
             pass
-
-    def _redraw_sparkline(self):
-        pass   # 趋势图随 1 秒刷新周期自动重绘, 历史点无需额外触发
 
     def _refresh_tree(self, tree, tip):
         with self.lock:
