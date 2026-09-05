@@ -75,12 +75,13 @@ def expand_gpu_counter_paths():
     return expand_counter_paths("GPU Engine(*)\\Utilization Percentage")
 
 
-def collect_gpu_sample():
-    """采样 GPU Engine 利用率 + GPU Process Memory 专用显存。
+def collect_gpu_sample(allowed_luids=None):
+    """采样 GPU Engine 利用率 + GPU Process Memory 显存。
 
+    allowed_luids: 只注册这些显卡上的实例 (省 CPU); None = 全部。
     返回 (usage, mem_usage, gpu_index):
       usage:     {(pid, luid, phys): 利用率%}
-      mem_usage: {(pid, luid, phys): 专用显存字节}
+      mem_usage: {(pid, luid, phys): 显存字节}
       gpu_index: {(luid, phys): None} 所有出现过的实例（含 0 利用率）
     """
     counters = []
@@ -95,9 +96,13 @@ def collect_gpu_sample():
             luid = f"{m.group(2).upper()}_{m.group(3).upper()}"
             phys = int(m.group(4))
             gpu_index.setdefault((luid, phys), None)
+            if allowed_luids is not None and luid not in allowed_luids:
+                continue
             counters.append((p, (pid, luid, phys), kind))
 
     add_paths(expand_counter_paths("GPU Engine(*)\\Utilization Percentage"), "util")
+    # 核显占用在 Shared Usage, 独显在 Dedicated Usage; 两条相加=总显存占用
+    add_paths(expand_counter_paths("GPU Process Memory(*)\\Shared Usage"), "mem")
     add_paths(expand_counter_paths("GPU Process Memory(*)\\Dedicated Usage"), "mem")
     if not counters:
         return {}, {}, {}
@@ -372,6 +377,23 @@ def ask_migrate(pname, reason):
                               | MB_SETFOREGROUND) == IDYES
 
 
+def save_exclude_process(config_path, pname):
+    """把面板右键"永不迁移"的进程持久化到 config.json 的 exclude_processes。"""
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        cfg = {}
+    excl = set(cfg.get("exclude_processes", []))
+    excl.add(pname)
+    cfg["exclude_processes"] = sorted(excl)
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
 def save_ignore_process(config_path, pname):
     """把确认模式下选择忽略的进程名持久化到 config.json。"""
     try:
@@ -391,7 +413,18 @@ def save_ignore_process(config_path, pname):
 
 # ================================================================ 配置与主逻辑
 
+# 这些常驻组件的高核显占用属于正常行为 (桌面合成/图标/输入法等),
+# 迁移它们有害无益; exclude_defaults=false 可关闭
+DEFAULT_EXCLUDE_PROCESSES = [
+    "dwm.exe", "explorer.exe", "taskmgr.exe", "searchhost.exe",
+    "shellexperiencehost.exe", "startmenuexperiencehost.exe",
+    "textinputhost.exe", "runtimebroker.exe", "lockapp.exe",
+    "applicationframehost.exe", "systemsettings.exe", "onedrive.exe",
+    "msedgewebview2.exe", "sihost.exe", "ctfmon.exe", "conhost.exe",
+]
+
 DEFAULT_CONFIG = {
+    "exclude_defaults": True,    # 启用上面的内置排除名单
     "threshold_percent": 50.0,   # 核显利用率超过该值视为高占用
     "vram_threshold_mb": 1024,   # 核显专用显存超过该 MB 也触发迁移（0 关闭）
     "sustain_samples": 5,        # 连续多少个采样周期超标才迁移
@@ -590,14 +623,18 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
             except OSError:
                 pass
 
+        # 只注册核显/独显实例, 大幅降低每秒采样的 CPU 开销
+        allowed = {luid for luid, (k, _n) in kind_cache.items()
+                   if k in ("igpu", "dgpu")}
         try:
-            usage, mem_usage, gpu_index = collect_gpu_sample()
+            usage, mem_usage, gpu_index = collect_gpu_sample(
+                allowed if allowed else None)
         except OSError as e:
             log(f"采样失败: {e}，{cfg['interval_seconds']}s 后重试", logfile)
             time.sleep(cfg["interval_seconds"])
             continue
 
-        # 识别本次采样中的核显/独显 LUID
+        # 识别本次采样中的核显/独显 LUID (新显卡首轮已全采, 这里补缓存)
         igpu_luids, dgpu_luids = set(), set()
         for (luid, _phys) in gpu_index:
             kind, _name = kind_of_luid(luid, kind_cache, forced)
@@ -677,7 +714,10 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
             if not info:
                 continue
             pname, full = info
-            if pname.lower() in {x.lower() for x in cfg["exclude_processes"]}:
+            excl = {x.lower() for x in cfg["exclude_processes"]}
+            if cfg.get("exclude_defaults", True):
+                excl |= {x.lower() for x in DEFAULT_EXCLUDE_PROCESSES}
+            if pname.lower() in excl:
                 continue
             if any(full.lower().startswith(p.lower())
                    for p in cfg["exclude_full_paths"]):

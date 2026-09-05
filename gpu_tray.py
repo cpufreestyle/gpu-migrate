@@ -15,7 +15,7 @@ import pystray
 from PIL import Image, ImageDraw, ImageFont
 
 from gpu_monitor import (cmd_monitor, get_gpu_preference, load_config,
-                         pid_to_name)
+                         pid_to_name, save_exclude_process)
 
 import sys
 _DIR = (os.path.dirname(os.path.abspath(sys.executable))
@@ -58,6 +58,8 @@ class TrayApp:
         self.lock = threading.Lock()
         self.snapshot = None
         self._name_cache = {}
+        self._pref_cache = {}       # exe -> 迁移状态, 10 秒过期
+        self._pref_ts = 0.0
 
         self.icon = pystray.Icon(
             "GPUMigrate",
@@ -139,18 +141,32 @@ class TrayApp:
                 self._name_cache.clear()
         return self._name_cache[pid]
 
+    def _pref_of(self, full_path):
+        now = time.time()
+        if now - self._pref_ts > 10:   # 缓存 10 秒, 避免每秒批量查注册表
+            self._pref_cache.clear()
+            self._pref_ts = now
+        if full_path not in self._pref_cache:
+            self._pref_cache[full_path] = \
+                get_gpu_preference(full_path) == "GpuPreference=2;"
+        return self._pref_cache[full_path]
+
     def _panel_main(self):
         try:
             root = tk.Tk()
+        except Exception:
+            self.panel_open = False
+            return
+        try:
             root.title("GPU 占用监控")
             root.geometry("880x360")
             root.attributes("-topmost", True)
 
-            cols = ("name", "pid", "igpu", "imem", "dgpu", "other", "pref")
+            cols = ("name", "pid", "igpu", "imem", "dgpu", "pref")
             tree = ttk.Treeview(root, columns=cols, show="headings", height=12)
-            for cid, text, w in (("name", "进程", 210), ("pid", "PID", 55),
-                                 ("igpu", "核显%", 60), ("imem", "显存MB", 75),
-                                 ("dgpu", "独显%", 60), ("other", "其他GPU%", 80),
+            for cid, text, w in (("name", "进程", 220), ("pid", "PID", 60),
+                                 ("igpu", "核显%", 60), ("imem", "显存MB", 80),
+                                 ("dgpu", "独显%", 60),
                                  ("pref", "迁移状态", 170)):
                 tree.heading(cid, text=text)
                 tree.column(cid, width=w, anchor="center")
@@ -159,47 +175,38 @@ class TrayApp:
             tip = tk.Label(root, text="", anchor="w", fg="#666")
             tip.pack(fill="x", padx=8, pady=(0, 6))
 
-            def refresh():
-                if not self.panel_open:
+            # 右键菜单: 永不迁移
+            menu = tk.Menu(root, tearoff=0)
+
+            def _never(event):
+                item = tree.identify_row(event.y)
+                if not item:
                     return
-                with self.lock:
-                    snap = self.snapshot
-                rows = []
-                if snap:
-                    pids = (set(snap["util_by_pid"]) | set(snap["mem_by_pid"])
-                            | set(snap["dgpu_util_by_pid"])
-                            | set(snap.get("other_util_by_pid", {})))
-                    for pid in pids:
-                        ig = snap["util_by_pid"].get(pid, 0.0)
-                        im = snap["mem_by_pid"].get(pid, 0.0) / (1024 * 1024)
-                        dg = snap["dgpu_util_by_pid"].get(pid, 0.0)
-                        ot = snap.get("other_util_by_pid", {}).get(pid, 0.0)
-                        if ig < 0.1 and im < 1 and dg < 0.1 and ot < 0.1:
-                            continue
-                        name = self._pid_name(pid)
-                        pref = ""
-                        info = pid_to_name(pid)
-                        if info and get_gpu_preference(info[1]) == "GpuPreference=2;":
-                            pref = "已设独显(重启生效)"
-                        rows.append((max(ig, ot), (name, pid, f"{ig:.0f}%",
-                                                   f"{im:.0f} MB", f"{dg:.0f}%",
-                                                   f"{ot:.0f}%", pref)))
-                rows.sort(key=lambda r: -r[0])
-                tree.delete(*tree.get_children())
-                for _ig, row in rows[:30]:
-                    tree.insert("", "end", values=row)
-                if not rows:
-                    tree.insert("", "end", values=(
-                        "（当前核显/独显上无进程活动，详见“其他GPU”列）",
-                        "-", "-", "-", "-", "-", "-"))
-                if snap:
-                    ig_luids = ", ".join(self._gpu_name(l)
-                                         for l in snap["igpu_luids"]) or "-"
-                    dg_luids = ", ".join(self._gpu_name(l)
-                                         for l in snap["dgpu_luids"]) or "-"
-                    tip.config(text=f"核显: {ig_luids}    独显: {dg_luids}"
-                                    f"    刷新: 1 秒")
-                root.after(1000, refresh)
+                vals = tree.item(item, "values")
+                if not vals:
+                    return
+                pname = vals[0]
+                menu.tk_popup(event.x_root, event.y_root)
+
+            def _never_add():
+                sel = tree.selection()
+                if not sel:
+                    return
+                pname = tree.item(sel[0], "values")[0]
+                save_exclude_process(self.config_path, pname)
+                tip.config(text=f"已把 {pname} 加入永不迁移名单 (写入 config.json, 立即生效)")
+
+            menu.add_command(label="永不迁移此程序", command=_never_add)
+            tree.bind("<Button-3>", _never)
+
+            def refresh():
+                # 任何异常都不允许中断 after 链, 否则面板从此不再刷新
+                try:
+                    self._refresh_tree(tree, tip)
+                except Exception:
+                    pass
+                if self.panel_open and not self.stop:
+                    root.after(1000, refresh)
 
             def on_close():
                 self.panel_open = False
@@ -209,7 +216,44 @@ class TrayApp:
             refresh()
             root.mainloop()
         except Exception:
+            pass
+        finally:
             self.panel_open = False
+
+    def _refresh_tree(self, tree, tip):
+        with self.lock:
+            snap = self.snapshot
+        rows = []
+        if snap:
+            pids = (set(snap["util_by_pid"]) | set(snap["mem_by_pid"])
+                    | set(snap["dgpu_util_by_pid"]))
+            for pid in pids:
+                ig = snap["util_by_pid"].get(pid, 0.0)
+                im = snap["mem_by_pid"].get(pid, 0.0) / (1024 * 1024)
+                dg = snap["dgpu_util_by_pid"].get(pid, 0.0)
+                if ig < 0.1 and im < 1 and dg < 0.1:
+                    continue
+                name = self._pid_name(pid)
+                pref = ""
+                info = pid_to_name(pid)
+                if info and self._pref_of(info[1]):
+                    pref = "已设独显(重启生效)"
+                rows.append((max(ig, dg), (name, pid, f"{ig:.0f}%",
+                                           f"{im:.0f} MB", f"{dg:.0f}%", pref)))
+        rows.sort(key=lambda r: -r[0])
+        tree.delete(*tree.get_children())
+        for _ig, row in rows[:30]:
+            tree.insert("", "end", values=row)
+        if not rows:
+            tree.insert("", "end", values=(
+                "（当前核显/独显上无进程活动）", "-", "-", "-", "-", "-"))
+        if snap:
+            ig_luids = ", ".join(self._gpu_name(l)
+                                 for l in snap["igpu_luids"]) or "-"
+            dg_luids = ", ".join(self._gpu_name(l)
+                                 for l in snap["dgpu_luids"]) or "-"
+            tip.config(text=f"核显: {ig_luids}    独显: {dg_luids}"
+                            f"    刷新: 1 秒    右键进程可设为永不迁移")
 
     def run(self):
         threading.Thread(target=self._monitor_thread, daemon=True).start()

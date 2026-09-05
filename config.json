@@ -1,10 +1,10 @@
 {
   "threshold_percent": 20.0,
+  "vram_threshold_mb": 1024,
   "sustain_samples": 20,
   "interval_seconds": 1,
   "auto_restart": false,
   "notify": true,
-  "exclude_processes": [],
-  "exclude_full_paths": [],
+  "exclude_defaults": true,
   "log_to_file": true
 }
