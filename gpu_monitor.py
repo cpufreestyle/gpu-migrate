@@ -279,6 +279,7 @@ DEFAULT_CONFIG = {
     "exclude_processes": [],     # 按进程名排除，如 ["chrome.exe"]
     "exclude_full_paths": [],    # 按完整路径前缀排除
     "force_igpu_names": [],      # 手动指定哪些显卡名算核显（覆盖自动判定）
+    "notify": True,              # 迁移成功/失败时弹 Windows 通知
     "log_to_file": True,
 }
 
@@ -300,6 +301,24 @@ def log(msg, logfile=None):
                 f.write(line + "\n")
         except OSError:
             pass
+
+
+TOAST_PS1 = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "show_toast.ps1")
+
+
+def notify(title, msg):
+    """发 Windows Toast 通知（异步、失败静默，不阻塞监控）。"""
+    if not os.path.isfile(TOAST_PS1):
+        return
+    try:
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-WindowStyle", "Hidden", "-File", TOAST_PS1, title, msg],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
 
 
 def restart_process(pid, full_path):
@@ -429,10 +448,18 @@ def cmd_monitor(cfg):
                         ok = restart_process(pid, full)
                         log(f"  -> {'已自动重启 ' + pname if ok else '自动重启失败，请手动重启'}",
                             logfile)
+                        if cfg["notify"]:
+                            notify("GPU 迁移成功",
+                                   f"{pname} 已设为独显运行" + ("，进程已自动重启" if ok else "，自动重启失败请手动重启"))
+                    elif cfg["notify"]:
+                        notify("GPU 迁移成功",
+                               f"{pname} 核显占用 {v:.0f}%，已设为独显。重启该程序后生效。")
                     else:
                         log("  -> 重启该程序后即可运行在独显上", logfile)
                 except OSError as e:
                     log(f"  -> 写注册表失败: {e}", logfile)
+                    if cfg["notify"]:
+                        notify("GPU 迁移失败", f"{pname}: {e}")
                 streak[full] = 0
             else:
                 log(f"检测到 {pname} (pid {pid}) 核显占用 {v:.0f}% "

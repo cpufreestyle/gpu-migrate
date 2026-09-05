@@ -39,6 +39,7 @@ python gpu_monitor.py --unset "D:\Games\game.exe"
 | `exclude_processes` | [] | 按进程名排除，如 `["chrome.exe"]` |
 | `exclude_full_paths` | [] | 按完整路径前缀排除 |
 | `force_igpu_names` | [] | 手动指定哪些显卡名按核显处理（自动判定失败时用） |
+| `notify` | true | 迁移成功/失败时弹 Windows 右下角通知（勿扰模式下收进通知中心） |
 | `log_to_file` | true | 同时写 gpu_monitor.log |
 
 ## 实现原理

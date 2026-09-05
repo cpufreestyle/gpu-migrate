@@ -3,6 +3,7 @@
   "sustain_samples": 5,
   "interval_seconds": 5,
   "auto_restart": false,
+  "notify": true,
   "exclude_processes": [],
   "exclude_full_paths": [],
   "log_to_file": true
