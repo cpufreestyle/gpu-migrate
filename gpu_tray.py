@@ -146,11 +146,12 @@ class TrayApp:
             root.geometry("760x360")
             root.attributes("-topmost", True)
 
-            cols = ("name", "pid", "igpu", "imem", "dgpu", "pref")
+            cols = ("name", "pid", "igpu", "imem", "dgpu", "other", "pref")
             tree = ttk.Treeview(root, columns=cols, show="headings", height=12)
-            for cid, text, w in (("name", "进程", 220), ("pid", "PID", 70),
-                                 ("igpu", "核显 %", 70), ("imem", "核显显存", 90),
-                                 ("dgpu", "独显 %", 70), ("pref", "迁移状态", 160)):
+            for cid, text, w in (("name", "进程", 200), ("pid", "PID", 65),
+                                 ("igpu", "核显 %", 65), ("imem", "核显显存", 85),
+                                 ("dgpu", "独显 %", 65), ("other", "其他GPU %", 80),
+                                 ("pref", "迁移状态", 160)):
                 tree.heading(cid, text=text)
                 tree.column(cid, width=w, anchor="center")
             tree.pack(fill="both", expand=True, padx=6, pady=6)
@@ -166,24 +167,31 @@ class TrayApp:
                 rows = []
                 if snap:
                     pids = (set(snap["util_by_pid"]) | set(snap["mem_by_pid"])
-                            | set(snap["dgpu_util_by_pid"]))
+                            | set(snap["dgpu_util_by_pid"])
+                            | set(snap.get("other_util_by_pid", {})))
                     for pid in pids:
                         ig = snap["util_by_pid"].get(pid, 0.0)
                         im = snap["mem_by_pid"].get(pid, 0.0) / (1024 * 1024)
                         dg = snap["dgpu_util_by_pid"].get(pid, 0.0)
-                        if ig < 0.1 and im < 1 and dg < 0.1:
+                        ot = snap.get("other_util_by_pid", {}).get(pid, 0.0)
+                        if ig < 0.1 and im < 1 and dg < 0.1 and ot < 0.1:
                             continue
                         name = self._pid_name(pid)
                         pref = ""
                         info = pid_to_name(pid)
                         if info and get_gpu_preference(info[1]) == "GpuPreference=2;":
                             pref = "已设独显(重启生效)"
-                        rows.append((ig, (name, pid, f"{ig:.0f}%",
-                                          f"{im:.0f} MB", f"{dg:.0f}%", pref)))
+                        rows.append((max(ig, ot), (name, pid, f"{ig:.0f}%",
+                                                   f"{im:.0f} MB", f"{dg:.0f}%",
+                                                   f"{ot:.0f}%", pref)))
                 rows.sort(key=lambda r: -r[0])
                 tree.delete(*tree.get_children())
                 for _ig, row in rows[:30]:
                     tree.insert("", "end", values=row)
+                if not rows:
+                    tree.insert("", "end", values=(
+                        "（当前核显/独显上无进程活动，详见“其他GPU”列）",
+                        "-", "-", "-", "-", "-", "-"))
                 if snap:
                     ig_luids = ", ".join(self._gpu_name(l)
                                          for l in snap["igpu_luids"]) or "-"

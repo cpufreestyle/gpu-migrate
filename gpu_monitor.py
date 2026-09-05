@@ -570,15 +570,18 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
             elif kind == "dgpu":
                 dgpu_luids.add(luid)
 
-        # 按进程汇总核显/独显上的利用率与专用显存
+        # 按进程汇总核显/独显/其他GPU(WARP、虚拟)上的利用率与专用显存
         util_by_pid = defaultdict(float)
         mem_by_pid = defaultdict(float)
         dgpu_util_by_pid = defaultdict(float)
+        other_util_by_pid = defaultdict(float)
         for (pid, luid, _phys), v in usage.items():
             if luid in igpu_luids:
                 util_by_pid[pid] += v
             elif luid in dgpu_luids:
                 dgpu_util_by_pid[pid] += v
+            else:
+                other_util_by_pid[pid] += v
         for (pid, luid, _phys), v in mem_usage.items():
             if luid in igpu_luids:
                 mem_by_pid[pid] += v
@@ -588,6 +591,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                 "util_by_pid": dict(util_by_pid),
                 "mem_by_pid": dict(mem_by_pid),
                 "dgpu_util_by_pid": dict(dgpu_util_by_pid),
+                "other_util_by_pid": dict(other_util_by_pid),
                 "igpu_luids": set(igpu_luids),
                 "dgpu_luids": set(dgpu_luids),
                 "kind_cache": dict(kind_cache),
