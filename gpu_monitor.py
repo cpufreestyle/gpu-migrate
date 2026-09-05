@@ -37,17 +37,17 @@ PDH_MORE_DATA = 0x800007D2
 
 INSTANCE_RE = re.compile(
     r"pid_(\d+)_luid_0x([0-9A-Fa-f]{8})_0x([0-9A-Fa-f]{8})"
-    r"_phys_(\d+)_eng_(\d+)(?:_engtype_(\w+))?\)"
+    r"_phys_(\d+)(?:_eng_\d+(?:_engtype_\w+)?)?\)"
 )
 
 
-def expand_gpu_counter_paths():
-    """展开 \\GPU Engine(*)\\Utilization Percentage 的全部实例路径。
+def expand_counter_paths(object_and_counter):
+    """展开计数器通配路径（如 \\GPU Engine(*)\\Utilization Percentage）。
 
     返回的路径可能带机器名前缀，如 \\\\MACHINE\\GPU Engine(pid_...)\\...。
-    GPU Engine 实例是动态的，瞬时失败时重试。
+    GPU 实例是动态的，瞬时失败时重试。
     """
-    path = "\\GPU Engine(*)\\Utilization Percentage"
+    path = "\\" + object_and_counter.lstrip("\\")
     last_err = None
     for _attempt in range(5):
         size = wt.DWORD(0)
@@ -71,37 +71,46 @@ def expand_gpu_counter_paths():
     raise OSError(f"PdhExpandWildCardPath failed: {last_err}")
 
 
-def collect_gpu_sample():
-    """采样 GPU Engine。
+def expand_gpu_counter_paths():
+    return expand_counter_paths("GPU Engine(*)\\Utilization Percentage")
 
-    返回 (usage, gpu_index):
-      usage: {(pid, luid, phys): 利用率%}
+
+def collect_gpu_sample():
+    """采样 GPU Engine 利用率 + GPU Process Memory 专用显存。
+
+    返回 (usage, mem_usage, gpu_index):
+      usage:     {(pid, luid, phys): 利用率%}
+      mem_usage: {(pid, luid, phys): 专用显存字节}
       gpu_index: {(luid, phys): None} 所有出现过的实例（含 0 利用率）
     """
-    paths = expand_gpu_counter_paths()
-    gpu_index = {}
     counters = []
-    for p in paths:
-        m = INSTANCE_RE.search(p)
-        if not m:
-            continue
-        pid = int(m.group(1))
-        luid = f"{m.group(2).upper()}_{m.group(3).upper()}"
-        phys = int(m.group(4))
-        gpu_index.setdefault((luid, phys), None)
-        counters.append((p, (pid, luid, phys)))
+    gpu_index = {}
+
+    def add_paths(paths, kind):
+        for p in paths:
+            m = INSTANCE_RE.search(p)
+            if not m:
+                continue
+            pid = int(m.group(1))
+            luid = f"{m.group(2).upper()}_{m.group(3).upper()}"
+            phys = int(m.group(4))
+            gpu_index.setdefault((luid, phys), None)
+            counters.append((p, (pid, luid, phys), kind))
+
+    add_paths(expand_counter_paths("GPU Engine(*)\\Utilization Percentage"), "util")
+    add_paths(expand_counter_paths("GPU Process Memory(*)\\Dedicated Usage"), "mem")
     if not counters:
-        return {}, {}
+        return {}, {}, {}
 
     q = wt.HANDLE()
     if pdh.PdhOpenQueryW(None, 0, ctypes.byref(q)) != 0:
         raise OSError("PdhOpenQuery failed")
     try:
         handles = []
-        for p, key in counters:
+        for p, key, kind in counters:
             h = wt.HANDLE()
             if pdh.PdhAddCounterW(q, p, 0, ctypes.byref(h)) == 0:
-                handles.append((key, h))
+                handles.append((key, kind, h))
         if pdh.PdhCollectQueryData(q) != 0:
             raise OSError("PdhCollectQueryData #1 failed")
         time.sleep(0.5)  # 利用率需要两个采样点
@@ -110,12 +119,17 @@ def collect_gpu_sample():
         val = wt.DOUBLE()
         vtype = wt.DWORD()
         usage = defaultdict(float)
-        for key, h in handles:
+        mem_usage = defaultdict(float)
+        for key, kind, h in handles:
             if pdh.PdhGetFormattedCounterValue(h, PDH_FMT_DOUBLE, None,
-                                               ctypes.byref(val)) == 0 \
-                    and val.value > 0.5:
-                usage[key] += val.value
-        return dict(usage), gpu_index
+                                               ctypes.byref(val)) != 0:
+                continue
+            if kind == "util":
+                if val.value > 0.5:
+                    usage[key] += val.value
+            else:  # mem: 原始字节数，取当前值
+                mem_usage[key] += val.value
+        return dict(usage), dict(mem_usage), gpu_index
     finally:
         pdh.PdhCloseQuery(q)
 
@@ -269,13 +283,86 @@ def clear_gpu_preference(exe_path):
         advapi32.RegCloseKey(hkey)
 
 
+def list_gpu_prefs():
+    """枚举 UserGpuPreferences 下全部 (exe, value)。"""
+    hkey = wt.HANDLE()
+    if advapi32.RegOpenKeyExW(HKEY_CURRENT_USER, USER_GPU_PREF_KEY, 0,
+                              KEY_QUERY_VALUE, ctypes.byref(hkey)) != 0:
+        return []
+    result = []
+    try:
+        idx = 0
+        while True:
+            name = ctypes.create_unicode_buffer(2048)
+            cb = wt.DWORD(2048)
+            data = ctypes.create_unicode_buffer(256)
+            dcb = wt.DWORD(512)
+            ret = advapi32.RegEnumValueW(hkey, idx, name, ctypes.byref(cb),
+                                         None, None, data, ctypes.byref(dcb))
+            if ret != 0:
+                break
+            result.append((name.value, data.value))
+            idx += 1
+        return result
+    finally:
+        advapi32.RegCloseKey(hkey)
+
+
+def clear_all_gpu_prefs(only_dgpu=True):
+    """清除 GPU 首选项。only_dgpu=True 只删 GpuPreference=2; 的。"""
+    cleared = []
+    for exe, val in list_gpu_prefs():
+        if only_dgpu and val != "GpuPreference=2;":
+            continue
+        if clear_gpu_preference(exe):
+            cleared.append(exe)
+    return cleared
+
+
+MB_YESNO = 0x04
+MB_ICONQUESTION = 0x20
+MB_TOPMOST = 0x40000
+MB_SETFOREGROUND = 0x10000
+IDYES = 6
+user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+
+def ask_migrate(pname, reason):
+    """确认模式弹窗。返回 True 表示迁移，False 表示忽略。"""
+    text = (f"检测到 {pname} {reason}\n\n"
+            f"是否把它迁移到独显？（重启该程序后生效）")
+    return user32.MessageBoxW(None, text, "GPU 迁移确认",
+                              MB_YESNO | MB_ICONQUESTION | MB_TOPMOST
+                              | MB_SETFOREGROUND) == IDYES
+
+
+def save_ignore_process(config_path, pname):
+    """把确认模式下选择忽略的进程名持久化到 config.json。"""
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        cfg = {}
+    ign = set(cfg.get("ignore_processes", []))
+    ign.add(pname)
+    cfg["ignore_processes"] = sorted(ign)
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass
+
+
 # ================================================================ 配置与主逻辑
 
 DEFAULT_CONFIG = {
     "threshold_percent": 50.0,   # 核显利用率超过该值视为高占用
+    "vram_threshold_mb": 1024,   # 核显专用显存超过该 MB 也触发迁移（0 关闭）
     "sustain_samples": 5,        # 连续多少个采样周期超标才迁移
     "interval_seconds": 5,       # 采样周期
     "auto_restart": False,       # 自动结束并重启超标进程（使设置立即生效）
+    "confirm_mode": False,       # 迁移前弹窗确认（确认/忽略都会被记住）
+    "ignore_processes": [],      # 确认模式下选择“忽略”的进程名，不再询问
     "exclude_processes": [],     # 按进程名排除，如 ["chrome.exe"]
     "exclude_full_paths": [],    # 按完整路径前缀排除
     "force_igpu_names": [],      # 手动指定哪些显卡名算核显（覆盖自动判定）
@@ -350,7 +437,7 @@ def discover_gpus(gpu_index):
 
 def cmd_list():
     print("正在枚举显卡 (GPU Engine 实例)...")
-    _usage, gpu_index = collect_gpu_sample()
+    _usage, _mem, gpu_index = collect_gpu_sample()
     if not gpu_index:
         print("未发现任何活动的 GPU 引擎实例。")
         return
@@ -362,18 +449,28 @@ def cmd_list():
         print("  [LUID ...%s]  %-42s [%s]" % (luid[-8:], g["name"], tag))
 
     print("\n采样当前核显占用...")
-    usage, _ = collect_gpu_sample()
+    usage, mem_usage, _ = collect_gpu_sample()
     per_pid = defaultdict(float)
+    mem_by_pid = defaultdict(float)
     for (pid, luid, _phys), v in usage.items():
         if gpus[luid]["kind"] == "igpu":
             per_pid[pid] += v
-    if not per_pid:
+    for (pid, luid, _phys), v in mem_usage.items():
+        if gpus[luid]["kind"] == "igpu" and v > 1024 * 1024:  # 忽略 <1MB 噪音
+            mem_by_pid[pid] += v
+    if not per_pid and not mem_by_pid:
         print("  (当前无进程占用核显)")
         return
-    for pid, v in sorted(per_pid.items(), key=lambda x: -x[1]):
+    rows = {}
+    for pid, v in per_pid.items():
+        rows[pid] = [v, 0.0]
+    for pid, v in mem_by_pid.items():
+        rows.setdefault(pid, [0.0, 0.0])[1] = v
+    print("  %-32s %-8s %10s %12s" % ("进程", "pid", "利用率", "专用显存"))
+    for pid, (u, m) in sorted(rows.items(), key=lambda x: -(x[1][0] + x[1][1])):
         info = pid_to_name(pid)
         name = info[0] if info else "?"
-        print("  %-32s pid %-6d %5.1f%%" % (name, pid, v))
+        print("  %-32s %-8d %9.1f%% %10.0f MB" % (name, pid, u, m / (1024 * 1024)))
 
 
 def kind_of_luid(luid, cache, forced):
@@ -387,7 +484,12 @@ def kind_of_luid(luid, cache, forced):
     return cache[luid]
 
 
-def cmd_monitor(cfg):
+_CONFIG_PATH = None
+
+
+def cmd_monitor(cfg, config_path=None):
+    global _CONFIG_PATH
+    _CONFIG_PATH = config_path
     logfile = (os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "gpu_monitor.log")
                if cfg["log_to_file"] else None)
@@ -400,10 +502,12 @@ def cmd_monitor(cfg):
     streak = defaultdict(int)
     done = set()
     kind_cache = {}
+    ignore = {n.lower() for n in cfg["ignore_processes"]}
+    vram_mb = cfg.get("vram_threshold_mb", 1024)
 
     while True:
         try:
-            usage, gpu_index = collect_gpu_sample()
+            usage, mem_usage, gpu_index = collect_gpu_sample()
         except OSError as e:
             log(f"采样失败: {e}，{cfg['interval_seconds']}s 后重试", logfile)
             time.sleep(cfg["interval_seconds"])
@@ -416,9 +520,25 @@ def cmd_monitor(cfg):
             if kind == "igpu":
                 igpu_luids.add(luid)
 
-        hot = []
+        # 按进程汇总核显上的利用率和专用显存
+        util_by_pid = defaultdict(float)
+        mem_by_pid = defaultdict(float)
         for (pid, luid, _phys), v in usage.items():
-            if luid not in igpu_luids or v < cfg["threshold_percent"]:
+            if luid in igpu_luids:
+                util_by_pid[pid] += v
+        for (pid, luid, _phys), v in mem_usage.items():
+            if luid in igpu_luids:
+                mem_by_pid[pid] += v
+
+        hot = []
+        for pid in set(util_by_pid) | set(mem_by_pid):
+            u = util_by_pid.get(pid, 0.0)
+            mb = mem_by_pid.get(pid, 0.0) / (1024 * 1024)
+            if u >= cfg["threshold_percent"]:
+                reason = f"核显利用率 {u:.0f}%"
+            elif vram_mb and mb >= vram_mb:
+                reason = f"核显专用显存 {mb:.0f} MB"
+            else:
                 continue
             info = pid_to_name(pid)
             if not info:
@@ -429,16 +549,26 @@ def cmd_monitor(cfg):
             if any(full.lower().startswith(p.lower())
                    for p in cfg["exclude_full_paths"]):
                 continue
+            if pname.lower() in ignore:
+                continue
             if get_gpu_preference(full) == "GpuPreference=2;":
                 done.add(full)
                 continue
-            hot.append((pid, pname, full, v))
+            hot.append((pid, pname, full, reason))
 
         active = {h[2] for h in hot}
-        for pid, pname, full, v in hot:
+        for pid, pname, full, reason in hot:
             streak[full] += 1
             if streak[full] >= cfg["sustain_samples"]:
-                log(f"进程 {pname} (pid {pid}) 核显占用 {v:.0f}%，"
+                if cfg["confirm_mode"] and not ask_migrate(pname, reason):
+                    log(f"进程 {pname} (pid {pid}) {reason}，确认模式下选择忽略",
+                        logfile)
+                    ignore.add(pname.lower())
+                    if _CONFIG_PATH:
+                        save_ignore_process(_CONFIG_PATH, pname)
+                    streak[full] = 0
+                    continue
+                log(f"进程 {pname} (pid {pid}) {reason}，"
                     f"连续 {cfg['sustain_samples']} 次超标", logfile)
                 try:
                     set_gpu_preference(full)
@@ -453,7 +583,7 @@ def cmd_monitor(cfg):
                                    f"{pname} 已设为独显运行" + ("，进程已自动重启" if ok else "，自动重启失败请手动重启"))
                     elif cfg["notify"]:
                         notify("GPU 迁移成功",
-                               f"{pname} 核显占用 {v:.0f}%，已设为独显。重启该程序后生效。")
+                               f"{pname} {reason}，已设为独显。重启该程序后生效。")
                     else:
                         log("  -> 重启该程序后即可运行在独显上", logfile)
                 except OSError as e:
@@ -462,7 +592,7 @@ def cmd_monitor(cfg):
                         notify("GPU 迁移失败", f"{pname}: {e}")
                 streak[full] = 0
             else:
-                log(f"检测到 {pname} (pid {pid}) 核显占用 {v:.0f}% "
+                log(f"检测到 {pname} (pid {pid}) {reason} "
                     f"({streak[full]}/{cfg['sustain_samples']})", logfile)
         for full in list(streak):
             if full not in active:
@@ -490,6 +620,41 @@ def cmd_unset(paths):
             print(f"无设置或清除失败: {full}")
 
 
+def cmd_status():
+    prefs = list_gpu_prefs()
+    migrated = [(e, v) for e, v in prefs if v == "GpuPreference=2;"]
+    others = [(e, v) for e, v in prefs if v != "GpuPreference=2;"]
+    if not migrated and not others:
+        print("当前没有任何 GPU 首选项设置。")
+        return
+    print(f"已迁移到独显 ({len(migrated)} 个):")
+    for exe, _v in migrated:
+        print("  " + exe)
+    if others:
+        print(f"\n其他设置 ({len(others)} 个):")
+        for exe, v in others:
+            print(f"  {exe}  =  {v}")
+
+
+def cmd_unset_all():
+    targets = [(e, v) for e, v in list_gpu_prefs() if v == "GpuPreference=2;"]
+    if not targets:
+        print("没有需要清除的独显设置。")
+        return
+    print("将清除以下独显设置 (GpuPreference=2):")
+    for exe, _v in targets:
+        print("  " + exe)
+    try:
+        ans = input(f"共 {len(targets)} 项，输入 y 确认清除: ").strip().lower()
+    except EOFError:
+        ans = ""
+    if ans != "y":
+        print("已取消，未做任何修改。")
+        return
+    cleared = clear_all_gpu_prefs(only_dgpu=True)
+    print(f"已清除 {len(cleared)} 项。")
+
+
 def main():
     # pythonw（开机自启/无窗口模式）下没有 stdout，print 会崩，重定向到空设备
     if sys.stdout is None:
@@ -502,6 +667,10 @@ def main():
     ap.add_argument("--once", action="store_true", help="采样一次退出")
     ap.add_argument("--set", nargs="+", metavar="EXE", help="手动把 exe 设为独显")
     ap.add_argument("--unset", nargs="+", metavar="EXE", help="清除 exe 的独显设置")
+    ap.add_argument("--status", action="store_true",
+                    help="列出所有已设置 GPU 首选项的程序")
+    ap.add_argument("--unset-all", action="store_true",
+                    help="清除全部独显设置（GpuPreference=2）")
     ap.add_argument("--config", default=os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "config.json"))
     args = ap.parse_args()
@@ -512,6 +681,12 @@ def main():
     if args.unset:
         cmd_unset(args.unset)
         return
+    if args.status:
+        cmd_status()
+        return
+    if args.unset_all:
+        cmd_unset_all()
+        return
     if args.list:
         cmd_list()
         return
@@ -521,7 +696,7 @@ def main():
 
     cfg = load_config(args.config)
     try:
-        cmd_monitor(cfg)
+        cmd_monitor(cfg, args.config)
     except KeyboardInterrupt:
         print("\n已退出。")
 
