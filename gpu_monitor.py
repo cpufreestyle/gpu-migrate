@@ -26,6 +26,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from collections import defaultdict
 
@@ -451,6 +452,13 @@ DEFAULT_CONFIG = {
     "history": True,             # 每 10 秒记录核显总占用到 history.jsonl
     "normalize_total": False,    # true=所有进程总和强制<=100% (单进程读数会缩水);
                                  # false=任务管理器口径, 单进程读数最准确
+    "game_processes": [],        # 游戏名单: 自动确保独显+免打扰+时长统计
+    "power_aware": True,         # 电源感知: 用电池时自动切换省电策略
+    "battery_threshold_percent": 40,   # 电池下的迁移阈值
+    "nvml_temp": True,           # 独显温度监控 (NVML, NVIDIA 驱动自带)
+    "temp_limit": 85,            # 独显温度提醒阈值 (摄氏度)
+    "web_port": 8787,            # 本地 Web 面板端口, 0=关闭 (http://127.0.0.1:端口)
+    "hotkeys": {"panel": "ctrl+alt+g", "pause": "ctrl+alt+p"},  # 全局热键
     "log_to_file": True,
 }
 
@@ -529,8 +537,8 @@ def is_foreground_fullscreen():
 
 
 def notify_cfg(cfg, title, msg):
-    """带开关与全屏免打扰判断的通知。"""
-    if not cfg.get("notify"):
+    """带开关、游戏模式静音与全屏免打扰判断的通知。"""
+    if not cfg.get("notify") or _GAME_RUNNING:
         return
     if cfg.get("notify_fullscreen_ignore", True) and is_foreground_fullscreen():
         return
@@ -547,6 +555,157 @@ def notify(title, msg):
              "-WindowStyle", "Hidden", "-File", TOAST_PS1, title, msg],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        pass
+
+
+_nvml_cache = None
+_GAME_RUNNING = False          # 游戏运行中时静音所有通知
+
+
+def nvml_load():
+    """加载 NVML (NVIDIA 驱动自带), 失败返回 False。"""
+    global _nvml_cache
+    if _nvml_cache is not None:
+        return _nvml_cache
+    lib = False
+    for cand in ("nvml.dll", r"C:\Windows\System32\nvml.dll",
+                 r"C:\Program Files\NVIDIA Corporation\NVSMI\nvml.dll"):
+        try:
+            l = ctypes.WinDLL(cand)
+            if l.nvmlInit() == 0:
+                lib = l
+                break
+        except OSError:
+            continue
+    _nvml_cache = lib
+    return lib
+
+
+def nvml_gpu_temp(index=0):
+    """独显温度摄氏度, 失败返回 None。"""
+    lib = nvml_load()
+    if not lib:
+        return None
+    try:
+        h = ctypes.c_void_p()
+        if lib.nvmlDeviceGetHandleByIndex_v2(index, ctypes.byref(h)) != 0:
+            return None
+        t = ctypes.c_uint()
+        if lib.nvmlDeviceGetTemperature(h, 0, ctypes.byref(t)) != 0:  # 0=GPU
+            return None
+        return t.value
+    except Exception:
+        return None
+
+
+class _POWER_STATUS(ctypes.Structure):
+    _fields_ = [("ACLineStatus", ctypes.c_byte), ("BatteryFlag", ctypes.c_byte),
+                ("BatteryLifePercent", ctypes.c_byte),
+                ("Reserved1", ctypes.c_byte),
+                ("BatteryLifeTime", wt.DWORD),
+                ("BatteryFullLifeTime", wt.DWORD)]
+
+
+def on_battery():
+    try:
+        st = _POWER_STATUS()
+        if ctypes.WinDLL("kernel32").GetSystemPowerStatus(ctypes.byref(st)):
+            return st.ACLineStatus == 0
+    except Exception:
+        pass
+    return False
+
+
+# ---- 全局热键 (隐藏窗口 + RegisterHotKey, 独立线程) ----
+_MOD = {"ctrl": 0x2, "alt": 0x1, "shift": 0x4, "win": 0x8}
+
+
+def _parse_hotkey(spec):
+    parts = [x.strip().lower() for x in spec.split("+") if x.strip()]
+    mod, vk = 0, 0
+    for x in parts:
+        if x in _MOD:
+            mod |= _MOD[x]
+        elif len(x) == 1:
+            vk = ord(x.upper())
+        else:
+            return None
+    return (mod, vk) if mod and vk else None
+
+
+def hotkey_thread(bindings):
+    """bindings: {id: (spec, callback)}; 注册失败静默跳过。"""
+    user32 = ctypes.WinDLL("user32")
+    for hid, (spec, _cb) in bindings.items():
+        parsed = _parse_hotkey(spec)
+        if parsed and not user32.RegisterHotKey(None, hid, parsed[0], parsed[1]):
+            bindings[hid] = (spec, None)   # 注册失败不触发
+    msg = wt.MSG()
+    while ctypes.windll.user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+        if msg.message == 0x0312:          # WM_HOTKEY
+            item = bindings.get(msg.wParam)
+            if item and item[1]:
+                try:
+                    item[1]()
+                except Exception:
+                    pass
+
+
+# ---- 本地 Web 面板 ----
+def web_thread(port, snapshot_getter, gpu_names):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            snap = snapshot_getter() or {}
+            rows = []
+            pids = set()
+            for k in ("util_by_pid", "gpu_all_by_pid", "dgpu_util_by_pid",
+                      "shared_by_pid", "dedicated_by_pid"):
+                pids |= set(snap.get(k, {}))
+            for pid in sorted(pids, key=lambda x:
+                              -max(snap.get("util_by_pid", {}).get(x, 0),
+                                   snap.get("dedicated_by_pid", {}).get(x, 0)
+                                   / (1024 * 1024))):
+                rows.append(
+                    "<tr><td>%d</td><td>%.1f%%</td><td>%.1f%%</td>"
+                    "<td>%.1f%%</td><td>%.0f</td><td>%.0f</td></tr>"
+                    % (pid,
+                       snap.get("gpu_all_by_pid", {}).get(pid, 0),
+                       snap.get("util_by_pid", {}).get(pid, 0),
+                       snap.get("dgpu_util_by_pid", {}).get(pid, 0),
+                       snap.get("dedicated_by_pid", {}).get(pid, 0) / 1048576,
+                       snap.get("shared_by_pid", {}).get(pid, 0) / 1048576))
+            ig = ", ".join(gpu_names().get(l, l)
+                           for l in snap.get("igpu_luids", [])) or "-"
+            dg = ", ".join(gpu_names().get(l, l)
+                           for l in snap.get("dgpu_luids", [])) or "-"
+            temp = snap.get("dgpu_temp")
+            html = (
+                "<html><head><meta charset='utf-8'>"
+                "<meta http-equiv='refresh' content='1'>"
+                "<title>GPU Monitor</title>"
+                "<style>body{font-family:Segoe UI;background:#14141e;"
+                "color:#ddd}table{border-collapse:collapse}td,th{padding:4px 10px;"
+                "border:1px solid #333}</style></head><body>"
+                "<h2>GPU 监控</h2><p>核显: %s<br>独显: %s%s</p>"
+                "<table><tr><th>PID</th><th>GPU%%</th><th>核显%%</th>"
+                "<th>独显%%</th><th>专用MB</th><th>共享MB</th></tr>%s"
+                "</table></body></html>"
+                % (ig, dg,
+                   f"<br>独显温度: {temp}°C" if temp else "",
+                   "".join(rows) or "<tr><td colspan=6>空闲</td></tr>"))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(html.encode("utf-8"))
+
+        def log_message(self, *a):
+            pass
+
+    try:
+        ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
     except OSError:
         pass
 
@@ -639,6 +798,7 @@ def kind_of_luid(luid, cache, forced):
 
 
 _CONFIG_PATH = None
+_LAST_SNAPSHOT = {}
 
 
 def cmd_monitor(cfg, config_path=None, hooks=None):
@@ -646,7 +806,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
       before_cycle() -> 返回 False 时退出循环
       on_sample(snapshot)  每轮采样后回调（托盘/面板用）
     """
-    global _CONFIG_PATH
+    global _CONFIG_PATH, _LAST_SNAPSHOT
     _CONFIG_PATH = config_path
     logfile = (os.path.join(_DIR, "gpu_monitor.log")
                if cfg["log_to_file"] else None)
@@ -654,6 +814,27 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
         f"{cfg.get('vram_threshold_mb', 0)}MB, 确认模式={cfg['confirm_mode']}, "
         f"自动重启={cfg['auto_restart']}", logfile)
     log("提示: 迁移通过写入图形首选项实现，进程重启后生效。", logfile)
+
+    # 本地 Web 面板
+    if cfg.get("web_port"):
+        threading.Thread(target=web_thread,
+                         args=(cfg["web_port"],
+                               lambda: _LAST_SNAPSHOT,
+                               lambda: {luid: v[1] for luid, v
+                                        in kind_cache.items()}),
+                         daemon=True).start()
+        log(f"Web 面板: http://127.0.0.1:{cfg['web_port']}", logfile)
+
+    # 全局热键 (回调通过 hooks 注入: hotkey_panel / hotkey_pause)
+    hk = cfg.get("hotkeys") or {}
+    bindings = {}
+    if hk.get("panel") and hooks and hooks.get("hotkey_panel"):
+        bindings[1] = (hk["panel"], hooks["hotkey_panel"])
+    if hk.get("pause") and hooks and hooks.get("hotkey_pause"):
+        bindings[2] = (hk["pause"], hooks["hotkey_pause"])
+    if bindings:
+        threading.Thread(target=hotkey_thread, args=(bindings,),
+                         daemon=True).start()
 
     forced = {n.lower() for n in cfg["force_igpu_names"]}
     streak = defaultdict(int)
@@ -664,6 +845,18 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
     ps_streak = defaultdict(int)
     pending_verify = {}   # full -> {pid, since, name}: 迁移重启后的验证队列
     hist_last = 0.0
+    game_seen = {}        # pname -> 最近一次活跃时间 (游戏模式)
+    game_secs = defaultdict(float)   # 游戏时长累计 (秒)
+    ps_check = [0.0]
+    temp_check = [0.0]
+    elapsed_prev = [1.0]
+    temp_last_notify = 0.0
+    battery_state = None  # None=未检测, True=电池, False=外接
+    eff_threshold = cfg["threshold_percent"]
+    eff_ps_auto = cfg.get("power_saver_auto", False)
+    daily = {"date": time.strftime("%Y-%m-%d"), "peak": 0.0, "peak_ts": "",
+             "migrated": []}
+    global _GAME_RUNNING
     last_mtime = None
     if config_path and os.path.exists(config_path):
         try:
@@ -678,6 +871,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
         forced = {n.lower() for n in cfg["force_igpu_names"]}
         vram_mb = cfg.get("vram_threshold_mb", 1024)
         ignore = {n.lower() for n in cfg["ignore_processes"]}
+        battery_state = None   # 触发电源策略重算
         log("检测到配置修改，已热重载", logfile)
 
     while True:
@@ -741,6 +935,63 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
             if luid in igpu_luids:
                 mem_by_pid[pid] += v
 
+        now_ts = time.time()
+        # 电源感知: 电池时自动启用省电策略
+        if cfg.get("power_aware") and now_ts - (ps_check[0] if ps_check else 0) > 30:
+            ps_check[0] = now_ts
+            bat = on_battery()
+            if bat != battery_state:
+                battery_state = bat
+                if bat:
+                    eff_threshold = cfg.get("battery_threshold_percent", 40)
+                    eff_ps_auto = True
+                    log("切换到电池: 启用省电策略 "
+                        f"(阈值 {eff_threshold}%, 低负载自动切回核显)", logfile)
+                else:
+                    eff_threshold = cfg["threshold_percent"]
+                    eff_ps_auto = cfg.get("power_saver_auto", False)
+                    log("已接通电源: 恢复性能策略", logfile)
+
+        # 独显温度 (NVML, 每 10s)
+        if cfg.get("nvml_temp") and now_ts - temp_check[0] > 10:
+            temp_check[0] = now_ts
+            t = nvml_gpu_temp(0)
+            _LAST_SNAPSHOT["dgpu_temp"] = t
+            if t is not None and t >= cfg.get("temp_limit", 85) \
+                    and now_ts - temp_last_notify > 600:
+                temp_last_notify = now_ts
+                log(f"独显温度过高: {t}°C", logfile)
+                notify_cfg(cfg, "独显温度过高",
+                           f"GPU 温度 {t}°C，请检查散热或降低负载")
+
+        # 游戏模式: 名单进程自动确保独显 + 免打扰 + 时长统计
+        if cfg.get("game_processes"):
+            games = {g.lower() for g in cfg["game_processes"]}
+            running = False
+            for pid2 in set(gpu_all_by_pid) | set(dgpu_util_by_pid):
+                info2 = pid_to_name(pid2)
+                if not info2 or info2[0].lower() not in games:
+                    continue
+                running = True
+                pname2, full2 = info2
+                game_seen[pname2] = now_ts
+                game_secs[pname2] += max(0.2, elapsed_prev[0])
+                if pid2 in util_by_pid and util_by_pid[pid2] > 1 \
+                        and get_gpu_preference(full2) != "GpuPreference=2;":
+                    try:
+                        set_gpu_preference(full2)
+                        done.add(full2)
+                        log(f"游戏模式: {pname2} 正在核显上运行, 已设为独显(重启生效)",
+                            logfile)
+                        notify_cfg(cfg, "游戏模式",
+                                   f"{pname2} 已设为独显，重启游戏后生效")
+                    except OSError as e:
+                        log(f"游戏模式设置失败: {e}", logfile)
+            _GAME_RUNNING = running
+            for gname in list(game_seen):
+                if now_ts - game_seen[gname] > 300:
+                    del game_seen[gname]
+
         # 历史记录: 每 10 秒记录核显总占用 (内存环形队列给面板画趋势,
         # history.jsonl 落盘供事后分析, 超 1MB 滚动)
         now_ts = time.time()
@@ -760,6 +1011,36 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                                         "total": round(total_util, 1)}) + "\n")
             except OSError:
                 pass
+            # 日报统计与跨日汇总
+            today = time.strftime("%Y-%m-%d")
+            if today != daily["date"]:
+                games_min = sum(game_secs.values()) / 60.0
+                notify_cfg(cfg, "GPU 日报",
+                           f"{daily['date']}: 核显峰值 {daily['peak']:.0f}%"
+                           f"({daily['peak_ts']}), 迁移 {len(daily['migrated'])} 个程序"
+                           + (f", 游戏约 {games_min:.0f} 分钟" if games_min else ""))
+                try:
+                    with open(os.path.join(_DIR, "report.csv"), "a",
+                              encoding="utf-8") as f:
+                        f.write(f"{daily['date']},{daily['peak']:.1f},"
+                                f"{daily['peak_ts']},{len(daily['migrated'])},"
+                                f"{games_min:.0f}\n")
+                except OSError:
+                    pass
+                daily = {"date": today, "peak": 0.0, "peak_ts": "",
+                         "migrated": []}
+                game_secs.clear()
+            if total_util > daily["peak"]:
+                daily["peak"] = total_util
+                daily["peak_ts"] = time.strftime("%H:%M")
+
+        _LAST_SNAPSHOT = {
+            "util_by_pid": util_by_pid, "gpu_all_by_pid": gpu_all_by_pid,
+            "dgpu_util_by_pid": dgpu_util_by_pid,
+            "shared_by_pid": shared_by_pid,
+            "dedicated_by_pid": dedicated_by_pid,
+            "igpu_luids": igpu_luids, "dgpu_luids": dgpu_luids,
+            "kind_cache": kind_cache}
 
         if hooks and hooks.get("on_sample"):
             hooks["on_sample"]({
@@ -795,7 +1076,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                            "可能被显卡驱动策略覆盖，可到系统图形设置手动确认")
 
         # 省电: 独显上持续低负载且已迁移过的程序 (提醒或自动切回核显)
-        if cfg.get("power_saver_notify") or cfg.get("power_saver_auto"):
+        if cfg.get("power_saver_notify") or eff_ps_auto:
             idle_pct = cfg.get("power_saver_idle_percent", 10.0)
             need = cfg.get("power_saver_samples", 60)
             for pid in list(ps_streak):
@@ -817,7 +1098,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                 if ps_streak[pid] >= need:
                     ps_notified.add(full)
                     log(f"省电: {pname} 在独显上持续低负载({u:.0f}%)", logfile)
-                    if cfg.get("power_saver_auto"):
+                    if eff_ps_auto:
                         try:
                             set_gpu_preference(full, "GpuPreference=1;")
                             log(f"  -> 已把 {full} 改回核显设置(GpuPreference=1;)",
@@ -837,7 +1118,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
         for pid in set(util_by_pid) | set(mem_by_pid):
             u = util_by_pid.get(pid, 0.0)
             mb = mem_by_pid.get(pid, 0.0) / (1024 * 1024)
-            if u >= cfg["threshold_percent"]:
+            if u >= eff_threshold:
                 reason = f"核显利用率 {u:.0f}%"
             elif vram_mb and mb >= vram_mb:
                 reason = f"核显专用显存 {mb:.0f} MB"
@@ -879,6 +1160,8 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                 try:
                     set_gpu_preference(full)
                     done.add(full)
+                    if pname not in daily["migrated"]:
+                        daily["migrated"].append(pname)
                     log(f"  -> 已设置 {full} 为高性能GPU(GpuPreference=2;)", logfile)
                     ar_list = {x.lower()
                                for x in cfg.get("auto_restart_processes", [])}
@@ -911,6 +1194,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
 
         # 周期对齐: 扣除本轮采样耗时, 使显示频率与任务管理器一致
         elapsed = time.time() - cycle_start
+        elapsed_prev[0] = elapsed
         time.sleep(max(0.05, cfg["interval_seconds"] - elapsed))
 
 
@@ -994,10 +1278,11 @@ def main():
     args = ap.parse_args()
 
     if args.tray or args.ensure:
-        k32 = ctypes.WinDLL("kernel32")
+        # use_last_error=True 才能可靠读到 GetLastError (否则误判已有实例)
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
         k32.CreateMutexW.argtypes = [wt.LPCVOID, wt.BOOL, wt.LPCWSTR]
         k32.CreateMutexW(None, False, "GPUMigrate_Singleton")
-        if k32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
             return
         import gpu_tray
         gpu_tray.run_tray(args.config)

@@ -5,6 +5,7 @@ gpu_tray.py — 托盘模式：系统托盘图标 + 后台监控 + 实时占用�
 由 gpu_monitor.py --tray 调起。托盘图标实时显示核显总占用（颜色区分），
 右键菜单可打开实时面板、暂停/恢复监控、退出。
 """
+import ctypes
 import os
 import threading
 import time
@@ -15,8 +16,10 @@ from tkinter import ttk
 import pystray
 from PIL import Image, ImageDraw, ImageFont
 
-from gpu_monitor import (cmd_monitor, get_gpu_preference, load_config,
-                         pid_to_name, save_exclude_process)
+from gpu_monitor import (cmd_monitor, clear_gpu_preference,
+                         get_gpu_preference, load_config, pid_to_name,
+                         save_exclude_process, set_gpu_preference,
+                         nvml_gpu_temp)
 
 import sys
 _DIR = (os.path.dirname(os.path.abspath(sys.executable))
@@ -77,6 +80,15 @@ class TrayApp:
                 pystray.MenuItem("打开实时面板", self._on_open_panel,
                                  default=True),
                 pystray.MenuItem("暂停监控", self._on_toggle_pause),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem(lambda item: "模式: " + self._mode_text(),
+                                 None, enabled=False),
+                pystray.MenuItem("性能模式 (阈值10%)", self._on_mode_perf),
+                pystray.MenuItem("智能模式 (恢复配置)", self._on_mode_smart),
+                pystray.MenuItem("省电模式 (阈值40%+自动切回)",
+                                 self._on_mode_saver),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("打开设置", self._on_open_settings),
                 pystray.MenuItem("退出", self._on_quit),
             ))
 
@@ -95,6 +107,147 @@ class TrayApp:
     def _on_quit(self, icon=None, item=None):
         self.stop = True
         icon.stop()
+
+    # ---- 模式切换 (写 config.json, 热重载生效) ----
+
+    def _mode_text(self):
+        try:
+            import json as _json
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                cfg = _json.load(f)
+            return {"performance": "性能", "saver": "省电"}.get(
+                cfg.get("mode", "smart"), "智能")
+        except (OSError, ValueError):
+            return "智能"
+
+    def _apply_mode(self, mode, threshold, ps_auto):
+        try:
+            import json as _json
+            with open(self.config_path, "r", encoding="utf-8") as f:
+                cfg = _json.load(f)
+            cfg["mode"] = mode
+            if threshold is not None:
+                cfg["threshold_percent"] = threshold
+            if ps_auto is not None:
+                cfg["power_saver_auto"] = ps_auto
+            with open(self.config_path, "w", encoding="utf-8") as f:
+                _json.dump(cfg, f, ensure_ascii=False, indent=2)
+        except (OSError, ValueError):
+            pass
+
+    def _on_mode_perf(self, icon=None, item=None):
+        self._apply_mode("performance", 10, False)
+
+    def _on_mode_smart(self, icon=None, item=None):
+        self._apply_mode("smart", None, None)
+
+    def _on_mode_saver(self, icon=None, item=None):
+        self._apply_mode("saver", 40, True)
+
+    # ---- 设置窗口 ----
+
+    def _on_open_settings(self, icon=None, item=None):
+        if getattr(self, "_settings_open", False):
+            return
+        self._settings_open = True
+        threading.Thread(target=self._settings_main, daemon=True).start()
+
+    def _settings_main(self):
+        try:
+            root = tk.Tk()
+            root.title("GPU 监控设置")
+            root.geometry("460x420")
+            root.attributes("-topmost", True)
+            cfg = load_config(self.config_path)
+            rows = []
+            grid = tk.Frame(root)
+            grid.pack(fill="both", expand=True, padx=12, pady=8)
+
+            def add_entry(label, key, width=10):
+                tk.Label(grid, text=label, anchor="w").grid(
+                    row=len(rows), column=0, sticky="w", pady=2)
+                var = tk.StringVar(value=str(cfg.get(key, "")))
+                e = tk.Entry(grid, textvariable=var, width=width)
+                e.grid(row=len(rows), column=1, sticky="w", pady=2)
+                rows.append(var)
+                return var
+
+            v_thr = add_entry("迁移阈值 %", "threshold_percent")
+            v_vram = add_entry("显存阈值 MB", "vram_threshold_mb")
+            v_bthr = add_entry("电池阈值 %", "battery_threshold_percent")
+            v_temp = add_entry("温度提醒 °C", "temp_limit")
+            v_port = add_entry("Web 端口(0关)", "web_port")
+
+            v_ar = tk.BooleanVar(value=bool(cfg.get("auto_restart")))
+            v_cm = tk.BooleanVar(value=bool(cfg.get("confirm_mode")))
+            v_pa = tk.BooleanVar(value=bool(cfg.get("power_saver_auto")))
+            v_ed = tk.BooleanVar(value=bool(cfg.get("exclude_defaults", True)))
+            r = len(rows)
+            for i, (text, var) in enumerate((
+                    ("自动重启迁移的进程", v_ar), ("迁移前弹窗确认", v_cm),
+                    ("低负载自动切回核显", v_pa), ("启用内置排除名单", v_ed))):
+                tk.Checkbutton(grid, text=text, variable=var).grid(
+                    row=r + i, column=0, columnspan=2, sticky="w", pady=2)
+
+            r2 = r + 4
+            tk.Label(grid, text="游戏名单(每行一个)", anchor="w").grid(
+                row=r2, column=0, sticky="nw", pady=2)
+            t_games = tk.Text(grid, width=30, height=4)
+            t_games.grid(row=r2, column=1, sticky="w", pady=2)
+            t_games.insert("1.0", "\n".join(cfg.get("game_processes", [])))
+            r2 += 5
+            tk.Label(grid, text="排除名单(每行一个)", anchor="w").grid(
+                row=r2, column=0, sticky="nw", pady=2)
+            t_excl = tk.Text(grid, width=30, height=4)
+            t_excl.grid(row=r2, column=1, sticky="w", pady=2)
+            t_excl.insert("1.0", "\n".join(cfg.get("exclude_processes", [])))
+
+            def save():
+                import json as _json
+                try:
+                    with open(self.config_path, "r", encoding="utf-8") as f:
+                        cfg2 = _json.load(f)
+                except (OSError, ValueError):
+                    cfg2 = {}
+                def num(var, old_v, cast):
+                    try:
+                        return cast(var.get())
+                    except ValueError:
+                        return old_v
+                cfg2["threshold_percent"] = num(v_thr,
+                                                cfg2.get("threshold_percent", 20), float)
+                cfg2["vram_threshold_mb"] = num(v_vram,
+                                                cfg2.get("vram_threshold_mb", 1024), float)
+                cfg2["battery_threshold_percent"] = num(
+                    v_bthr, cfg2.get("battery_threshold_percent", 40), float)
+                cfg2["temp_limit"] = num(v_temp, cfg2.get("temp_limit", 85), float)
+                cfg2["web_port"] = num(v_port, cfg2.get("web_port", 0), int)
+                cfg2["auto_restart"] = v_ar.get()
+                cfg2["confirm_mode"] = v_cm.get()
+                cfg2["power_saver_auto"] = v_pa.get()
+                cfg2["exclude_defaults"] = v_ed.get()
+                cfg2["game_processes"] = [x.strip() for x in
+                                          t_games.get("1.0", "end").splitlines()
+                                          if x.strip()]
+                cfg2["exclude_processes"] = [x.strip() for x in
+                                             t_excl.get("1.0", "end").splitlines()
+                                             if x.strip()]
+                with open(self.config_path, "w", encoding="utf-8") as f:
+                    _json.dump(cfg2, f, ensure_ascii=False, indent=2)
+                root.title("已保存, 配置热重载生效")
+                self._settings_open = False
+                root.after(1200, root.destroy)
+
+            tk.Button(root, text="保存 (热重载立即生效)", command=save,
+                      bg="#4cd964").pack(pady=8)
+            root.protocol("WM_DELETE_WINDOW",
+                          lambda: (setattr(self, "_settings_open", False),
+                                   root.destroy()))
+            root.mainloop()
+        except Exception:
+            pass
+        finally:
+            self._settings_open = False
 
     # ---- 监控线程 ----
 
@@ -126,6 +279,12 @@ class TrayApp:
         return "LUID ..." + luid[-4:]
 
     def _monitor_thread(self):
+        try:
+            with open(os.path.join(_DIR, "tray_debug.log"), "a",
+                      encoding="utf-8") as f:
+                f.write(time.strftime("[%H:%M:%S] monitor enter") + chr(10))
+        except OSError:
+            pass
         try:
             cmd_monitor(self.cfg, self.config_path,
                         hooks={"before_cycle": self._before_cycle,
@@ -262,6 +421,8 @@ class TrayApp:
 
             menu.add_command(label="永不迁移此程序", command=_never_add)
             tree.bind("<Button-3>", _never)
+            tree.bind("<Double-1>",
+                      lambda e: self._open_detail(tree, e))
 
             def refresh():
                 # 任何异常都不允许中断 after 链, 否则面板从此不再刷新
@@ -314,6 +475,105 @@ class TrayApp:
                                text=f"近{len(pts)*10//60}分钟 核显占用 峰值{max(v for _t, v in pts):.0f}%")
         except Exception:
             pass
+
+    def _open_detail(self, tree, event):
+        item = tree.identify_row(event.y)
+        if not item:
+            return
+        vals = tree.item(item, "values")
+        if not vals or not str(vals[1]).isdigit():
+            return
+        pid = int(vals[1])
+        threading.Thread(target=self._detail_window, args=(pid, vals),
+                         daemon=True).start()
+
+    def _detail_window(self, pid, vals):
+        try:
+            root = tk.Tk()
+        except Exception:
+            return
+        try:
+            root.title(f"进程详情 - pid {pid}")
+            root.geometry("520x300")
+            root.attributes("-topmost", True)
+            try:
+                root.iconbitmap(_APP_ICON)
+            except Exception:
+                pass
+            info = pid_to_name(pid)
+            full = info[1] if info else "未知 (需要管理员权限)"
+            name = info[0] if info else "?"
+
+            # 启动时间 (GetProcessTimes)
+            start_str = "未知"
+            k32 = ctypes.WinDLL("kernel32")
+            k32.OpenProcess.restype = ctypes.c_void_p
+            h = k32.OpenProcess(0x1000, False, pid)   # QUERY_LIMITED
+            if h:
+                class FT2(ctypes.Structure):
+                    _fields_ = [("dw", ctypes.c_ulonglong * 2)]
+                ct_, et_, kt_, ut_ = FT2(), FT2(), FT2(), FT2()
+                if k32.GetProcessTimes(h, ctypes.byref(ct_),
+                                       ctypes.byref(et_), ctypes.byref(kt_),
+                                       ctypes.byref(ut_)):
+                    ft = ctypes.c_ulonglong(ct_.dw[0] | (ct_.dw[1] << 32))
+                    if ft:
+                        ts = ft / 1e7 - 11644473600
+                        start_str = time.strftime(
+                            "%Y-%m-%d %H:%M:%S", time.localtime(ts))
+                k32.CloseHandle(ctypes.c_void_p(h))
+
+            snap = self.snapshot or {}
+            ig = snap.get("util_by_pid", {}).get(pid, 0.0)
+            dg = snap.get("dgpu_util_by_pid", {}).get(pid, 0.0)
+            de = snap.get("dedicated_by_pid", {}).get(pid, 0.0) / 1048576
+            sh = snap.get("shared_by_pid", {}).get(pid, 0.0) / 1048576
+            on_dgpu = dg > ig
+            where = "独显" if on_dgpu else ("核显" if ig > 0.1 else "未见 GPU 活动")
+
+            frm = tk.Frame(root)
+            frm.pack(fill="both", expand=True, padx=14, pady=10)
+            lines = [
+                ("进程名", name), ("PID", str(pid)),
+                ("完整路径", full), ("启动时间", start_str),
+                ("当前所在", where),
+                ("GPU% / 核显% / 独显%",
+                 f"{vals[2]} / {vals[3]} / {vals[4]}"),
+                ("专用/共享内存", f"{de:.0f} MB / {sh:.0f} MB"),
+            ]
+            for i, (k, v) in enumerate(lines):
+                tk.Label(frm, text=k + ":", anchor="ne", fg="#666").grid(
+                    row=i, column=0, sticky="ne", pady=2)
+                lb = tk.Label(frm, text=v, anchor="w", wraplength=380,
+                              justify="left")
+                lb.grid(row=i, column=1, sticky="w", pady=2)
+            frm.columnconfigure(1, weight=1)
+
+            def do_set():
+                if os.path.isfile(full):
+                    set_gpu_preference(full)
+                    self._detail_msg(root, f"已设为独显: 重启 {name} 后生效")
+
+            def do_unset():
+                if os.path.isfile(full):
+                    clear_gpu_preference(full)
+                    self._detail_msg(root, f"已清除 GPU 设置: {name}")
+
+            btns = tk.Frame(root)
+            btns.pack(pady=6)
+            tk.Button(btns, text="立即设为独显", command=do_set).pack(
+                side="left", padx=6)
+            tk.Button(btns, text="撤销独显设置", command=do_unset).pack(
+                side="left", padx=6)
+            tk.Button(btns, text="关闭", command=root.destroy).pack(
+                side="left", padx=6)
+            root.mainloop()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _detail_msg(root, text):
+        root.title(text)
 
     def _refresh_tree(self, tree, tip):
         with self.lock:
