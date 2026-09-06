@@ -6,5 +6,6 @@
   "auto_restart": false,
   "notify": true,
   "exclude_defaults": true,
-  "log_to_file": true
+  "log_to_file": true,
+  "normalize_total": false
 }

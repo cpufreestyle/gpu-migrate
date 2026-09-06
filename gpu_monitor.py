@@ -75,7 +75,7 @@ def expand_gpu_counter_paths():
     return expand_counter_paths("GPU Engine(*)\\Utilization Percentage")
 
 
-def collect_gpu_sample(allowed_luids=None):
+def collect_gpu_sample(allowed_luids=None, normalize=False):
     """采样 GPU Engine 利用率 + GPU Process Memory 显存。
 
     allowed_luids: 只注册这些显卡上的实例 (省 CPU); None = 全部。
@@ -123,7 +123,7 @@ def collect_gpu_sample(allowed_luids=None):
             r = _pdh_read_raw(h)
             if r:
                 raw1[(key, kind)] = r
-        time.sleep(0.5)  # 利用率窗口
+        time.sleep(1.0)  # 利用率窗口与 1s 采样周期对齐, 覆盖连续时间轴
         if pdh.PdhCollectQueryData(q) != 0:
             raise OSError("PdhCollectQueryData #2 failed")
         usage = defaultdict(float)
@@ -149,12 +149,13 @@ def collect_gpu_sample(allowed_luids=None):
                         usage[key] += v
             else:  # mem (Dedicated Usage): raw count, 取当前值
                 mem_usage[key] += r2[0]
-        # GPU 整体只有 100% 可分: 各引擎(各进程)利用率总和超过 100% 时
-        # 按比例归一化, 保持进程间相对占比不变
-        total = sum(usage.values())
-        if total > 100.0:
-            k = 100.0 / total
-            usage = {kk: v * k for kk, v in usage.items()}
+        # normalize=True 时把各引擎总和超过 100% 的部分按比例缩放
+        # (保持相对占比); 默认关闭 = 任务管理器口径, 单进程读数不失真
+        if normalize:
+            total = sum(usage.values())
+            if total > 100.0:
+                k = 100.0 / total
+                usage = {kk: v * k for kk, v in usage.items()}
         return dict(usage), dict(mem_usage), gpu_index
     finally:
         pdh.PdhCloseQuery(q)
@@ -443,6 +444,8 @@ DEFAULT_CONFIG = {
     "notify_fullscreen_ignore": True,  # 前台全屏(游戏/视频)时不弹通知
     "power_saver_auto": False,   # 低负载自动把独显设置改回核显 (省电)
     "history": True,             # 每 10 秒记录核显总占用到 history.jsonl
+    "normalize_total": False,    # true=所有进程总和强制<=100% (单进程读数会缩水);
+                                 # false=任务管理器口径, 单进程读数最准确
     "log_to_file": True,
 }
 
@@ -682,7 +685,8 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                    if k in ("igpu", "dgpu")}
         try:
             usage, mem_usage, gpu_index = collect_gpu_sample(
-                allowed if allowed else None)
+                allowed if allowed else None,
+                normalize=cfg.get("normalize_total", False))
         except OSError as e:
             log(f"采样失败: {e}，{cfg['interval_seconds']}s 后重试", logfile)
             time.sleep(cfg["interval_seconds"])

@@ -106,7 +106,7 @@ class TrayApp:
     def _on_sample(self, snap):
         with self.lock:
             self.snapshot = snap
-        total = sum(snap["util_by_pid"].values())
+        total = max(snap["util_by_pid"].values()) if snap["util_by_pid"] else 0.0
         names = {l: self._gpu_name(l) for l in
                  snap["igpu_luids"] | snap["dgpu_luids"]}
         ig = " + ".join(names.get(l, l) for l in snap["igpu_luids"]) or "-"
