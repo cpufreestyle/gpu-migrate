@@ -144,7 +144,7 @@ class TrayApp:
         # 只写队列; 严禁从监控线程调用 tkinter (跨线程会让面板消息循环卡死)
         self.history.append((ts, total))
 
-    _SORT_NUM_COLS = {"pid", "igpu", "imem", "dgpu"}
+    _SORT_NUM_COLS = {"pid", "gpu", "igpu", "dgpu", "dmem", "smem"}
 
     def _toggle_sort(self, col):
         st = self.sort_state
@@ -156,8 +156,8 @@ class TrayApp:
     def _sort_rows(self, rows):
         col = self.sort_state["col"]
         desc = self.sort_state["desc"]
-        idx = {"name": 0, "pid": 1, "igpu": 2, "imem": 3,
-               "dgpu": 4, "pref": 5}.get(col, 2)
+        idx = {"name": 0, "pid": 1, "gpu": 2, "igpu": 3, "dgpu": 4,
+               "dmem": 5, "smem": 6, "pref": 7}.get(col, 2)
         numeric = col in self._SORT_NUM_COLS
 
         def key(row):
@@ -213,17 +213,19 @@ class TrayApp:
                     ui = _json.load(f)
             except (OSError, ValueError):
                 pass
-            root.geometry(ui.get("geometry", "880x360"))
+            root.geometry(ui.get("geometry", "1020x360"))
             root.attributes("-topmost", True)
 
-            cols = ("name", "pid", "igpu", "imem", "dgpu", "pref")
+            cols = ("name", "pid", "gpu", "igpu", "dgpu", "dmem", "smem",
+                    "pref")
             widths = {c: w for c, w in ui.get("widths", {}).items()}
-            defaults = {"name": 220, "pid": 60, "igpu": 60, "imem": 80,
-                        "dgpu": 60, "pref": 170}
+            defaults = {"name": 180, "pid": 55, "gpu": 55, "igpu": 55,
+                        "dgpu": 55, "dmem": 75, "smem": 75, "pref": 160}
             tree = ttk.Treeview(root, columns=cols, show="headings", height=12)
             for cid, text in (("name", "进程"), ("pid", "PID"),
-                              ("igpu", "核显%"), ("imem", "显存MB"),
-                              ("dgpu", "独显%"), ("pref", "迁移状态")):
+                              ("gpu", "GPU%"), ("igpu", "核显%"),
+                              ("dgpu", "独显%"), ("dmem", "专用MB"),
+                              ("smem", "共享MB"), ("pref", "迁移状态")):
                 tree.heading(cid, text=text,
                              command=lambda c=cid: self._toggle_sort(c))
                 tree.column(cid, width=widths.get(cid, defaults[cid]),
@@ -318,28 +320,33 @@ class TrayApp:
             snap = self.snapshot
         rows = []
         if snap:
-            pids = (set(snap["util_by_pid"]) | set(snap["mem_by_pid"])
-                    | set(snap["dgpu_util_by_pid"]))
+            pids = (set(snap["util_by_pid"]) | set(snap["gpu_all_by_pid"])
+                    | set(snap["dgpu_util_by_pid"])
+                    | set(snap["shared_by_pid"])
+                    | set(snap["dedicated_by_pid"]))
             for pid in pids:
+                gpu_all = snap["gpu_all_by_pid"].get(pid, 0.0)
                 ig = snap["util_by_pid"].get(pid, 0.0)
-                im = snap["mem_by_pid"].get(pid, 0.0) / (1024 * 1024)
                 dg = snap["dgpu_util_by_pid"].get(pid, 0.0)
-                if ig < 0.1 and im < 1 and dg < 0.1:
+                de = snap["dedicated_by_pid"].get(pid, 0.0) / (1024 * 1024)
+                sh = snap["shared_by_pid"].get(pid, 0.0) / (1024 * 1024)
+                if gpu_all < 0.1 and de < 1 and sh < 1:
                     continue
                 name = self._pid_name(pid)
                 pref = ""
                 info = pid_to_name(pid)
                 if info and self._pref_of(info[1]):
                     pref = "已设独显(重启生效)"
-                rows.append((max(ig, dg), (name, pid, f"{ig:.0f}%",
-                                           f"{im:.0f} MB", f"{dg:.0f}%", pref)))
+                rows.append((max(gpu_all, de, sh),
+                             (name, pid, f"{gpu_all:.0f}%", f"{ig:.0f}%",
+                              f"{dg:.0f}%", f"{de:.0f}", f"{sh:.0f}", pref)))
         rows = self._sort_rows(rows)
         tree.delete(*tree.get_children())
         for _ig, row in rows[:30]:
             tree.insert("", "end", values=row)
         if not rows:
             tree.insert("", "end", values=(
-                "（当前核显/独显上无进程活动）", "-", "-", "-", "-", "-"))
+                "（当前无进程占用 GPU）", "-", "-", "-", "-", "-", "-", "-"))
         if snap:
             ig_luids = ", ".join(self._gpu_name(l)
                                  for l in snap["igpu_luids"]) or "-"
