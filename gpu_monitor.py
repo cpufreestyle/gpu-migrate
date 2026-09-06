@@ -723,7 +723,8 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
         now_ts = time.time()
         if cfg.get("history", True) and now_ts - hist_last >= 10:
             hist_last = now_ts
-            total_util = sum(util_by_pid.values())
+            # 任务管理器口径: 适配器利用率 = 最强引擎 (恒 <=100%)
+            total_util = max(util_by_pid.values()) if util_by_pid else 0.0
             if hooks and hooks.get("on_history_point"):
                 hooks["on_history_point"](now_ts, total_util)
             hist_file = os.path.join(_DIR, "history.jsonl")
