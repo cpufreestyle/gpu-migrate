@@ -25,6 +25,8 @@ _DIR = (os.path.dirname(os.path.abspath(sys.executable))
 
 _UI_FILE = os.path.join(_DIR, "panel_ui.json")
 _CONFIG_PATH = os.path.join(_DIR, "config.json")
+_APP_ICON = os.path.join(
+    getattr(sys, "_MEIPASS", _DIR), "app.ico")
 
 
 def _make_icon_image(pct):
@@ -197,6 +199,10 @@ class TrayApp:
             return
         try:
             root.title("GPU 占用监控")
+            try:
+                root.iconbitmap(_APP_ICON)
+            except Exception:
+                pass
             self._root_ref = root
 
             # 恢复上次窗口位置/大小/列宽
