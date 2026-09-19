@@ -1126,6 +1126,17 @@ class SnapshotContract(LoopHarness):
         self.assertEqual(snap["util_by_pid"], {100: 80.0})
         self.assertEqual(snap["dedicated_by_pid"], {})
 
+    def test_dgpu_temp_survives_the_snapshot_rebuild(self):
+        """温度写进的是"上一轮"的快照, 本轮末尾整字典重建会把它抹掉。
+
+        面板上那条 独显温度 因此永远不出现 —— 看着像 NVML 坏了, 其实是被
+        自己的重建覆盖。
+        """
+        gm.nvml_gpu_temp = lambda index=0: 61.0
+        self.run_monitor([{100: 5.0}], cycles=1,
+                         cfg_overrides={"nvml_temp": True})
+        self.assertEqual(gm._LAST_SNAPSHOT.get("dgpu_temp"), 61.0)
+
 
 class PreferenceSemantics(unittest.TestCase):
     """"已迁移"这个判断本身: 注册表字符串的几种真实写法都要落到同一个答案。"""

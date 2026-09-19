@@ -73,7 +73,7 @@ python gpu_monitor.py --unset-all
   才是监控循环这一轮真正在用的参数（电池覆盖时标 `电池供电中`）；
   热重载日志同样带生效值。
 - **开机自启**：启动文件夹快捷方式指向 `GPUMigrate.exe`（托盘常驻无窗口）。
-- **测试**：`python tests/test_gpu_monitor.py`（纯标准库 unittest，92 用例；
+- **测试**：`python tests/test_gpu_monitor.py`（纯标准库 unittest，93 用例；
   注册表写入与进程枚举都是打桩的，不会动到本机 GPU 首选项）。
 - **打包**：`python -m PyInstaller --noconsole --onefile --name GPUMigrate --paths . --collect-all pystray --collect-all PIL gpu_monitor.py`
   （注意用 `python -m PyInstaller`，直接 `pyinstaller` 可能指向另一个 Python 环境。）

@@ -1075,6 +1075,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
     game_secs = defaultdict(float)   # 游戏时长累计 (秒)
     ps_check = [0.0]
     temp_check = [0.0]
+    dgpu_temp = None        # 最近一次 NVML 读数, 每轮跟着快照一起发布
     elapsed_prev = [1.0]
     temp_last_notify = 0.0
     battery_state = None  # None=未检测, True=电池, False=外接
@@ -1177,7 +1178,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
         if cfg.get("nvml_temp") and now_ts - temp_check[0] > 10:
             temp_check[0] = now_ts
             t = nvml_gpu_temp(0)
-            _LAST_SNAPSHOT["dgpu_temp"] = t
+            dgpu_temp = t
             if t is not None and t >= cfg.get("temp_limit", 85) \
                     and now_ts - temp_last_notify > 600:
                 temp_last_notify = now_ts
@@ -1237,7 +1238,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
             "shared_by_pid": shared_by_pid,
             "dedicated_by_pid": dedicated_by_pid,
             "igpu_luids": igpu_luids, "dgpu_luids": dgpu_luids,
-            "kind_cache": kind_cache, **policy}
+            "kind_cache": kind_cache, "dgpu_temp": dgpu_temp, **policy}
 
         if hooks and hooks.get("on_sample"):
             hooks["on_sample"]({
