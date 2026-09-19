@@ -18,7 +18,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from gpu_monitor import (cmd_monitor, clear_gpu_preference,
                          get_gpu_preference, is_high_performance, load_config,
-                         pid_to_name, save_exclude_process, set_gpu_preference,
+                         mode_text, pid_to_name, policy_text,
+                         save_exclude_process, set_gpu_preference,
                          nvml_gpu_temp)
 
 import sys
@@ -125,14 +126,14 @@ class TrayApp:
     # ---- 模式切换 (写 config.json, 热重载生效) ----
 
     def _mode_text(self):
+        """菜单上那行是"选中的模式"(直接读 config.json), 生效值看 tooltip。"""
         try:
             import json as _json
             with open(self.config_path, "r", encoding="utf-8") as f:
                 cfg = _json.load(f)
-            return {"performance": "性能", "saver": "省电"}.get(
-                cfg.get("mode", "smart"), "智能")
+            return mode_text(cfg.get("mode"))
         except (OSError, ValueError):
-            return "智能"
+            return mode_text(None)
 
     def _apply_mode(self, mode, threshold, ps_auto):
         try:
@@ -279,7 +280,12 @@ class TrayApp:
         names = {l: self._gpu_name(l) for l in
                  snap["igpu_luids"] | snap["dgpu_luids"]}
         ig = " + ".join(names.get(l, l) for l in snap["igpu_luids"]) or "-"
-        self.icon.title = (f"GPU 监控  核显占用 {total:.0f}%\n核显: {ig}"
+        # 悬停就能看到监控这一轮真正在用的参数, 不必点开面板或翻日志
+        policy = policy_text(snap.get("mode"), snap.get("threshold") or 0,
+                             snap.get("power_saver_auto"),
+                             snap.get("on_battery"))
+        self.icon.title = (f"GPU 监控  核显占用 {total:.0f}%\n{policy}\n"
+                           f"核显: {ig}"
                            + ("  [已暂停]" if self.paused else ""))
         self.icon.icon = _make_icon_image(total)
 

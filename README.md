@@ -68,8 +68,12 @@ python gpu_monitor.py --unset-all
 - **配置热重载**：监控运行中修改 config.json 保存即自动生效，无需重启。
   例外：`web_port` 与 `hotkeys` 在启动时一次性注册，改完要重启监控进程
   （日志会提示 `需重启监控后生效`）。
+- **模式确认**：托盘菜单的 `模式: 省电` 是"选中的"（直接读 config.json），
+  tooltip 与 Web 面板顶部的 `生效中: 模式 …, 阈值 …%, 自动切回 开/关`
+  才是监控循环这一轮真正在用的参数（电池覆盖时标 `电池供电中`）；
+  热重载日志同样带生效值。
 - **开机自启**：启动文件夹快捷方式指向 `GPUMigrate.exe`（托盘常驻无窗口）。
-- **测试**：`python tests/test_gpu_monitor.py`（纯标准库 unittest，82 用例；
+- **测试**：`python tests/test_gpu_monitor.py`（纯标准库 unittest，90 用例；
   注册表写入与进程枚举都是打桩的，不会动到本机 GPU 首选项）。
 - **打包**：`python -m PyInstaller --noconsole --onefile --name GPUMigrate --paths . --collect-all pystray --collect-all PIL gpu_monitor.py`
   （注意用 `python -m PyInstaller`，直接 `pyinstaller` 可能指向另一个 Python 环境。）

@@ -935,6 +935,24 @@ class ConfigHotReload(LoopHarness):
         self.assertEqual(self.prefs.get(HEAVY), "GpuPreference=2;",
                          "显存阈值 vram_mb 是 nonlocal 的, 该生效")
 
+    def test_reload_log_shows_the_effective_values(self):
+        """热重载那行要带上生效值: 选了模式后日志得能证明参数真的换了。
+
+        只写"已热重载"时, 菜单上的"模式: 省电"是直接从 config.json 读的,
+        监控有没有吃进去无从判断 —— 重载失败时界面照样显示新模式。
+        """
+        path = os.path.join(gm._DIR, "__reload_mode__.json")
+        write_test_config(path, threshold_percent=20.0)
+        self.run_monitor([{100: 5.0}] * 4, config_path=path,
+                         cfg_overrides={"threshold_percent": 20.0,
+                                        "sustain_samples": 1},
+                         hooks={"on_sample": self.rewrite_once(
+                             path, threshold_percent=40.0, mode="saver",
+                             power_saver_auto=True)})
+        line = [l for l in self.log_lines if "已热重载" in l][-1]
+        self.assertIn("40", line, "阈值要从日志里读得出来")
+        self.assertIn("省电", line, "模式名也要在")
+
 
 class PowerAwarePolicy(LoopHarness):
     """power_aware: 用电池时换阈值。apply_config 里的"重算"要真能重算。"""
@@ -967,6 +985,21 @@ class PowerAwarePolicy(LoopHarness):
         self.assertEqual(self.prefs.get(HEAVY), "GpuPreference=2;",
                          "重载后应回到电池阈值 3%, 5% 的占用要迁移")
 
+    def test_snapshot_reports_the_battery_threshold(self):
+        """电池覆盖之后, 快照里的阈值必须是电池值。
+
+        界面若去读 config.json, 拔着电源就会显示交流阈值 —— 那恰好是用户
+        想确认"现在到底按哪个数在判"的时候。
+        """
+        gm.on_battery = lambda: True
+        self.run_monitor([{100: 5.0}] * 2,
+                         cfg_overrides={"power_aware": True,
+                                        "threshold_percent": 20.0,
+                                        "battery_threshold_percent": 55.0,
+                                        "sustain_samples": 1})
+        self.assertEqual(gm._LAST_SNAPSHOT["threshold"], 55.0)
+        self.assertTrue(gm._LAST_SNAPSHOT["on_battery"])
+
 
 class SnapshotContract(LoopHarness):
     """面板/托盘靠 hooks 与 _LAST_SNAPSHOT 取数, 键名是跨文件契约。"""
@@ -979,11 +1012,27 @@ class SnapshotContract(LoopHarness):
             set(seen),
             {"util_by_pid", "gpu_all_by_pid", "dgpu_util_by_pid",
              "shared_by_pid", "dedicated_by_pid", "igpu_luids",
-             "dgpu_luids", "kind_cache"})
+             "dgpu_luids", "kind_cache",
+             "mode", "threshold", "power_saver_auto", "on_battery"})
         self.assertEqual(seen["util_by_pid"], {100: 80.0})
         self.assertEqual(seen["gpu_all_by_pid"], {100: 80.0})
         self.assertIn(IGPU_LUID, seen["igpu_luids"])
         self.assertIn(DGPU_LUID, seen["dgpu_luids"])
+
+    def test_snapshot_carries_the_effective_policy(self):
+        """面板和 tooltip 用的模式/阈值必须来自循环里的生效值。
+
+        _LAST_SNAPSHOT 原先只装逐进程指标, 界面拿不到"现在按什么在判",
+        只能回头读 config.json —— 那等于只能证明"我选了", 证明不了"生效了"。
+        """
+        self.run_monitor([{100: 5.0}], cycles=1,
+                         cfg_overrides={"mode": "saver",
+                                        "threshold_percent": 40.0,
+                                        "power_saver_auto": True})
+        snap = gm._LAST_SNAPSHOT
+        self.assertEqual(snap["mode"], "saver")
+        self.assertEqual(snap["threshold"], 40.0)
+        self.assertTrue(snap["power_saver_auto"])
 
     def test_history_point_uses_strongest_engine_semantics(self):
         pts = []
@@ -1078,6 +1127,72 @@ class PreferenceSemantics(unittest.TestCase):
         self.assertEqual(set(cleared), {self.BARE, self.FULL})
         self.assertNotIn(self.ADAPTER, cleared, "别人钉的特定独显不该被清掉")
         self.assertNotIn(self.OTHER, cleared)
+
+
+class ModeDisplay(unittest.TestCase):
+    """模式名只有一个来源, 面板顶部要显示生效中的那一个。"""
+
+    SNAP = {"util_by_pid": {}, "gpu_all_by_pid": {}, "dgpu_util_by_pid": {},
+            "shared_by_pid": {}, "dedicated_by_pid": {}, "igpu_luids": set(),
+            "dgpu_luids": set(), "kind_cache": {}, "mode": "saver",
+            "threshold": 40.0, "power_saver_auto": True, "on_battery": False}
+
+    def test_mode_names(self):
+        for mode, want in (("performance", "性能"), ("saver", "省电"),
+                           ("smart", "智能"), (None, "智能")):
+            with self.subTest(mode=mode):
+                self.assertEqual(gm.mode_text(mode), want)
+
+    def test_panel_shows_mode_threshold_and_auto_switch(self):
+        html = gm.panel_html(self.SNAP, {})
+        self.assertIn("省电", html)
+        self.assertIn("40", html)
+        self.assertIn("自动切回 开", html)
+
+    def test_panel_marks_the_battery_override(self):
+        """电池下生效阈值换了数, 面板得说清这个数不是配置里那个。"""
+        html = gm.panel_html({**self.SNAP, "mode": "smart",
+                              "threshold": 55.0, "power_saver_auto": False,
+                              "on_battery": True}, {})
+        self.assertIn("电池", html)
+        self.assertIn("55", html)
+
+
+class TrayModeDisplay(unittest.TestCase):
+    """托盘 tooltip: 不点开面板、不右键菜单, 悬停就该看到生效策略。"""
+
+    def _title(self, snap):
+        import threading
+        import gpu_tray
+
+        class Fake:
+            paused = False
+
+            def __init__(self):
+                self.lock = threading.Lock()
+                self.snapshot = None
+                self.icon = type("I", (), {"title": "", "icon": None})()
+
+            _gpu_name = gpu_tray.TrayApp._gpu_name
+
+        f = Fake()
+        gpu_tray.TrayApp._on_sample(f, {
+            "util_by_pid": {7: 12.0}, "gpu_all_by_pid": {},
+            "dgpu_util_by_pid": {}, "shared_by_pid": {},
+            "dedicated_by_pid": {}, "igpu_luids": set(),
+            "dgpu_luids": set(), "kind_cache": {}, **snap})
+        return f.icon.title
+
+    def test_tooltip_names_the_effective_mode(self):
+        title = self._title({"mode": "saver", "threshold": 40.0,
+                             "power_saver_auto": True, "on_battery": False})
+        self.assertIn("省电", title)
+        self.assertIn("40", title)
+
+    def test_tooltip_shows_battery_override(self):
+        self.assertIn("电池", self._title({"mode": "smart", "threshold": 55.0,
+                                           "power_saver_auto": True,
+                                           "on_battery": True}))
 
 
 class TrayLifecycleLog(unittest.TestCase):

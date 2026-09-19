@@ -682,50 +682,74 @@ def hotkey_thread(bindings):
                     pass
 
 
-# ---- 本地 Web 面板 ----
+# ---- 展示: 模式名 / 生效策略 / Web 面板 ----
+_MODE_NAMES = {"performance": "性能", "smart": "智能", "saver": "省电"}
+
+
+def mode_text(mode):
+    """模式 key -> 中文名: 菜单、面板、日志共用一份口径, 免得三处各写一遍。"""
+    return _MODE_NAMES.get(mode or "smart", "智能")
+
+
+def policy_text(mode, threshold, ps_auto, on_battery=False):
+    """生效策略的一行文字。数值只该来自监控循环里真正在用的那一份。"""
+    text = (f"模式 {mode_text(mode)}, 阈值 {threshold:g}%, "
+            f"自动切回 {'开' if ps_auto else '关'}")
+    return text + (", 电池供电中" if on_battery else "")
+
+
+def panel_html(snap, names):
+    """Web 面板 HTML。snap = _LAST_SNAPSHOT, names = {luid: 显卡名}。"""
+    rows = []
+    pids = set()
+    for k in ("util_by_pid", "gpu_all_by_pid", "dgpu_util_by_pid",
+              "shared_by_pid", "dedicated_by_pid"):
+        pids |= set(snap.get(k, {}))
+    for pid in sorted(pids, key=lambda x:
+                      -max(snap.get("util_by_pid", {}).get(x, 0),
+                           snap.get("dedicated_by_pid", {}).get(x, 0)
+                           / (1024 * 1024))):
+        rows.append(
+            "<tr><td>%d</td><td>%.1f%%</td><td>%.1f%%</td>"
+            "<td>%.1f%%</td><td>%.0f</td><td>%.0f</td></tr>"
+            % (pid,
+               snap.get("gpu_all_by_pid", {}).get(pid, 0),
+               snap.get("util_by_pid", {}).get(pid, 0),
+               snap.get("dgpu_util_by_pid", {}).get(pid, 0),
+               snap.get("dedicated_by_pid", {}).get(pid, 0) / 1048576,
+               snap.get("shared_by_pid", {}).get(pid, 0) / 1048576))
+    ig = ", ".join(names.get(l, l)
+                   for l in snap.get("igpu_luids", [])) or "-"
+    dg = ", ".join(names.get(l, l)
+                   for l in snap.get("dgpu_luids", [])) or "-"
+    temp = snap.get("dgpu_temp")
+    return (
+        "<html><head><meta charset='utf-8'>"
+        "<meta http-equiv='refresh' content='1'>"
+        "<title>GPU Monitor</title>"
+        "<style>body{font-family:Segoe UI;background:#14141e;"
+        "color:#ddd}table{border-collapse:collapse}td,th{padding:4px 10px;"
+        "border:1px solid #333}.policy{color:#7fd1b9}</style></head><body>"
+        "<h2>GPU 监控</h2>"
+        "<p class='policy'>生效中: %s</p>"
+        "<p>核显: %s<br>独显: %s%s</p>"
+        "<table><tr><th>PID</th><th>GPU%%</th><th>核显%%</th>"
+        "<th>独显%%</th><th>专用MB</th><th>共享MB</th></tr>%s"
+        "</table></body></html>"
+        % (policy_text(snap.get("mode"), snap.get("threshold") or 0,
+                       snap.get("power_saver_auto"),
+                       snap.get("on_battery")),
+           ig, dg,
+           f"<br>独显温度: {temp}°C" if temp else "",
+           "".join(rows) or "<tr><td colspan=6>空闲</td></tr>"))
+
+
 def web_thread(port, snapshot_getter, gpu_names):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     class H(BaseHTTPRequestHandler):
         def do_GET(self):
-            snap = snapshot_getter() or {}
-            rows = []
-            pids = set()
-            for k in ("util_by_pid", "gpu_all_by_pid", "dgpu_util_by_pid",
-                      "shared_by_pid", "dedicated_by_pid"):
-                pids |= set(snap.get(k, {}))
-            for pid in sorted(pids, key=lambda x:
-                              -max(snap.get("util_by_pid", {}).get(x, 0),
-                                   snap.get("dedicated_by_pid", {}).get(x, 0)
-                                   / (1024 * 1024))):
-                rows.append(
-                    "<tr><td>%d</td><td>%.1f%%</td><td>%.1f%%</td>"
-                    "<td>%.1f%%</td><td>%.0f</td><td>%.0f</td></tr>"
-                    % (pid,
-                       snap.get("gpu_all_by_pid", {}).get(pid, 0),
-                       snap.get("util_by_pid", {}).get(pid, 0),
-                       snap.get("dgpu_util_by_pid", {}).get(pid, 0),
-                       snap.get("dedicated_by_pid", {}).get(pid, 0) / 1048576,
-                       snap.get("shared_by_pid", {}).get(pid, 0) / 1048576))
-            ig = ", ".join(gpu_names().get(l, l)
-                           for l in snap.get("igpu_luids", [])) or "-"
-            dg = ", ".join(gpu_names().get(l, l)
-                           for l in snap.get("dgpu_luids", [])) or "-"
-            temp = snap.get("dgpu_temp")
-            html = (
-                "<html><head><meta charset='utf-8'>"
-                "<meta http-equiv='refresh' content='1'>"
-                "<title>GPU Monitor</title>"
-                "<style>body{font-family:Segoe UI;background:#14141e;"
-                "color:#ddd}table{border-collapse:collapse}td,th{padding:4px 10px;"
-                "border:1px solid #333}</style></head><body>"
-                "<h2>GPU 监控</h2><p>核显: %s<br>独显: %s%s</p>"
-                "<table><tr><th>PID</th><th>GPU%%</th><th>核显%%</th>"
-                "<th>独显%%</th><th>专用MB</th><th>共享MB</th></tr>%s"
-                "</table></body></html>"
-                % (ig, dg,
-                   f"<br>独显温度: {temp}°C" if temp else "",
-                   "".join(rows) or "<tr><td colspan=6>空闲</td></tr>"))
+            html = panel_html(snapshot_getter() or {}, gpu_names())
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
@@ -1083,7 +1107,9 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
         eff_ps_auto = cfg.get("power_saver_auto", False)
         battery_state = None
         ps_check[0] = 0.0
-        log("检测到配置修改，已热重载", logfile)
+        log(f"检测到配置修改，已热重载: "
+            f"{policy_text(cfg.get('mode'), eff_threshold, eff_ps_auto)}",
+            logfile)
         if restart_needed:
             log("提示: web_port / hotkeys 已修改，需重启监控后生效", logfile)
 
@@ -1197,13 +1223,19 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                 hooks["on_history_point"](now_ts, total_util)
             daily = append_history(now_ts, total_util, daily, game_secs, cfg)
 
+        # 生效策略与逐进程指标放在一起: 面板/托盘读快照就够了, 不必回头
+        # 猜 config.json 里那套参数有没有真被吃进去。
+        policy = {"mode": cfg.get("mode"),
+                  "threshold": eff_threshold,
+                  "power_saver_auto": eff_ps_auto,
+                  "on_battery": bool(battery_state)}
         _LAST_SNAPSHOT = {
             "util_by_pid": util_by_pid, "gpu_all_by_pid": gpu_all_by_pid,
             "dgpu_util_by_pid": dgpu_util_by_pid,
             "shared_by_pid": shared_by_pid,
             "dedicated_by_pid": dedicated_by_pid,
             "igpu_luids": igpu_luids, "dgpu_luids": dgpu_luids,
-            "kind_cache": kind_cache}
+            "kind_cache": kind_cache, **policy}
 
         if hooks and hooks.get("on_sample"):
             hooks["on_sample"]({
@@ -1215,6 +1247,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                 "igpu_luids": set(igpu_luids),
                 "dgpu_luids": set(dgpu_luids),
                 "kind_cache": dict(kind_cache),
+                **policy,
             })
 
         # 迁移效果闭环: 观察重启后的进程实际挂在哪块显卡上
