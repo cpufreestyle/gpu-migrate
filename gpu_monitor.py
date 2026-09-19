@@ -148,13 +148,15 @@ def collect_gpu_sample(allowed_luids=None, normalize=False):
                     v = 100.0 * n / d
                     # >100% 说明 GPU Engine 实例在窗口内被销毁重建、
                     # 句柄读到重排后的脏数据, 丢弃
-                    if 0.5 < v <= 100.0:
-                        usage[key] += v
+                    if 0.5 < v <= 100.0 and v > usage[key]:
+                        # 同一显卡上的 3D/Copy/VideoDecode 是并发引擎,
+                        # 求和会虚高到 100% 以上; 任务管理器取最强引擎
+                        usage[key] = v
             elif kind == "mems":   # Shared Usage: raw count 取当前值
                 shared_by_key[key] += r2[0]
             else:                  # Dedicated Usage
                 dedicated_by_key[key] += r2[0]
-        # normalize=True 时把各引擎总和超过 100% 的部分按比例缩放
+        # normalize=True 时把各进程读数总和超过 100% 的部分按比例缩放
         # (保持相对占比); 默认关闭 = 任务管理器口径, 单进程读数不失真
         if normalize:
             total = sum(usage.values())

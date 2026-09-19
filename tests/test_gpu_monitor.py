@@ -130,6 +130,83 @@ class AggregateRules(unittest.TestCase):
         self.assertEqual(igpu_mem[999], 0.0, "defaultdict: 缺键不报错")
 
 
+class SampleEngineFold(unittest.TestCase):
+    """collect_gpu_sample 交给聚合层的读数, 也必须是"最强引擎"。
+
+    AggregateRules 只钉住了 aggregate_usage 自己取 max —— 但它拿到的每个键
+    早已是逐引擎求和后的数, 虚高发生在它之前。本机实测一个进程核显读数
+    101.8% (3D 3.7% + Copy 80.8%), 于是"只有 Copy 在动"的进程被当成高占用
+    送去迁移。
+    """
+
+    def collect(self, pct_by_path):
+        """假 PDH 驱动一次真采样: 每计数器第一读 (0, 1e7)、第二读
+        (pct*1e5, 2e7), 差值口径正好还原成 pct。"""
+
+        class FakePdh:
+            def __init__(self):
+                self.pct = {}      # id(handle) -> 该引擎利用率
+                self.reads = {}    # id(handle) -> 已读次数
+
+            def PdhOpenQueryW(self, machine, ctx, out):
+                return 0
+
+            def PdhAddCounterW(self, query, path, reserved, out):
+                self.pct[id(out._obj)] = pct_by_path[path]
+                return 0
+
+            def PdhCollectQueryData(self, query):
+                return 0
+
+            def PdhCloseQuery(self, query):
+                return 0
+
+        fake = FakePdh()
+
+        def fake_read_raw(handle):
+            key = id(handle)
+            if key not in fake.pct:
+                return None
+            fake.reads[key] = fake.reads.get(key, 0) + 1
+            if fake.reads[key] == 1:
+                return (0, 10_000_000)
+            return (int(fake.pct[key] * 100_000), 20_000_000)
+
+        saved = (gm.pdh, gm.expand_counter_paths, gm._pdh_read_raw,
+                 gm.time.sleep)
+        try:
+            gm.pdh = fake
+            gm.expand_counter_paths = (
+                lambda spec: list(pct_by_path)
+                if spec.startswith("GPU Engine") else [])
+            gm._pdh_read_raw = fake_read_raw
+            gm.time.sleep = lambda _s: None
+            usage, _shared, _dedicated, _index = gm.collect_gpu_sample()
+        finally:
+            (gm.pdh, gm.expand_counter_paths, gm._pdh_read_raw,
+             gm.time.sleep) = saved
+        return usage
+
+    def test_engines_on_one_adapter_take_the_strongest(self):
+        usage = self.collect({
+            engine_path(7, IGPU_LUID, 0, 0, "3D"): 3.7,
+            engine_path(7, IGPU_LUID, 0, 4, "Copy"): 80.8,
+            engine_path(7, DGPU_LUID, 0, 0, "3D"): 89.4})
+        self.assertEqual(usage[(7, IGPU_LUID, 0)], 80.8,
+                         "3D 3.7% + Copy 80.8% 是并发引擎, 任务管理器读 80.8%")
+        self.assertEqual(usage[(7, DGPU_LUID, 0)], 89.4)
+
+    def test_no_process_can_read_above_100_percent(self):
+        usage = self.collect({
+            engine_path(7, DGPU_LUID, 0, 0, "3D"): 89.4,
+            engine_path(7, DGPU_LUID, 0, 4, "Copy"): 12.4,
+            engine_path(8, DGPU_LUID, 0, 0, "3D"): 60.0,
+            engine_path(8, DGPU_LUID, 0, 3, "VideoDecode"): 45.0})
+        for pid in (7, 8):
+            with self.subTest(pid=pid):
+                self.assertLessEqual(usage[(pid, DGPU_LUID, 0)], 100.0)
+
+
 class InstancePathParsing(unittest.TestCase):
     """INSTANCE_RE 必须吃下 PDH 实际返回的各种实例名形状。"""
 
