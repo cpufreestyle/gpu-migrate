@@ -10,4 +10,5 @@ GPUMigrate.exe
 history.jsonl
 history.jsonl.1
 panel_ui.json
+report.csv
 _patch*.py

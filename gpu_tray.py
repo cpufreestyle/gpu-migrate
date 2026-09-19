@@ -17,8 +17,8 @@ import pystray
 from PIL import Image, ImageDraw, ImageFont
 
 from gpu_monitor import (cmd_monitor, clear_gpu_preference,
-                         get_gpu_preference, load_config, pid_to_name,
-                         save_exclude_process, set_gpu_preference,
+                         get_gpu_preference, is_high_performance, load_config,
+                         pid_to_name, save_exclude_process, set_gpu_preference,
                          nvml_gpu_temp)
 
 import sys
@@ -30,6 +30,20 @@ _UI_FILE = os.path.join(_DIR, "panel_ui.json")
 _CONFIG_PATH = os.path.join(_DIR, "config.json")
 _APP_ICON = os.path.join(
     getattr(sys, "_MEIPASS", _DIR), "app.ico")
+
+
+def _dbg(msg):
+    """托盘自身的排查日志。
+
+    静默退出过一次的话, 没有这一行就只能靠"日志最后一行"猜; stop 标志
+    把"用户点了退出"和"消息循环被外力打断"分开。
+    """
+    try:
+        with open(os.path.join(_DIR, "tray_debug.log"), "a",
+                  encoding="utf-8") as f:
+            f.write(time.strftime("[%H:%M:%S] ") + msg + "\n")
+    except OSError:
+        pass
 
 
 def _make_icon_image(pct):
@@ -279,12 +293,7 @@ class TrayApp:
         return "LUID ..." + luid[-4:]
 
     def _monitor_thread(self):
-        try:
-            with open(os.path.join(_DIR, "tray_debug.log"), "a",
-                      encoding="utf-8") as f:
-                f.write(time.strftime("[%H:%M:%S] monitor enter") + chr(10))
-        except OSError:
-            pass
+        _dbg("monitor enter")
         try:
             cmd_monitor(self.cfg, self.config_path,
                         hooks={"before_cycle": self._before_cycle,
@@ -292,12 +301,14 @@ class TrayApp:
                                "on_history_point": self._on_history_point})
         except Exception:  # 后台线程兜底，错误落盘便于排查
             import traceback
+            _dbg("monitor error")
             try:
                 with open(os.path.join(_DIR, "tray_error.log"), "w",
                           encoding="utf-8") as f:
                     f.write(traceback.format_exc())
             except OSError:
                 pass
+        _dbg("monitor exit")
 
     def _on_history_point(self, ts, total):
         # 只写队列; 严禁从监控线程调用 tkinter (跨线程会让面板消息循环卡死)
@@ -347,7 +358,7 @@ class TrayApp:
             self._pref_ts = now
         if full_path not in self._pref_cache:
             self._pref_cache[full_path] = \
-                get_gpu_preference(full_path) == "GpuPreference=2;"
+                is_high_performance(get_gpu_preference(full_path))
         return self._pref_cache[full_path]
 
     def _panel_main(self):
@@ -618,6 +629,7 @@ class TrayApp:
     def run(self):
         threading.Thread(target=self._monitor_thread, daemon=True).start()
         self.icon.run()
+        _dbg(f"tray loop end stop={self.stop}")
 
 
 def run_tray(config_path=None):

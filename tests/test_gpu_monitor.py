@@ -1044,6 +1044,24 @@ class PreferenceSemantics(unittest.TestCase):
         self.assertIn(self.BARE, out.split("其他设置")[0])
         self.assertIn(self.OTHER, out.split("其他设置")[1])
 
+    def test_tray_panel_uses_the_same_rule(self):
+        """面板上那个"已迁移"标记必须和循环里的判定同源, 否则两处会分叉。"""
+        import gpu_tray
+
+        class Fake:
+            def __init__(self):
+                self._pref_cache = {}
+                self._pref_ts = 0.0
+
+        saved = gpu_tray.get_gpu_preference
+        gpu_tray.get_gpu_preference = {"a": "GpuPreference=2",
+                                       "b": "GpuPreference=1;"}.get
+        try:
+            self.assertTrue(gpu_tray.TrayApp._pref_of(Fake(), "a"))
+            self.assertFalse(gpu_tray.TrayApp._pref_of(Fake(), "b"))
+        finally:
+            gpu_tray.get_gpu_preference = saved
+
     def test_clear_only_dgpu_removes_bare_value_too(self):
         prefs = {self.BARE: "GpuPreference=2", self.FULL: "GpuPreference=2;",
                  self.ADAPTER: "SpecificAdapter=10DE&2803&41231458;"
@@ -1060,6 +1078,99 @@ class PreferenceSemantics(unittest.TestCase):
         self.assertEqual(set(cleared), {self.BARE, self.FULL})
         self.assertNotIn(self.ADAPTER, cleared, "别人钉的特定独显不该被清掉")
         self.assertNotIn(self.OTHER, cleared)
+
+
+class TrayLifecycleLog(unittest.TestCase):
+    """托盘退出必须留一行日志。
+
+    本机今天连续两次静默退出: stdout/stderr 无 Traceback、tray_error.log 不存在、
+    事件日志里也没有崩溃记录 —— 因为应用退出时一个字都不写, 事后无从归因。
+    `stop` 标志能区分"用户点了退出"和"消息循环被外力打断"。
+    """
+
+    def _capture(self, stop_flag, loop_body):
+        import gpu_tray
+        tmp = tempfile.mkdtemp(prefix="gpumig-tray-")
+        saved = gpu_tray._DIR
+        gpu_tray._DIR = tmp
+        try:
+            class Fake:
+                stop = stop_flag
+
+                def _monitor_thread(self):
+                    pass
+
+            Fake.icon = type("I", (), {"run": staticmethod(loop_body)})()
+            gpu_tray.TrayApp.run(Fake())
+            with open(os.path.join(tmp, "tray_debug.log"),
+                      encoding="utf-8") as f:
+                return f.read()
+        finally:
+            gpu_tray._DIR = saved
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_menu_quit_is_logged_as_stop(self):
+        text = self._capture(True, lambda: None)
+        self.assertIn("tray loop end", text)
+        self.assertIn("stop=True", text)
+
+    def test_forced_loop_exit_is_logged_as_stop_false(self):
+        """外力打断消息循环(任务栏/会话变动)时 stop 仍是 False —— 这正是归因点。"""
+        text = self._capture(False, lambda: None)
+        self.assertIn("tray loop end", text)
+        self.assertIn("stop=False", text)
+
+    def test_monitor_thread_reports_its_own_exit(self):
+        import gpu_tray
+        tmp = tempfile.mkdtemp(prefix="gpumig-tray-")
+        saved_dir, saved_cmd = gpu_tray._DIR, gpu_tray.cmd_monitor
+        gpu_tray._DIR = tmp
+        gpu_tray.cmd_monitor = lambda cfg, path, hooks=None: None
+        try:
+            app = object.__new__(gpu_tray.TrayApp)
+            app.cfg, app.config_path = {}, None
+            app._before_cycle = app._on_sample = app._on_history_point = \
+                lambda *_a: None
+            app._monitor_thread()
+            with open(os.path.join(tmp, "tray_debug.log"),
+                      encoding="utf-8") as f:
+                text = f.read()
+        finally:
+            gpu_tray._DIR, gpu_tray.cmd_monitor = saved_dir, saved_cmd
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertIn("monitor enter", text)
+        self.assertIn("monitor exit", text)
+
+    def test_monitor_thread_error_path_is_logged_twice(self):
+        """cmd_monitor 抛异常时: 既要留一行"error", 也要落 tray_error.log。
+
+        这个 except 是吞掉异常的, 少了痕迹就等于又一次静默死亡。
+        """
+        import gpu_tray
+        tmp = tempfile.mkdtemp(prefix="gpumig-tray-")
+        saved_dir, saved_cmd = gpu_tray._DIR, gpu_tray.cmd_monitor
+        gpu_tray._DIR = tmp
+
+        def boom(cfg, path, hooks=None):
+            raise RuntimeError("采样线程故意炸")
+        gpu_tray.cmd_monitor = boom
+        try:
+            app = object.__new__(gpu_tray.TrayApp)
+            app.cfg, app.config_path = {}, None
+            app._before_cycle = app._on_sample = app._on_history_point = \
+                lambda *_a: None
+            app._monitor_thread()          # 不许把异常抛出来
+            with open(os.path.join(tmp, "tray_debug.log"),
+                      encoding="utf-8") as f:
+                text = f.read()
+            with open(os.path.join(tmp, "tray_error.log"),
+                      encoding="utf-8") as f:
+                tb = f.read()
+        finally:
+            gpu_tray._DIR, gpu_tray.cmd_monitor = saved_dir, saved_cmd
+            shutil.rmtree(tmp, ignore_errors=True)
+        self.assertIn("monitor error", text)
+        self.assertIn("RuntimeError: 采样线程故意炸", tb)
 
 
 if __name__ == "__main__":
