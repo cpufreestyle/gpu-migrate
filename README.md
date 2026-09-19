@@ -72,7 +72,11 @@ python gpu_monitor.py --unset-all
   tooltip 与 Web 面板顶部的 `生效中: 模式 …, 阈值 …%, 自动切回 开/关`
   才是监控循环这一轮真正在用的参数（电池覆盖时标 `电池供电中`）；
   热重载日志同样带生效值。
-- **开机自启**：启动文件夹快捷方式指向 `GPUMigrate.exe`（托盘常驻无窗口）。
+- **开机自启**：启动文件夹快捷方式 `GPU监控自启.lnk` 指向
+  `C:\Python314\pythonw.exe <仓库路径>\gpu_monitor.py --tray`（托盘常驻无窗口）。
+  指源码而不是打包产物，是为了让开机跑的就是仓库当前的代码 —— 之前指 `GPUMigrate.exe`
+  时，界面上跑的其实是几周前的旧构建，改完代码看不见。要一个不依赖 Python 的启动器
+  再按下面的命令打包并把 .lnk 指过去。
 - **测试**：`python tests/test_gpu_monitor.py`（纯标准库 unittest，93 用例；
   注册表写入与进程枚举都是打桩的，不会动到本机 GPU 首选项）。
 - **打包**：`python -m PyInstaller --noconsole --onefile --name GPUMigrate --paths . --collect-all pystray --collect-all PIL gpu_monitor.py`
