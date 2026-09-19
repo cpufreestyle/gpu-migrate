@@ -240,8 +240,19 @@ def classify_gpu(name, dedicated_mb=None):
     return "unknown"
 
 
-def query_dedicated_mb(name):
-    """用 Win32_VideoController 辅助查询专用显存 (MB)，按名称匹配。"""
+_DEDICATED_MB = None
+
+
+def _video_controller_ram():
+    """Win32_VideoController 的 AdapterRAM, 以显卡名小写为键。进程内只查一次。
+
+    每个显卡都单独起一个 powershell 冷启动要 ~0.5s, 三块卡会在启动时卡 1.4s,
+    故一次性枚举缓存。查询失败也缓存空表: 失败不会自己恢复, 重试更糟。
+    """
+    global _DEDICATED_MB
+    if _DEDICATED_MB is not None:
+        return _DEDICATED_MB
+    mb = {}
     try:
         ps = ("Get-CimInstance Win32_VideoController | "
               "ForEach-Object { $_.Name + '|' + $_.AdapterRAM }")
@@ -250,12 +261,20 @@ def query_dedicated_mb(name):
         for line in out.splitlines():
             if "|" not in line:
                 continue
-            n, ram = line.rsplit("|", 1)
-            if n.strip().lower() == name.strip().lower():
-                return int(ram) // (1024 * 1024)
+            name, ram = line.rsplit("|", 1)
+            try:
+                mb[name.strip().lower()] = int(ram) // (1024 * 1024)
+            except ValueError:
+                continue
     except Exception:
         pass
-    return None
+    _DEDICATED_MB = mb
+    return mb
+
+
+def query_dedicated_mb(name):
+    """用 Win32_VideoController 辅助查询专用显存 (MB)，按名称匹配。"""
+    return _video_controller_ram().get((name or "").strip().lower())
 
 
 # ================================================================ 进程信息
@@ -320,6 +339,17 @@ def get_gpu_preference(exe_path):
         advapi32.RegCloseKey(hkey)
 
 
+def is_high_performance(value):
+    """注册表值是否等效"高性能(独显)"。
+
+    整串相等会漏: 本机实测同时存在 `GpuPreference=2;` 和缺尾分号的
+    `GpuPreference=2`, 后者被判成未迁移, 于是本该安静的进程被重写并弹通知。
+    """
+    if not value:
+        return False
+    return any(part == "GpuPreference=2" for part in value.split(";"))
+
+
 def clear_gpu_preference(exe_path):
     hkey = wt.HANDLE()
     if advapi32.RegOpenKeyExW(HKEY_CURRENT_USER, USER_GPU_PREF_KEY, 0,
@@ -357,10 +387,10 @@ def list_gpu_prefs():
 
 
 def clear_all_gpu_prefs(only_dgpu=True):
-    """清除 GPU 首选项。only_dgpu=True 只删 GpuPreference=2; 的。"""
+    """清除 GPU 首选项。only_dgpu=True 只删高性能(2)的。"""
     cleared = []
     for exe, val in list_gpu_prefs():
-        if only_dgpu and val != "GpuPreference=2;":
+        if only_dgpu and not is_high_performance(val):
             continue
         if clear_gpu_preference(exe):
             cleared.append(exe)
@@ -733,7 +763,9 @@ def discover_gpus(gpu_index):
             gpus[luid]["phys"] = min(gpus[luid]["phys"], phys)
             continue
         name = luid_to_name(luid) or f"LUID {luid}"
-        kind = classify_gpu(name, query_dedicated_mb(name))
+        kind = classify_gpu(name)
+        if kind == "unknown":
+            kind = classify_gpu(name, query_dedicated_mb(name))
         gpus[luid] = {"phys": phys, "name": name, "kind": kind}
     return gpus
 
@@ -787,18 +819,186 @@ def cmd_list():
 
 
 def kind_of_luid(luid, cache, forced):
-    """带缓存的 LUID -> 'igpu'/'dgpu'/'virtual'/'unknown'。"""
+    """带缓存的 LUID -> 'igpu'/'dgpu'/'virtual'/'unknown'。
+
+    forced 为名称小写集合, 命中即按核显处理 (覆盖启发式)。
+    只在名称启发式判不出来时才查 WMI: AdapterRAM 仅作 tiebreak,
+    而每次 powershell 冷启动要 ~0.4s。
+    """
     if luid in cache:
         return cache[luid]
     name = luid_to_name(luid) or f"LUID {luid}"
-    kind = ("igpu" if name.lower() in forced
-            else classify_gpu(name, query_dedicated_mb(name)))
+    if name.lower() in forced:
+        kind = "igpu"
+    else:
+        kind = classify_gpu(name)
+        if kind == "unknown":
+            kind = classify_gpu(name, query_dedicated_mb(name))
     cache[luid] = (kind, name)
     return cache[luid]
 
 
 _CONFIG_PATH = None
 _LAST_SNAPSHOT = {}
+
+
+def aggregate_usage(usage, mem_shared, mem_dedicated, igpu_luids, dgpu_luids):
+    """把逐引擎采样按任务管理器口径聚合成每进程指标。
+
+    利用率取**最强引擎**而非求和 (多引擎求和会虚高到 100% 以上);
+    显存跨适配器求和。util_by_pid 只统计核显, 是迁移判定的输入。
+    返回 (util_by_pid, gpu_all_by_pid, dgpu_util_by_pid, shared_by_pid,
+    dedicated_by_pid, igpu_mem_by_pid)。
+    """
+    util_by_pid = defaultdict(float)       # 核显% (迁移判定用)
+    gpu_all_by_pid = defaultdict(float)    # GPU% (跨适配器最强引擎)
+    dgpu_util_by_pid = defaultdict(float)  # 独显%
+    shared_by_pid = defaultdict(float)     # 共享 GPU 内存 (跨适配器)
+    dedicated_by_pid = defaultdict(float)  # 专用 GPU 内存 (跨适配器)
+    igpu_mem_by_pid = defaultdict(float)   # 核显 Shared+Dedicated 合计
+    for (pid, luid, _phys), v in usage.items():
+        gpu_all_by_pid[pid] = max(gpu_all_by_pid[pid], v)
+        if luid in igpu_luids:
+            util_by_pid[pid] = max(util_by_pid[pid], v)
+        elif luid in dgpu_luids:
+            dgpu_util_by_pid[pid] = max(dgpu_util_by_pid[pid], v)
+    for src, dst in ((mem_shared, shared_by_pid), (mem_dedicated, dedicated_by_pid)):
+        for (pid, luid, _phys), v in src.items():
+            dst[pid] += v
+    for src in (mem_shared, mem_dedicated):
+        for (pid, luid, _phys), v in src.items():
+            if luid in igpu_luids:
+                igpu_mem_by_pid[pid] += v
+    return (util_by_pid, gpu_all_by_pid, dgpu_util_by_pid,
+            shared_by_pid, dedicated_by_pid, igpu_mem_by_pid)
+
+
+def hot_reason(u, mb, threshold, vram_mb):
+    """超阈理由。利用率先判, 显存阈为 0 时该规则整体关闭。"""
+    if u >= threshold:
+        return f"核显利用率 {u:.0f}%"
+    if vram_mb and mb >= vram_mb:
+        return f"核显专用显存 {mb:.0f} MB"
+    return None
+
+
+def select_hot_candidates(cfg, util_by_pid, igpu_mem_by_pid, threshold,
+                          vram_mb, ignore, done):
+    """筛出本轮该迁移到独显的进程, 返回 [(pid, pname, full, reason)]。
+
+    排除优先级是对外契约: 进程名 -> 完整路径前缀 -> 忽略名单 -> 已迁移。
+    命中"已迁移"时顺手补进 done, 让外部撤销设置后能重新纳入。
+    """
+    excl = {x.lower() for x in cfg["exclude_processes"]}
+    if cfg.get("exclude_defaults", True):
+        excl |= {x.lower() for x in DEFAULT_EXCLUDE_PROCESSES}
+    full_excl = [p.lower() for p in cfg["exclude_full_paths"]]
+    hot = []
+    for pid in set(util_by_pid) | set(igpu_mem_by_pid):
+        reason = hot_reason(util_by_pid.get(pid, 0.0),
+                            igpu_mem_by_pid.get(pid, 0.0) / (1024 * 1024),
+                            threshold, vram_mb)
+        if not reason:
+            continue
+        info = pid_to_name(pid)
+        if not info:
+            continue
+        pname, full = info
+        if pname.lower() in excl:
+            continue
+        if any(full.lower().startswith(p) for p in full_excl):
+            continue
+        if pname.lower() in ignore:
+            continue
+        if is_high_performance(get_gpu_preference(full)):
+            done.add(full)
+            continue
+        hot.append((pid, pname, full, reason))
+    return hot
+
+
+def advance_power_saver(cfg, dgpu_util_by_pid, ps_streak, ps_notified,
+                        auto, logfile):
+    """独显上长期低负载、且是我们迁移上去的进程: 提醒或改回核显。
+
+    末尾的 break 让每轮最多推进一个进程: 一轮里成批改注册表太激进,
+    下一轮再处理其余的。
+    """
+    idle_pct = cfg.get("power_saver_idle_percent", 10.0)
+    need = cfg.get("power_saver_samples", 60)
+    for pid in list(ps_streak):
+        if pid not in dgpu_util_by_pid:
+            ps_streak[pid] = 0
+    for pid, u in dgpu_util_by_pid.items():
+        if u >= idle_pct:
+            ps_streak[pid] = 0
+            continue
+        info = pid_to_name(pid)
+        if not info:
+            continue
+        pname, full = info
+        if full in ps_notified:
+            continue
+        if not is_high_performance(get_gpu_preference(full)):
+            continue
+        ps_streak[pid] += 1
+        if ps_streak[pid] >= need:
+            ps_notified.add(full)
+            log(f"省电: {pname} 在独显上持续低负载({u:.0f}%)", logfile)
+            if auto:
+                try:
+                    set_gpu_preference(full, "GpuPreference=1;")
+                    log(f"  -> 已把 {full} 改回核显设置(GpuPreference=1;)",
+                        logfile)
+                    notify_cfg(cfg, "已切回核显省电",
+                               f"{pname} 长期低负载，已改回核显设置，"
+                               "重启该程序后生效")
+                except OSError as e:
+                    log(f"  -> 改回核显失败: {e}", logfile)
+            else:
+                notify_cfg(cfg, "省电提醒",
+                           f"{pname} 在独显上持续低负载，"
+                           "不用时可切回核显省电（--unset 后重开程序）")
+        break  # 每轮最多推进一个进程的计数
+
+
+def append_history(now_ts, total_util, daily, game_secs, cfg):
+    """落盘一笔核显总占用, 顺带处理跨日日报与峰值。返回当日的 daily。
+
+    history.jsonl 超 1MB 滚动为 .1; 跨日时把上一日汇总写进 report.csv 并清零。
+    口径与面板一致: total_util 是最强引擎, 恒 <=100%。
+    """
+    hist_file = os.path.join(_DIR, "history.jsonl")
+    try:
+        if os.path.exists(hist_file) \
+                and os.path.getsize(hist_file) > 1_000_000:
+            os.replace(hist_file, hist_file + ".1")
+        with open(hist_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps({"ts": int(now_ts),
+                                "total": round(total_util, 1)}) + "\n")
+    except OSError:
+        pass
+    today = time.strftime("%Y-%m-%d")
+    if today != daily["date"]:
+        games_min = sum(game_secs.values()) / 60.0
+        notify_cfg(cfg, "GPU 日报",
+                   f"{daily['date']}: 核显峰值 {daily['peak']:.0f}%"
+                   f"({daily['peak_ts']}), 迁移 {len(daily['migrated'])} 个程序"
+                   + (f", 游戏约 {games_min:.0f} 分钟" if games_min else ""))
+        try:
+            with open(os.path.join(_DIR, "report.csv"), "a",
+                      encoding="utf-8") as f:
+                f.write(f"{daily['date']},{daily['peak']:.1f},"
+                        f"{daily['peak_ts']},{len(daily['migrated'])},"
+                        f"{games_min:.0f}\n")
+        except OSError:
+            pass
+        daily = {"date": today, "peak": 0.0, "peak_ts": "", "migrated": []}
+        game_secs.clear()
+    if total_util > daily["peak"]:
+        daily["peak"] = total_util
+        daily["peak_ts"] = time.strftime("%H:%M")
+    return daily
 
 
 def cmd_monitor(cfg, config_path=None, hooks=None):
@@ -866,13 +1066,26 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
     vram_mb = cfg.get("vram_threshold_mb", 1024)
 
     def apply_config(new_cfg):
-        nonlocal cfg, forced, vram_mb, ignore
+        nonlocal cfg, forced, vram_mb, ignore, logfile
+        nonlocal battery_state, eff_threshold, eff_ps_auto
+        # web_port 与 hotkeys 在启动时一次性注册, 换 cfg 改不动它们
+        restart_needed = (new_cfg.get("web_port") != cfg.get("web_port")
+                          or new_cfg.get("hotkeys") != cfg.get("hotkeys"))
         cfg = new_cfg
         forced = {n.lower() for n in cfg["force_igpu_names"]}
         vram_mb = cfg.get("vram_threshold_mb", 1024)
         ignore = {n.lower() for n in cfg["ignore_processes"]}
-        battery_state = None   # 触发电源策略重算
+        logfile = (os.path.join(_DIR, "gpu_monitor.log")
+                   if cfg["log_to_file"] else None)
+        # 迁移阈值实际读的是 eff_* 缓存, 只换 cfg 不会生效: 先按新配置直取,
+        # 再清掉 battery_state 与 ps_check, 让电源块下一轮立刻重算。
+        eff_threshold = cfg["threshold_percent"]
+        eff_ps_auto = cfg.get("power_saver_auto", False)
+        battery_state = None
+        ps_check[0] = 0.0
         log("检测到配置修改，已热重载", logfile)
+        if restart_needed:
+            log("提示: web_port / hotkeys 已修改，需重启监控后生效", logfile)
 
     while True:
         cycle_start = time.time()
@@ -911,29 +1124,9 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                 dgpu_luids.add(luid)
 
         # 任务管理器口径: 进程利用率 = 单引擎最大值 (多引擎求和会虚高)
-        util_by_pid = defaultdict(float)       # 核显% (迁移判定用)
-        dgpu_util_by_pid = defaultdict(float)  # 独显%
-        gpu_all_by_pid = defaultdict(float)    # GPU% (跨适配器最强引擎)
-        shared_by_pid = defaultdict(float)     # 共享 GPU 内存 (跨适配器)
-        dedicated_by_pid = defaultdict(float)  # 专用 GPU 内存 (跨适配器)
-        for (pid, luid, _phys), v in usage.items():
-            gpu_all_by_pid[pid] = max(gpu_all_by_pid[pid], v)
-            if luid in igpu_luids:
-                util_by_pid[pid] = max(util_by_pid[pid], v)
-            elif luid in dgpu_luids:
-                dgpu_util_by_pid[pid] = max(dgpu_util_by_pid[pid], v)
-        for (pid, luid, _phys), v in mem_shared.items():
-            shared_by_pid[pid] += v
-        for (pid, luid, _phys), v in mem_dedicated.items():
-            dedicated_by_pid[pid] += v
-        # 核显显存占用 (Shared+Dedicated 合计), 供 vram_threshold 判定
-        mem_by_pid = defaultdict(float)
-        for (pid, luid, _phys), v in mem_shared.items():
-            if luid in igpu_luids:
-                mem_by_pid[pid] += v
-        for (pid, luid, _phys), v in mem_dedicated.items():
-            if luid in igpu_luids:
-                mem_by_pid[pid] += v
+        (util_by_pid, gpu_all_by_pid, dgpu_util_by_pid, shared_by_pid,
+         dedicated_by_pid, mem_by_pid) = aggregate_usage(
+            usage, mem_shared, mem_dedicated, igpu_luids, dgpu_luids)
 
         now_ts = time.time()
         # 电源感知: 电池时自动启用省电策略
@@ -977,7 +1170,8 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                 game_seen[pname2] = now_ts
                 game_secs[pname2] += max(0.2, elapsed_prev[0])
                 if pid2 in util_by_pid and util_by_pid[pid2] > 1 \
-                        and get_gpu_preference(full2) != "GpuPreference=2;":
+                        and not is_high_performance(
+                            get_gpu_preference(full2)):
                     try:
                         set_gpu_preference(full2)
                         done.add(full2)
@@ -1001,38 +1195,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
             total_util = max(util_by_pid.values()) if util_by_pid else 0.0
             if hooks and hooks.get("on_history_point"):
                 hooks["on_history_point"](now_ts, total_util)
-            hist_file = os.path.join(_DIR, "history.jsonl")
-            try:
-                if os.path.exists(hist_file) \
-                        and os.path.getsize(hist_file) > 1_000_000:
-                    os.replace(hist_file, hist_file + ".1")
-                with open(hist_file, "a", encoding="utf-8") as f:
-                    f.write(json.dumps({"ts": int(now_ts),
-                                        "total": round(total_util, 1)}) + "\n")
-            except OSError:
-                pass
-            # 日报统计与跨日汇总
-            today = time.strftime("%Y-%m-%d")
-            if today != daily["date"]:
-                games_min = sum(game_secs.values()) / 60.0
-                notify_cfg(cfg, "GPU 日报",
-                           f"{daily['date']}: 核显峰值 {daily['peak']:.0f}%"
-                           f"({daily['peak_ts']}), 迁移 {len(daily['migrated'])} 个程序"
-                           + (f", 游戏约 {games_min:.0f} 分钟" if games_min else ""))
-                try:
-                    with open(os.path.join(_DIR, "report.csv"), "a",
-                              encoding="utf-8") as f:
-                        f.write(f"{daily['date']},{daily['peak']:.1f},"
-                                f"{daily['peak_ts']},{len(daily['migrated'])},"
-                                f"{games_min:.0f}\n")
-                except OSError:
-                    pass
-                daily = {"date": today, "peak": 0.0, "peak_ts": "",
-                         "migrated": []}
-                game_secs.clear()
-            if total_util > daily["peak"]:
-                daily["peak"] = total_util
-                daily["peak_ts"] = time.strftime("%H:%M")
+            daily = append_history(now_ts, total_util, daily, game_secs, cfg)
 
         _LAST_SNAPSHOT = {
             "util_by_pid": util_by_pid, "gpu_all_by_pid": gpu_all_by_pid,
@@ -1077,72 +1240,11 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
 
         # 省电: 独显上持续低负载且已迁移过的程序 (提醒或自动切回核显)
         if cfg.get("power_saver_notify") or eff_ps_auto:
-            idle_pct = cfg.get("power_saver_idle_percent", 10.0)
-            need = cfg.get("power_saver_samples", 60)
-            for pid in list(ps_streak):
-                if pid not in dgpu_util_by_pid:
-                    ps_streak[pid] = 0
-            for pid, u in dgpu_util_by_pid.items():
-                if u >= idle_pct:
-                    ps_streak[pid] = 0
-                    continue
-                info = pid_to_name(pid)
-                if not info:
-                    continue
-                pname, full = info
-                if full in ps_notified:
-                    continue
-                if get_gpu_preference(full) != "GpuPreference=2;":
-                    continue
-                ps_streak[pid] += 1
-                if ps_streak[pid] >= need:
-                    ps_notified.add(full)
-                    log(f"省电: {pname} 在独显上持续低负载({u:.0f}%)", logfile)
-                    if eff_ps_auto:
-                        try:
-                            set_gpu_preference(full, "GpuPreference=1;")
-                            log(f"  -> 已把 {full} 改回核显设置(GpuPreference=1;)",
-                                logfile)
-                            notify_cfg(cfg, "已切回核显省电",
-                                       f"{pname} 长期低负载，已改回核显设置，"
-                                       "重启该程序后生效")
-                        except OSError as e:
-                            log(f"  -> 改回核显失败: {e}", logfile)
-                    else:
-                        notify_cfg(cfg, "省电提醒",
-                                   f"{pname} 在独显上持续低负载，"
-                                   "不用时可切回核显省电（--unset 后重开程序）")
-                break  # 每轮最多推进一个进程的计数
+            advance_power_saver(cfg, dgpu_util_by_pid, ps_streak, ps_notified,
+                                eff_ps_auto, logfile)
 
-        hot = []
-        for pid in set(util_by_pid) | set(mem_by_pid):
-            u = util_by_pid.get(pid, 0.0)
-            mb = mem_by_pid.get(pid, 0.0) / (1024 * 1024)
-            if u >= eff_threshold:
-                reason = f"核显利用率 {u:.0f}%"
-            elif vram_mb and mb >= vram_mb:
-                reason = f"核显专用显存 {mb:.0f} MB"
-            else:
-                continue
-            info = pid_to_name(pid)
-            if not info:
-                continue
-            pname, full = info
-            excl = {x.lower() for x in cfg["exclude_processes"]}
-            if cfg.get("exclude_defaults", True):
-                excl |= {x.lower() for x in DEFAULT_EXCLUDE_PROCESSES}
-            if pname.lower() in excl:
-                continue
-            if any(full.lower().startswith(p.lower())
-                   for p in cfg["exclude_full_paths"]):
-                continue
-            if pname.lower() in ignore:
-                continue
-            if get_gpu_preference(full) == "GpuPreference=2;":
-                done.add(full)
-                continue
-            hot.append((pid, pname, full, reason))
-
+        hot = select_hot_candidates(cfg, util_by_pid, mem_by_pid,
+                                    eff_threshold, vram_mb, ignore, done)
         active = {h[2] for h in hot}
         for pid, pname, full, reason in hot:
             streak[full] += 1
@@ -1185,7 +1287,11 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                     log(f"  -> 写注册表失败: {e}", logfile)
                     notify_cfg(cfg, "GPU 迁移失败", f"{pname}: {e}")
                 streak[full] = 0
-            else:
+            elif streak[full] == 1 or \
+                    streak[full] == cfg["sustain_samples"] - 1:
+                # 只在起头和临近触发时记一行: sustain_samples=20 且十几个进程
+                # 同时超标时, 每轮上百行重复日志会淹没控制台与日志文件
+                # (print 本身实测只占 ~0.003 ms/行, 省的不是 CPU, 是可读性)
                 log(f"检测到 {pname} (pid {pid}) {reason} "
                     f"({streak[full]}/{cfg['sustain_samples']})", logfile)
         for full in list(streak):
@@ -1219,8 +1325,8 @@ def cmd_unset(paths):
 
 def cmd_status():
     prefs = list_gpu_prefs()
-    migrated = [(e, v) for e, v in prefs if v == "GpuPreference=2;"]
-    others = [(e, v) for e, v in prefs if v != "GpuPreference=2;"]
+    migrated = [(e, v) for e, v in prefs if is_high_performance(v)]
+    others = [(e, v) for e, v in prefs if not is_high_performance(v)]
     if not migrated and not others:
         print("当前没有任何 GPU 首选项设置。")
         return
@@ -1234,7 +1340,8 @@ def cmd_status():
 
 
 def cmd_unset_all():
-    targets = [(e, v) for e, v in list_gpu_prefs() if v == "GpuPreference=2;"]
+    targets = [(e, v) for e, v in list_gpu_prefs()
+               if is_high_performance(v)]
     if not targets:
         print("没有需要清除的独显设置。")
         return
