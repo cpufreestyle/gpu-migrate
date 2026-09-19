@@ -723,6 +723,40 @@ class GameMode(LoopHarness):
                                         "sustain_samples": 1, "notify": True})
         self.assertEqual([t for t, _m in self.notes], ["GPU 迁移成功"])
 
+    def test_first_game_cycle_mutes_its_own_notice(self):
+        """免打扰要盖住"游戏模式"自己那条通知。
+
+        _GAME_RUNNING 原先在游戏块跑完之后才赋值, 首次发现游戏的那一轮闸门
+        还停在上一轮的 False —— 游戏刚启动恰恰是最不该弹 Toast 的时刻。
+        """
+        gm.notify_cfg = self.saved["notify_cfg"]
+        self.run_monitor([{102: 5.0}] * 2, cfg_overrides=self._cfg(notify=True))
+        self.assertEqual(self.prefs.get(GAME), "GpuPreference=2;",
+                         "静音不等于不迁移")
+        self.assertEqual(self.notes, [], "首轮的游戏模式动作通知也要静音")
+
+    def test_clearing_game_list_unmutes_later_notifications(self):
+        """热重载把 game_processes 清空后, 通知必须恢复。
+
+        归零点原先写在 `if cfg["game_processes"]:` 里面: 名单一空整块就被跳过,
+        标记永久停在 True, 之后所有通知都不再弹, 只能重启监控进程才能恢复。
+        第 1 轮只有游戏, 重载后第 2 轮起名单为空, heavy 到第 3 轮才超标 ——
+        这样那条迁移通知只在标记真的归零时才可能出现。
+        """
+        gm.notify_cfg = self.saved["notify_cfg"]
+        path = os.path.join(gm._DIR, "__reload_game__.json")
+        write_test_config(path, notify=True, threshold_percent=1.0,
+                          game_processes=["game.exe"])
+        self.run_monitor([{102: 5.0}, {102: 5.0}, {100: 60.0}, {100: 60.0}],
+                         config_path=path,
+                         cfg_overrides=self._cfg(notify=True,
+                                                 threshold_percent=1.0),
+                         hooks={"on_sample": self.rewrite_once(
+                             path, game_processes=[], notify=True,
+                             threshold_percent=1.0)})
+        self.assertFalse(gm._GAME_RUNNING, "名单清空后不该继续静音")
+        self.assertIn("GPU 迁移成功", [t for t, _m in self.notes])
+
     def test_game_already_on_dgpu_not_rewritten(self):
         self.prefs[GAME] = "GpuPreference=2;"
         self.run_monitor([{102: 5.0}] * 2,

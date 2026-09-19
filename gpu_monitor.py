@@ -1158,14 +1158,15 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                            f"GPU 温度 {t}°C，请检查散热或降低负载")
 
         # 游戏模式: 名单进程自动确保独显 + 免打扰 + 时长统计
+        _GAME_RUNNING = False          # 每轮先归零, 名单被热重载清空时才不会永久静音
         if cfg.get("game_processes"):
             games = {g.lower() for g in cfg["game_processes"]}
-            running = False
             for pid2 in set(gpu_all_by_pid) | set(dgpu_util_by_pid):
                 info2 = pid_to_name(pid2)
                 if not info2 or info2[0].lower() not in games:
                     continue
-                running = True
+                # 先静音再动手: 否则首次发现游戏的那一轮, 下面那条通知会绕过免打扰
+                _GAME_RUNNING = True
                 pname2, full2 = info2
                 game_seen[pname2] = now_ts
                 game_secs[pname2] += max(0.2, elapsed_prev[0])
@@ -1181,7 +1182,6 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                                    f"{pname2} 已设为独显，重启游戏后生效")
                     except OSError as e:
                         log(f"游戏模式设置失败: {e}", logfile)
-            _GAME_RUNNING = running
             for gname in list(game_seen):
                 if now_ts - game_seen[gname] > 300:
                     del game_seen[gname]
