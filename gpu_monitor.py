@@ -452,6 +452,15 @@ def save_ignore_process(config_path, pname):
 
 # 这些常驻组件的高核显占用属于正常行为 (桌面合成/图标/输入法等),
 # 迁移它们有害无益; exclude_defaults=false 可关闭
+# AI/推理服务进程: 模型加载到显存需要数分钟, 且空闲时利用率很低。
+# 对它们做"省电切回"或"自动重启"会毁掉已加载的模型, 必须完全豁免。
+DEFAULT_AI_PROCESSES = [
+    "ollama.exe", "llama-server.exe", "llama-cli.exe", "llama-quantize.exe",
+    "koboldcpp.exe", "comfyui.exe", "lm studio.exe", "gpt4all.exe",
+    "jan.exe", "vllm.exe", "sglang.exe", "tabbyapi.exe", "textgen.exe",
+    "webui.exe", "sd-webui.exe", "stable-diffusion.exe", "gguf.exe",
+]
+
 DEFAULT_EXCLUDE_PROCESSES = [
     "dwm.exe", "explorer.exe", "taskmgr.exe", "searchhost.exe",
     "shellexperiencehost.exe", "startmenuexperiencehost.exe",
@@ -483,6 +492,8 @@ DEFAULT_CONFIG = {
     "normalize_total": False,    # true=所有进程总和强制<=100% (单进程读数会缩水);
                                  # false=任务管理器口径, 单进程读数最准确
     "game_processes": [],        # 游戏名单: 自动确保独显+免打扰+时长统计
+    "ai_processes": [],          # AI 名单补充: 这些进程永不省电切回/自动重启
+    "protect_vram_mb": 2048,     # 独显专用显存>=该值的进程按 AI 保护 (0 关闭)
     "power_aware": True,         # 电源感知: 用电池时自动切换省电策略
     "battery_threshold_percent": 40,   # 电池下的迁移阈值
     "nvml_temp": True,           # 独显温度监控 (NVML, NVIDIA 驱动自带)
@@ -917,8 +928,24 @@ def select_hot_candidates(cfg, util_by_pid, igpu_mem_by_pid, threshold,
     return hot
 
 
+def is_ai_protected(cfg, pname, pid, dedicated_by_pid):
+    """AI 显存保护: 命中 AI 名单, 或独显专用显存占用达到保护阈值。
+
+    模型一旦加载, 即使推理空闲也占着大量专用显存, 用显存兜底可以覆盖
+    名单外的自建推理服务。被保护的进程: 永不省电切回、永不自动重启。
+    """
+    if pname and pname.lower() in {x.lower() for x in DEFAULT_AI_PROCESSES}:
+        return True
+    if pname and pname.lower() in {x.lower() for x in cfg.get("ai_processes", [])}:
+        return True
+    limit = cfg.get("protect_vram_mb", 2048)
+    if limit and dedicated_by_pid.get(pid, 0) >= limit * 1024 * 1024:
+        return True
+    return False
+
+
 def advance_power_saver(cfg, dgpu_util_by_pid, ps_streak, ps_notified,
-                        auto, logfile):
+                        auto, logfile, dedicated_by_pid=None):
     """独显上长期低负载、且是我们迁移上去的进程: 提醒或改回核显。
 
     末尾的 break 让每轮最多推进一个进程: 一轮里成批改注册表太激进,
@@ -937,6 +964,9 @@ def advance_power_saver(cfg, dgpu_util_by_pid, ps_streak, ps_notified,
         if not info:
             continue
         pname, full = info
+        if is_ai_protected(cfg, pname, pid, dedicated_by_pid or {}):
+            ps_streak[pid] = 0
+            continue
         if full in ps_notified:
             continue
         if not is_high_performance(get_gpu_preference(full)):
@@ -1241,7 +1271,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
         # 省电: 独显上持续低负载且已迁移过的程序 (提醒或自动切回核显)
         if cfg.get("power_saver_notify") or eff_ps_auto:
             advance_power_saver(cfg, dgpu_util_by_pid, ps_streak, ps_notified,
-                                eff_ps_auto, logfile)
+                                eff_ps_auto, logfile, dedicated_by_pid)
 
         hot = select_hot_candidates(cfg, util_by_pid, mem_by_pid,
                                     eff_threshold, vram_mb, ignore, done)
@@ -1267,8 +1297,14 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                     log(f"  -> 已设置 {full} 为高性能GPU(GpuPreference=2;)", logfile)
                     ar_list = {x.lower()
                                for x in cfg.get("auto_restart_processes", [])}
-                    if cfg["auto_restart"] and (not ar_list
-                                                or pname.lower() in ar_list):
+                    if is_ai_protected(cfg, pname, pid, dedicated_by_pid):
+                        log(f"  -> AI 显存保护: 跳过 {pname} 的自动重启"
+                            " (重启会丢弃已加载的模型)", logfile)
+                        notify_cfg(cfg, "GPU 迁移成功",
+                                   f"{pname} 已设为独显。检测到 AI 模型进程，"
+                                   "请自行选择无推理任务的时机重启以生效。")
+                    elif cfg["auto_restart"] and (not ar_list
+                                                  or pname.lower() in ar_list):
                         new_pid = restart_process(pid, full)
                         log(f"  -> {'已自动重启 ' + pname if new_pid else '自动重启失败，请手动重启'}",
                             logfile)
