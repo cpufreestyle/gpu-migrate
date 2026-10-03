@@ -1,5 +1,8 @@
 gpu_monitor.log
 gpu_monitor.log.1
+gpu_monitor_crash.log
+gpu_monitor_crash.log.1
+gpu_monitor_error.log
 tray_error.log
 tray_debug.log
 __pycache__/
@@ -12,3 +15,5 @@ history.jsonl.1
 panel_ui.json
 report.csv
 _patch*.py
+.tmptest/
+config.json
