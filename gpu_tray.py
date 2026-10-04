@@ -126,6 +126,76 @@ def _fluent_scheme():
         return "light"
 
 
+def _hex_to_rgb(color):
+    return (int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16))
+
+
+def _darken_hex(color, amount=0.12):
+    r, g, b = _hex_to_rgb(color)
+    k = 1.0 - amount
+    return "#%02x%02x%02x" % (int(r * k), int(g * k), int(b * k))
+
+
+def _readable_fg(bg_hex):
+    bg = _hex_to_rgb(bg_hex)
+    white = (255, 255, 255)
+    black = (0, 0, 0)
+    if _contrast_ratio(bg, white) >= _contrast_ratio(bg, black):
+        return "#ffffff"
+    return "#000000"
+
+
+def _contrast_ratio(a, b):
+    la = _luminance(a)
+    lb = _luminance(b)
+    lo = la if la <= lb else lb
+    hi = lb if la <= lb else la
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _luminance(rgb):
+    lin = []
+    for ch in rgb:
+        c = ch / 255.0
+        lin.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+
+_DWM_ACCENT_KEY = (r"Software\Microsoft\Windows\DWM", "AccentColor")
+
+_PERSONALIZE_ACCENT_KEY = (
+    r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+    "AccentColor")
+
+
+def _accent_from_registry():
+    for path, name in (_PERSONALIZE_ACCENT_KEY, _DWM_ACCENT_KEY):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+                value, kind = winreg.QueryValueEx(key, name)
+        except (OSError, ValueError):
+            continue
+        if kind != winreg.REG_DWORD:
+            continue
+        v = int(value)
+        r, g, b = v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF
+        hexed = "#%02x%02x%02x" % (r, g, b)
+        if hexed.lower() in ("#000000", "#ffffff"):
+            continue
+        return hexed
+    return None
+
+
+def _fluent_accent(base_accent=None):
+    found = _accent_from_registry()
+    if found:
+        return found
+    if base_accent:
+        return base_accent
+    return _PALETTE["accent"]
+
+
 _FLUENT_SCHEME = _fluent_scheme()
 _PALETTE = _FLUENT_DARK if _FLUENT_SCHEME == "dark" else _FLUENT_LIGHT
 
@@ -140,8 +210,13 @@ def _use_palette(pal):
     global _PALETTE, _BG, _PANEL_BG, _LINE, _FG, _MUTED, _ACCENT
     global _BTN_BG, _BTN_HOVER, _SEL_BG, _SAVE_FG, _HEAT_COLOR
     global _ROW_ALT_BG, _SPARK_FILL
-    if pal is _PALETTE:
+    accent = _fluent_accent(pal.get("accent"))
+    if pal is _PALETTE and accent == _PALETTE.get("accent"):
         return False
+    pal = dict(pal)
+    pal["accent"] = accent
+    pal["accent_press"] = _darken_hex(accent)
+    pal["save_fg"] = _readable_fg(accent)
     _PALETTE = pal
     _BG = pal["bg"]
     _PANEL_BG = pal["card"]

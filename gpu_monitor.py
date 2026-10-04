@@ -1469,6 +1469,81 @@ def sparkline_html(hist, threshold=0):
     out.append("</div>")
     return "".join(out)
 
+def _mix(rgb, target, ratio):
+    return tuple(int(round(c + (t - c) * ratio)) for c, t in zip(rgb, target))
+
+
+def _hex(rgb):
+    return "#%02x%02x%02x" % tuple(max(0, min(255, int(c))) for c in rgb)
+
+
+def _lum(rgb):
+    lin = []
+    for ch in rgb:
+        c = ch / 255.0
+        lin.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def _ratio(a, b):
+    la, lb = _lum(a), _lum(b)
+    lo, hi = (la, lb) if la <= lb else (lb, la)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _shade_towards(rgb, target, need):
+    """把 rgb 逐步向 target 推, 直到对比度超过 need。
+
+    系统强调色可能很暗(比如紫红 #680081 在深色底上只有
+    1.25:1), 直接当文字色会看不见。一步步推到过线为止,
+    推不动就给全白——可读【限于附近的底色】比跟随色相重要。
+    """
+    for i in range(1, 101):
+        candidate = _mix(rgb, target, i / 100.0)
+        if _ratio(candidate, need) >= 4.5:
+            return candidate
+    return (255, 255, 255)
+
+
+def _panel_accent():
+    """WebPanel 强调色跟系统选的颜色; 读不到就用 Fluent 默认蓝。
+
+    托盘面板已经跟着 AccentColor 变了, Web 面板再写死就
+    会出现同一个程序两张脸; 这里复用托盘那套读取逻辑。
+
+    注意要分深浅两档: 系统强调色在浅色底(#f3f3f3)上往往足够暗,
+    在深色底(#202020)上就不够了——得分别向白/黑推才能两边都过 AA。
+    """
+    rgb = _accent_rgb()
+    if not rgb:
+        return "#0078d4", "#0067c0", "#4cc2ff"
+    light = _hex(rgb)
+    press = "#%02x%02x%02x" % tuple(int(c * 87 // 100) for c in rgb)
+    dark = _hex(_shade_towards(rgb, (255, 255, 255), (0x2d, 0x2d, 0x2d)))
+    return light, press, dark
+
+
+def _accent_rgb():
+    import winreg
+    for path, name in ((r"Software\Microsoft\Windows\CurrentVersion"
+                        r"\Themes\Personalize", "AccentColor"),
+                       (r"Software\Microsoft\Windows\DWM", "AccentColor")):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+                value, kind = winreg.QueryValueEx(key, name)
+        except (OSError, ValueError):
+            continue
+        if kind != winreg.REG_DWORD:
+            continue
+        v = int(value)
+        rgb = (v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF)
+        if rgb not in ((0, 0, 0), (255, 255, 255)):
+            return rgb
+    return None
+
+
+_PANEL_ACCENT, _PANEL_ACCENT_PRESS, _PANEL_ACCENT_DARK = _panel_accent()
+
 _PANEL_STYLE = (
     # Windows 11 Fluent 配色: 浅色为默认基线, 深色块见文件末尾, 由
     # prefers-color-scheme 切换。所有色值按 WCAG AA 小字 4.5:1 选过;
@@ -1479,7 +1554,7 @@ _PANEL_STYLE = (
     "sans-serif;background:#f3f3f3;"
     "color:#1a1a1a;margin:0;padding:16px 20px}"
     "h2{font-size:16px;margin:0 0 8px;font-weight:600;color:#1a1a1a}"
-    ".policy{color:#0067c0;margin:0 0 2px;font-size:13px}"
+    f".policy{{color:{_PANEL_ACCENT_PRESS};margin:0 0 2px;font-size:13px}}"
     ".cards{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 12px}"
     ".card{background:#ffffff;border:1px solid #e4e4e4;border-radius:8px;"
     "padding:9px 16px;min-width:104px}"
@@ -1488,7 +1563,7 @@ _PANEL_STYLE = (
     "font-variant-numeric:tabular-nums}"
     "#q{background:#ffffff;border:1px solid #8f8f8f;color:#1a1a1a;"
     "border-radius:4px;padding:6px 10px;width:220px;font-size:13px}"
-    "#q:focus{border-color:#0078d4;outline:none}"
+    f"#q:focus{{border-color:{_PANEL_ACCENT};outline:none}}"
     "table{border-collapse:collapse;width:100%;font-size:13px;"
     "font-variant-numeric:tabular-nums}"
     "th,td{padding:6px 10px;border-bottom:1px solid #ebebeb;"
@@ -1531,7 +1606,7 @@ _PANEL_STYLE = (
     "@media (prefers-color-scheme:dark){"
     "body{background:#202020;color:#ffffff}"
     "h2{color:#ffffff}"
-    ".policy{color:#4cc2ff}"
+    f".policy{{color:{_PANEL_ACCENT_DARK}}}"
     ".card{background:#2d2d2d;border-color:#404040}"
     ".card span{color:#b4b4b4}"
     "#q{background:#2d2d2d;border-color:#8f8f8f;color:#ffffff}"
