@@ -6367,6 +6367,56 @@ class MinimumPythonVersion(unittest.TestCase):
         self.assertIn("3.8", readme,
                       "README 没写最低 Python 版本, 上面两条就没了依据")
 
+class BuildSpecIsPortable(unittest.TestCase):
+    u"""PyInstaller spec 不许写死本机绝对路径。
+
+    两个 .spec 原来把 D:\\aishare\\repo\\gpu-migrate 硬编码在 datas 与
+    Analysis 里 —— 换机器、换目录 clone 之后构建直接失败, 而报错指向的是
+    PyInstaller 内部, 看不出是路径写死。改用 PyInstaller 注入的 SPECPATH
+    (spec 所在目录)之后, 任意目录都能构建。
+
+    另外这两个文件原先躺在 .tmptest/ 里, 而 .tmptest/ 在 .gitignore 中 ——
+    也就是说构建配置根本没进版本控制, 别人 clone 下来没有 spec 可用。
+    所以这条用例同时盯两件事: 文件得在仓库里, 且路径可移植。
+    """
+
+    SPECS = ("GPUMigrate.spec", "GPUMigrate-onedir.spec")
+
+    def _root(self):
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def test_the_specs_live_in_the_repo_not_in_the_scratch_dir(self):
+        u"""spec 必须在仓库里, 否则 clone 下来没法构建。"""
+        root = self._root()
+        for name in self.SPECS:
+            path = os.path.join(root, name)
+            self.assertTrue(os.path.exists(path),
+                            "%s 不在仓库根目录: 构建配置没进版本控制, "
+                            "别人 clone 下来没有 spec 可用" % name)
+
+    def test_no_absolute_path_of_this_machine_is_baked_in(self):
+        u"""spec 里不许出现本机绝对路径。"""
+        root = self._root()
+        for name in self.SPECS:
+            with io.open(os.path.join(root, name), encoding="utf-8") as f:
+                text = f.read()
+            self.assertNotIn("D:" + chr(92) + chr(92) + "aishare", text,
+                             "%s 里写死了本机路径" % name)
+            self.assertNotIn("D:/aishare", text,
+                             "%s 里写死了本机路径" % name)
+
+    def test_the_specs_use_specpath(self):
+        u"""入口脚本与图标都得走 SPECPATH。"""
+        root = self._root()
+        for name in self.SPECS:
+            with io.open(os.path.join(root, name), encoding="utf-8") as f:
+                text = f.read()
+            self.assertIn("SPECPATH", text,
+                          "%s 没用 SPECPATH: 换目录构建会失败" % name)
+            # 入口脚本和 app.ico 两处都要
+            self.assertIn("gpu_monitor.py", text)
+            self.assertIn("app.ico", text)
+
 class CrossSurfaceRowOrder(unittest.TestCase):
     """同一份快照, --list / Web 面板 / 托盘三面必须落在同一个行序上。
 
