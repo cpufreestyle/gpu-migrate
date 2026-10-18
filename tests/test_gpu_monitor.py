@@ -1118,7 +1118,7 @@ class MigrationRules(LoopHarness):
         专用显存才会触发, 从而误判这条规则为什么从来不响。
         """
         self.assertEqual(gm.hot_reason(0.0, 2048.0, 50.0, 1024),
-                         "核显显存(专用+共享) 2048.0 MB")
+                         "核显显存(专用+共享) 2048.0 MiB")
 
     def test_utilization_reason_keeps_one_decimal(self):
         self.assertEqual(gm.hot_reason(50.4, 0.0, 50.0, 0),
@@ -1956,7 +1956,8 @@ class SnapshotContract(LoopHarness):
              "shared_by_pid", "dedicated_by_pid", "igpu_luids",
              "dgpu_luids", "kind_cache", "pid_names", "pid_prefs",
              "dgpu_temp", "history", "snap_ts", "stale_after",
-             "mode", "threshold", "power_saver_auto", "on_battery"})
+             "mode", "threshold", "power_saver_auto", "on_battery",
+             "rounds", "hits", "migrations"})
         self.assertEqual(seen["util_by_pid"], {100: 80.0})
         self.assertEqual(seen["gpu_all_by_pid"], {100: 80.0})
         self.assertIn(IGPU_LUID, seen["igpu_luids"])
@@ -2330,7 +2331,7 @@ class ListTableLayout(unittest.TestCase):
             text = self._run()
         finally:
             gm.pid_to_name = saved
-        head = next(l for l in text.splitlines() if "pid" in l)
+        head = next(l for l in text.splitlines() if "PID" in l)
         row = next(l for l in text.splitlines()
                    if "腾讯QQ" in l)
         h, r = col_edges(head), col_edges(row)
@@ -2343,12 +2344,12 @@ class ListTableLayout(unittest.TestCase):
     def test_the_header_lands_on_the_same_column_as_the_numbers(self):
         """中文表头按显示宽度对齐, 不能比数字列宽。
 
-        printf 的 %Ns 按字符数补空格, 而 "核显%"/"专用MB" 是全角(显示宽度是字符数的两倍),
+        printf 的 %Ns 按字符数补空格, 而 "核显%"/"专用MiB" 是全角(显示宽度是字符数的两倍),
         结果表头每一列都比对应的数字列宽出一截, 整张表的列线是斜的。
         """
         text = self._run()
         lines = text.splitlines()
-        head = next(l for l in lines if "pid" in l)
+        head = next(l for l in lines if "PID" in l)
         row = next(l for l in lines if "short.exe" in l)
 
 
@@ -2385,7 +2386,7 @@ class DisplayWidthCombining(unittest.TestCase):
         self.assertEqual(gm._disp_len("a\u200bb"), 2)
 
     def test_plain_cjk_is_still_two_columns(self):
-        self.assertEqual(gm._disp_len("专用MB"), 6)
+        self.assertEqual(gm._disp_len("专用MiB"), 7)
 
     def test_plain_ascii_is_still_one_column_each(self):
         self.assertEqual(gm._disp_len("heavy.exe"), 9)
@@ -4251,10 +4252,34 @@ class TraySingleInterpreter(unittest.TestCase):
         labels = [c.kwargs["text"] for c in self.fake_tk.Label.call_args_list
                   if "text" in c.kwargs]
         self.assertIn("45.2% / 45.2% / 0.0%", labels, labels)
-        self.assertIn("120 MB / 40 MB", labels,
+        self.assertIn("120 MiB / 40 MiB", labels,
                       f"显存读成了另一刻的快照, 不是点击那一行: {labels}")
         self.assertTrue(any("已不在本轮采样" in t for t in labels),
                         f"pid 走了却一个字都不说: {labels}")
+
+    def test_the_detail_window_offers_escape_as_a_way_out(self):
+        u"""详情窗也要认 Esc。
+
+        面板那边 Esc 早就绑定上了; 详情窗只有一个"关闭"按钮, 键盘
+        用户得把手挪回鼠标去点它 —— 而这个窗存在的全部理由就是
+        让键盘用户少碰鼠标 (§115 之后回车进详情、Del 永不迁移)。
+        """
+        saved = self.gt.pid_to_name
+        self.gt.pid_to_name = lambda pid: ("gone.exe", None)
+        try:
+            self.app._ui_post(self.app._detail_build, 1234,
+                              ["gone.exe", "1234", "9%", "9%",
+                               "0%", "0", "0", ""])
+            done = []
+            self.app._ui_post(lambda: done.append(1))
+            self._wait_for(lambda: done and self.app._ui_windows == 1,
+                           msg="详情窗没建起来(疑似内部异常被吞)")
+        finally:
+            self.gt.pid_to_name = saved
+        keys = [c.args[0] for c in self.windows[-1].bind.call_args_list
+                if c.args]
+        self.assertIn("<Escape>", keys,
+                      f"详情窗没给键盘留出口: {keys}")
 
     def test_detail_window_without_a_path_says_so_and_keeps_buttons_safe(self):
         """系统进程只有名字: 界面要写明白, 按钮也不能拿 None 去写注册表。"""
@@ -4447,6 +4472,30 @@ class TrayPanelRows(unittest.TestCase):
         out = self.app._sort_rows(rows)
         self.assertEqual([r[1][0] for r in out], ["a", "b"],
                          "数字列必须按数值排; 按字符串排会把 100% 排到 9% 前面")
+
+    def test_sorting_and_the_detail_window_read_a_cell_the_same_way(self):
+        u"""点表头排序与详情窗读数必须是同一个换算。
+
+        以前排序自己写 `str(v).replace("%", "").replace(" MB", "")`，
+        详情窗用 _row_num 的 rstrip("%") —— 同一列两种读法。列名改成
+        "专用MiB" 之后, 万一哪一层把单位渲染进单元格, 老排序会把它读成
+        0.0 整列沉底, 而详情窗还能读出真值。
+        """
+        rows = [(1, ("a", 1, "9.0%", "9.0%", "9.0%", "512 MiB",
+                     "0", "")),
+                (2, ("b", 2, "80.0%", "80.0%", "80.0%", "1024 MiB",
+                     "0", "")),
+                (3, ("c", 3, "1%", "1%", "1%", "?", "?", ""))]
+        self.app.sort_state = {"col": "dmem", "desc": True}
+        out = [r[1][0] for r in self.app._sort_rows(rows)]
+        self.assertEqual(out, ["b", "a", "c"],
+                         f"带单位的单元格必须按数值排, 坏的沉底: {out}")
+        # 同一个单元格, 详情窗的读数和排序的读数必须一致
+        self.assertEqual(self.tray._row_num(("a", "1024 MiB"), 1), 1024.0)
+        self.assertEqual(self.tray._row_num(("a", "45.2%"), 1), 45.2)
+        self.assertEqual(self.tray._row_num(("a", "120"), 1), 120.0)
+        self.assertEqual(self.tray._row_num((), 3), 0.0,
+                         "缺列既不能抛也不能当 120 用")
 
     def test_numbers_carrying_units_are_parsed(self):
         rows = [(1, ("a", 1, "1%", "1%", "1%", "10 MB", "10 MB", "")),
@@ -4665,6 +4714,169 @@ class TrayPanelRows(unittest.TestCase):
                          "必须把点击的那一行交给详情窗, 不是别的回调")
         self.assertEqual(args, (123, list(vals)))
 
+    class _LiveTree:
+        u"""选中项要跨刷新存活, 就得有一张真的 item -> values 表。
+
+        _Tree 的 insert 只往 sink 里记, 不长子行; 它的 item() 也只认
+        一个固定 item。_reselect_pid 要按 PID 找回那一行, 这里把
+        Treeview 相关的那几个方法按真语义实现一遍。
+        """
+
+        def __init__(self):
+            self.rows = []
+            self._sel = ()
+            self.focused = None
+            self.seen = []
+            self._n = 0
+
+        def delete(self, *_items):
+            # 真 Tk 里选中项被删掉就没了; 这里必须跟着清, 否则替身会
+            # 抱住一个已经不存在的 item, 把"选中项跨刷新存活"测成假的。
+            gone = set(_items) if _items else {i for i, _v in self.rows}
+            self.rows = [r for r in self.rows if r[0] not in gone]
+            self._sel = tuple(i for i in self._sel if i not in gone)
+
+        def insert(self, _parent, _pos, values=None, tags=None):
+            self._n += 1
+            iid = "i%d" % self._n
+            self.rows.append((iid, values))
+            return iid
+
+        def get_children(self):
+            return tuple(i for i, _v in self.rows)
+
+        def item(self, iid, _what=None):
+            for i, v in self.rows:
+                if i == iid:
+                    return v
+            return ()
+
+        def selection(self):
+            return self._sel
+
+        def selection_set(self, iid):
+            self._sel = (iid,)
+
+        def focus(self, iid):
+            self.focused = iid
+
+        def see(self, iid):
+            self.seen.append(iid)
+
+    def _render(self, tree, snap, count=None):
+        u"""往同一棵树里灌一份快照 (面板每秒做的就是这件事)。"""
+        self.app._pid_name = lambda pid: "p%d" % pid
+        self.app._pref_of = lambda _p: False
+        self.app._gpu_name = lambda luid: "gpu%d" % luid
+        self.app.snapshot = snap
+        self.app._refresh_tree(tree, self._Tip(), count=count)
+
+    def _row_of(self, tree, pid):
+        for iid in tree.get_children():
+            if tree.item(iid)[1] == pid:
+                return iid
+        return None
+
+
+    def test_the_selection_survives_the_next_refresh(self):
+        u"""刷新会 delete + insert 一遍, 选中项不许跟着没。
+
+        这是键盘导航能不能用的前提: 上下键选中的行每秒被踢回起点,
+        用户就只剩鼠标一条路。按 PID 认行而不按行号认 —— 排序一变
+        行号全变, PID 才是用户心里盯着的那个东西。
+        """
+        tree = self._LiveTree()
+        self._render(tree, self._snapshot({111: (40.0, 0.0),
+                                           222: (5.0, 0.0)}))
+        first = self._row_of(tree, 222)
+        self.assertIsNotNone(first, "先把 222 那一行选上")
+        tree.selection_set(first)
+
+        self._render(tree, self._snapshot({111: (41.0, 0.0),
+                                           222: (6.0, 0.0)}))
+
+        again = self._row_of(tree, 222)
+        self.assertNotEqual(again, first,
+                            "每次刷新都该是新的 item, 否则这条测的是恒等式")
+        self.assertEqual(tree.selection(), (again,),
+                         "每秒重渲染之后, 选中项还在同一个进程那一行")
+        self.assertEqual(tree.focused, again, "焦点环要跟着选中项走")
+        self.assertIn(again, tree.seen, "选中行得滚进可视区")
+
+    def test_a_refresh_with_nothing_selected_selects_nothing(self):
+        u"""一次都没选中过就不要自作主张高亮一行。
+
+        这是刻意的选择: 常驻光标(htop 那样)会让一个"只打算瞄一眼"
+        的监控面板始终有一条蓝杠。方向键的入口由 _seed_selection 负责,
+        不在这里抢先。
+        """
+        tree = self._LiveTree()
+        self._render(tree, self._snapshot({111: (40.0, 0.0)}))
+        self.assertEqual(tree.selection(), (),
+                         "没人点过就该是一张干净的表")
+
+    def test_a_process_that_disappears_does_not_leak_its_selection(self):
+        u"""选中的进程退出了, 不许顺手选中别的行。"""
+        tree = self._LiveTree()
+        self._render(tree, self._snapshot({111: (40.0, 0.0)}))
+        tree.selection_set(self._row_of(tree, 111))
+        self._render(tree, self._snapshot({222: (40.0, 0.0)}))
+        self.assertEqual(tree.selection(), (),
+                         "进程没了就什么都不选, 不能冒名选中别人")
+
+    def test_the_status_line_reports_the_session_counters(self):
+        u"""底部那一行会话累计: 轮数 / 命中阈值 / 已迁移。
+
+        只报"刷新: 1 秒"的话, 监控在不在干活只能靠猜。参照 btop /
+        bottom 把这类累计数摆到台面上。
+        """
+        tree = self._LiveTree()
+        snap = dict(self._snapshot({111: (40.0, 0.0)}))
+        snap.update({"rounds": 7, "hits": 3, "migrations": 1})
+        count = self._Tip()
+        self._render(tree, snap, count=count)
+        self.assertIn("采样 7 轮", count.text)
+        self.assertIn("命中阈值 3 次", count.text)
+        self.assertIn("已迁移 1 个", count.text)
+
+    def test_the_counter_line_survives_a_snapshot_without_the_keys(self):
+        u"""没有这三个键的快照也要能渲染, 不能让刷新链断掉。
+
+        _safe_refresh 的规矩: 一次异常就少刷新一帧, 而计数器是锦上
+        添花, 不值得为它把整行状态行赔进去。
+        """
+        tree = self._LiveTree()
+        count = self._Tip()
+        self._render(tree, self._snapshot({111: (40.0, 0.0)}),
+                      count=count)
+        self.assertIn("采样 0 轮", count.text)
+
+    def test_the_counter_line_stays_quiet_before_the_first_sample(self):
+        u"""一份快照都还没有时要说"还没采到", 不要报 0 轮假装采过。"""
+        tree = self._LiveTree()
+        count = self._Tip()
+        self._render(tree, None, count=count)
+        self.assertIn("还没有采到数据", count.text)
+
+
+    def test_the_placeholder_row_is_not_a_process(self):
+        u"""占位行的 PID 列是 "-", 不是进程。
+
+        键盘把 _open_detail / 永不迁移接到选中项上以后, 这条防线就是
+        最后一道: 拿不到真实 PID 就什么都不许做, 否则回车会拿 "-" 去
+        建详情窗, Del 会把 "-" 写进 exclude_processes。
+        """
+        empty = ("还没有采样到数据", "-", "-", "-", "-", "-", "-", "-")
+        for vals in (empty, (), None, ("x", None), ("x", "12a"),
+                     ("x", 12.5), ("x", "")):
+            self.assertIsNone(self.tray._row_pid(vals),
+                              "这一行不该被当成有 PID 的进程")
+        self.assertEqual(self.tray._row_pid(("p1", 123, "1%", "1%",
+                                             "0%", "0", "0", "")), 123)
+        self.assertEqual(self.tray._row_pid(("p1", "123", "1%", "1%",
+                                             "0%", "0", "0", "")), 123,
+                         "渲染好的表里 PID 列可能是字符串")
+
 
     def test_settings_num_falls_back_to_the_effective_value(self):
         u"""填不是数字时, 存回去的必须是当前生效值。
@@ -4730,6 +4942,1173 @@ class TrayPanelRows(unittest.TestCase):
                          "写的就是当前配置路径和进程名")
         self.assertIn("已把 game.exe 加入", tip.text)
 
+
+class TrayPanelKeyboardNav(unittest.TestCase):
+    u"""面板的键盘导航: 方向键选行 / 回车详情 / Del 永不迁移 / / 回筛选框。
+
+    GUI 真实按键没法在无头环境里发, 但"绑定有没有挂上、挂上去的那个
+    回调拿当前选中项做了什么"是可以钉死的。Tk 的键位派发交给探测脚本
+    .tmptest/probe_tk.py 在真窗口里验(选中集为空时按 Down 什么都不会
+    发生, 已经选中的情况下交给 ttk 自己的绑定)。
+    """
+
+    def setUp(self):
+        self.gt = gpu_tray
+        self.saved_tk, self.saved_ttk = gpu_tray.tk, gpu_tray.ttk
+        self.saved_excl = gpu_tray.save_exclude_process
+        self.saved_ui = gpu_tray._UI_FILE
+        self.saved_pid_to_name = gpu_tray.pid_to_name
+        self.fake_tk = mock.MagicMock(name="tk")
+        self.host = self.fake_tk.Tk.return_value
+        self.tree = mock.MagicMock(name="treeview")
+        self.fake_ttk = mock.MagicMock(name="ttk")
+        self.fake_ttk.Treeview.return_value = self.tree
+        gpu_tray.tk = self.fake_tk
+        gpu_tray.ttk = self.fake_ttk
+        self.tree.column.return_value = 120
+        self.tree.selection.return_value = ()
+        gpu_tray.pid_to_name = lambda pid: (f"p{pid}", None)
+        self.dir = tempfile.mkdtemp(prefix="gpumig-keynav-")
+        self.path = os.path.join(self.dir, "config.json")
+        gpu_tray._UI_FILE = os.path.join(self.dir, "panel_ui.json")
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump({"threshold_percent": 30}, f)
+        self.app = gpu_tray.TrayApp(self.path)
+        self.app.monitor_dead = False
+        self.app._ui_root = self.host
+        self.app._ui_windows = 0
+        self.app.panel_open = True
+        # snapshot 为 None 时 _refresh_tree 会整段跳过底部状态行,
+        # 键盘提示就没有机会渲染出来
+        self.app.snapshot = {"util_by_pid": {}, "gpu_all_by_pid": {},
+                             "dgpu_util_by_pid": {}, "shared_by_pid": {},
+                             "dedicated_by_pid": {}, "igpu_luids": [0],
+                             "dgpu_luids": []}
+        self.app._gpu_name = lambda luid: "核显"
+        self.written = []
+
+        def remember(_path, name):
+            self.written.append(name)
+            return True
+
+        gpu_tray.save_exclude_process = remember
+        self.posted = []
+        self.app._ui_post = lambda fn, *a: self.posted.append((fn, a))
+
+    def tearDown(self):
+        self.gt.tk, self.gt.ttk = self.saved_tk, self.saved_ttk
+        self.gt.save_exclude_process = self.saved_excl
+        self.gt._UI_FILE = self.saved_ui
+        self.gt.pid_to_name = self.saved_pid_to_name
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _build(self):
+        self.app._panel_build()
+        return self.fake_tk.Toplevel.return_value, self.tree
+
+    def _handler(self, sequence, widget=None):
+        widget = self.tree if widget is None else widget
+        for call in widget.bind.call_args_list:
+            if call.args and call.args[0] == sequence:
+                return call.args[1]
+        self.fail("没有绑 " + sequence)
+
+
+    def test_the_panel_opens_with_the_keyboard_on_the_table(self):
+        u"""一开面板就让表格拿焦点。
+
+        焦点停在筛选框的话, 第一次按方向键只会挪输入光标, 用户会直接
+        得出"这面板没有键盘支持"的结论。
+        """
+        _window, tree = self._build()
+        self.assertTrue(tree.focus_set.called,
+                        "面板搭完要把键盘焦点交给表格")
+
+    def test_slash_focuses_the_filter_entry(self):
+        u"""/ 是筛选框的快捷键, 和 Ctrl-F 同一个去处 (Web 面板的老约定)。
+
+        已经停在输入框里时不能再抢一次: 用户正打字, 抢焦点会把光标
+        从半截进程名后面踢走。
+        """
+        window = self.fake_tk.Toplevel.return_value
+        self._build()
+        entry = self.fake_tk.Entry.return_value
+        slash = self._handler("<slash>", window)
+        slash()
+        entry.focus_set.assert_called_once_with()
+        entry.focus_get.return_value = entry
+        slash()
+        self.assertEqual(entry.focus_set.call_count, 1,
+                         "已经在输入框里就不该再抢一次焦点")
+
+    def test_the_first_arrow_key_drops_a_cursor_instead_of_doing_nothing(self):
+        u"""空选中态下按 Down 必须落到第一行。
+
+        真 Tk 实测: 选中集为空时 Down 什么都不做(见 .tmptest/probe_tk.py),
+        也就是说键盘用户必须先拿鼠标点一行, 方向键才认。htop / nvtop
+        这类工具不是这样, 它们永远有个光标。
+        """
+        _window, tree = self._build()
+        down = self._handler("<Down>")
+        tree.selection.return_value = ()
+        tree.get_children.return_value = ("i0", "i1", "i2")
+        down()
+        tree.selection_set.assert_called_once_with("i0")
+        self.assertEqual(tree.focus.call_args.args, ("i0",))
+        self.assertEqual(tree.see.call_args.args, ("i0",))
+
+    def test_the_first_up_arrow_drops_a_cursor_on_the_last_row(self):
+        _window, tree = self._build()
+        up = self._handler("<Up>")
+        tree.selection.return_value = ()
+        tree.get_children.return_value = ("i0", "i1", "i2")
+        up()
+        tree.selection_set.assert_called_once_with("i2")
+
+    def test_an_existing_selection_is_left_to_the_widgets_own_binding(self):
+        u"""已经有选中项时, 上下键归 ttk.Treeview 自己的绑定管。
+
+        这里抢过来做就等于把方向键从"移动一格"改成"跳到首行/末行",
+        所以播种函数必须在已有选中项时原样返回 None(不 break)。
+        """
+        _window, tree = self._build()
+        down = self._handler("<Down>")
+        tree.selection.return_value = ("i1",)
+        self.assertIsNone(down())
+        tree.selection_set.assert_not_called()
+
+    def test_an_empty_table_does_not_break_the_arrow_keys(self):
+        u"""没有数据(还没采样到 / 监控已死)时按方向键不许炸。
+
+        get_children() 是空 tuple, 播种直接收手; 事件链不能断。
+        """
+        _window, tree = self._build()
+        tree.selection.return_value = ()
+        tree.get_children.return_value = ()
+        self._handler("<Down>")()
+        tree.selection_set.assert_not_called()
+
+    def test_enter_opens_the_detail_of_the_selected_row(self):
+        u"""回车 = 双击的键盘版, 走的是同一条 _ui_post 路径。"""
+        _window, tree = self._build()
+        vals = ("p1", "123", "1%", "1%", "0%", "0", "0", "")
+        tree.selection.return_value = ("i0",)
+        tree.item.return_value = vals
+        self._handler("<Return>")()
+        self.assertEqual(len(self.posted), 1)
+        fn, args = self.posted[0]
+        self.assertEqual(fn, self.app._detail_build,
+                         "回车必须把选中行交给详情窗, 不是别的回调")
+        self.assertEqual(args, (123, list(vals)))
+
+    def test_enter_is_also_bound_on_the_window(self):
+        u"""焦点万一不在表格上, 窗口级的 Return 也还能用。"""
+        window, _tree = self._build()
+        self.tree.selection.return_value = ("i0",)
+        self.tree.item.return_value = ("p1", "9", "1%", "1%",
+                                        "0%", "0", "0", "")
+        self._handler("<Return>", window)()
+        self.assertEqual([a[1][0] for a in self.posted], [9],
+                         "窗口级回车要把选中那一行的 PID 交给详情窗")
+
+    def test_enter_on_the_placeholder_row_opens_nothing(self):
+        u"""占位行的 PID 列是 "-", 不是进程。
+
+        以前 _open_detail 只认 event; 键盘进来以后这条防线不能没有,
+        否则回车会拿 "-" 去建详情窗。
+        """
+        _window, tree = self._build()
+        tree.selection.return_value = ("i0",)
+        tree.item.return_value = ("还没有采样到数据", "-", "-", "-",
+                                  "-", "-", "-", "-")
+        self._handler("<Return>")()
+        self.assertEqual(self.posted, [])
+
+    def test_delete_never_migrates_the_selected_row(self):
+        u"""Del = 右键菜单的键盘版, 写的是同一份 config.json。"""
+        _window, tree = self._build()
+        tree.selection.return_value = ("i0",)
+        tree.item.return_value = ("game.exe", "55", "1%", "1%",
+                                  "0%", "0", "0", "")
+        self._handler("<Delete>")()
+        self.assertEqual(self.written, ["game.exe"])
+
+    def test_delete_on_the_placeholder_row_writes_nothing(self):
+        u"""占位行不能进排除名单。
+
+        右键路径以前也会把 "-" 写进 exclude_processes: 名单里多一个
+        谁都匹配不上的名字, 用户看不出异常, 设置窗口里就躺着这一行。
+        """
+        _window, tree = self._build()
+        tree.selection.return_value = ("i0",)
+        tree.item.return_value = ("还没有采样到数据", "-", "-", "-",
+                                  "-", "-", "-", "-")
+        self._handler("<Delete>")()
+        self.assertEqual(self.written, [])
+
+    def test_escape_hands_the_keyboard_back_to_the_table(self):
+        u"""Esc 清空筛选词之后要把键盘还给表格。
+
+        不还的话, 用户按完 Esc 按方向键, 动的还是输入框里的光标,
+        表格一动不动 —— 键盘导航在最常用的那个出口上断掉,
+        而且界面上看不出是为什么。
+        """
+        window = self.fake_tk.Toplevel.return_value
+        self._build()
+        self.tree.focus_set.reset_mock()
+        fvar = self.fake_tk.StringVar.return_value
+        fvar.get.return_value = "chrome"
+        escape = self._handler("<Escape>", window)
+        escape()
+        fvar.set.assert_called_once_with("")
+        self.assertTrue(self.tree.focus_set.called,
+                        "Esc 清完筛选要把键盘还给表格")
+        self.assertEqual(escape(), "break")
+
+    def test_escape_with_an_empty_filter_still_closes_the_window(self):
+        u"""对照: 筛选词已经空了, Esc 就该关窗, 不该去抢表格焦点。"""
+        window = self.fake_tk.Toplevel.return_value
+        self._build()
+        self.tree.focus_set.reset_mock()
+        # on_close 会把替身 Toplevel 的 geometry() 拿去 JSON 序列化, 那是
+        # 替身的形状问题不是被测行为; 拦住写盘只看标志位
+        saved_write = gpu_tray.write_json_dict
+        gpu_tray.write_json_dict = lambda path, data: True
+        try:
+            fvar = self.fake_tk.StringVar.return_value
+            fvar.get.return_value = ""
+            escape = self._handler("<Escape>", window)
+            escape()
+        finally:
+            gpu_tray.write_json_dict = saved_write
+        fvar.set.assert_not_called()
+        self.assertFalse(self.tree.focus_set.called,
+                         "都要关窗了, 别再动焦点")
+        self.assertFalse(self.app.panel_open, "Esc 空筛选时要关窗")
+
+    def test_the_sort_button_explains_the_keyboard_shortcuts(self):
+        u"""排序入口要找得到: 快捷键挂在"复原到自动"按钮的悬停上。
+
+        底部状态行已经很长, 再塞两个键会被窗口右沿切掉, 等于没说;
+        用户找排序入口时鼠标本来就会划过那个按钮。
+        """
+        self.app.snapshot = None
+        tips = []
+        saved = gpu_tray._bind_tip
+        gpu_tray._bind_tip = lambda w, t: tips.append(t)
+        try:
+            self._build()
+        finally:
+            gpu_tray._bind_tip = saved
+        self.assertTrue(any("按 s" in t for t in tips),
+                        f"排序快捷键没被交代: {tips}")
+
+    def test_the_status_line_announces_the_keyboard_shortcuts(self):
+        u"""快捷键不说出来就等于没有。
+
+        底部那一行是面板里唯一常驻的状态说明; 只在那里写"右键…"的话,
+        键盘用户永远发现不了这些键。
+        """
+        _window, _tree = self._build()
+        texts = " ".join(
+            str(c) for c in self.fake_tk.Label.return_value.config
+            .call_args_list)
+        for word in ("回车", "Del", "↑↓"):
+            self.assertIn(word, texts, "底部状态行没交代 " + word)
+
+
+class ColumnLabelsSingleSource(unittest.TestCase):
+    u"""列名只有一份, 三个界面共用一个单位口径。
+
+    以前托盘自己抄一份列名字典、Web 在 f-string 里写字面量、CLI 又抄一遍,
+    改列名要同时记得三个地方 —— 漏一处就是"同一份数据三张脸"。更糟的是
+    显存两列标着 MB, 而数字是 字节/1048576 得出来的 MiB, 差 4.86%。
+    nvtop / GPU-Z 都老实写 MiB, 这里跟着老实的那一边。
+    """
+
+    def test_the_tray_buys_column_names_from_the_same_place(self):
+        u"""托盘的 _COL_LABELS 必须是 gpu_monitor 那份对象本身。
+
+        相等不够: 相等的两份字典还是两份, 下一次照样会漏改一处。
+        """
+        self.assertIs(gpu_tray._COL_LABELS, gm.COL_LABELS,
+                         "托盘不许再自己抄一份列名")
+        self.assertEqual(list(gpu_tray._COL_LABELS),
+                         ["name", "pid", "gpu", "igpu", "dgpu",
+                          "dmem", "smem", "pref"])
+
+    def test_the_two_memory_columns_say_mib_not_mb(self):
+        u"""显存列的单位名必须和除数的口径一致。
+
+        代码里是 dedicated / 1048576, 得出来的是 MiB。标成 MB 的话,
+        8 GiB 的独显会显示成 8192 MB, 和规格书、和 GPU-Z 都对不上。
+        """
+        self.assertTrue(gm.COL_LABELS["dmem"].endswith("MiB"),
+                        gm.COL_LABELS["dmem"])
+        self.assertTrue(gm.COL_LABELS["smem"].endswith("MiB"),
+                        gm.COL_LABELS["smem"])
+        for tip in ("dmem", "smem"):
+            self.assertIn("MiB", gm._HDR_TIPS[tip],
+                          "悬停解释也要把自己说的单位讲对")
+            self.assertNotIn("单位 MB", gm._HDR_TIPS[tip])
+
+    def test_the_web_header_carries_the_table_and_the_right_unit(self):
+        u"""Web 表头从 COL_LABELS 取, 并且两列显存写的是 MiB。"""
+        html = gm.panel_html(ModeDisplay.SNAP, {})
+        for col in gm.COL_LABELS:
+            # name 那一格的 <th> 还带 class=n, 所以只钉 title 与列名
+            self.assertIn("title=" + chr(39) + gm._HDR_TIPS[col] + chr(39)
+                          + ">" + gm.COL_LABELS[col] + "</th>", html)
+        self.assertIn(">专用MiB</th>", html)
+        self.assertNotIn(">专用MB</th>", html,
+                         "MB 是不实的单位名, 别再回去")
+
+    def test_the_cli_header_also_reads_the_table(self):
+        u"""--list 的表头也不许再写字面量。
+
+        扫源码而不是真跑一遍: _list_processes 要真实 PDH 数据才出表,
+        这里只钉死"表头从 COL_LABELS 取"这件事本身。
+        """
+        source = inspect.getsource(gm.cmd_list)
+        for col in ("dmem", "smem"):
+            self.assertIn("COL_LABELS[" + chr(34) + col + chr(34) + "]",
+                          source,
+                          col + " 列表头没走 COL_LABELS")
+        self.assertNotIn("专用MB", source)
+        self.assertNotIn("共享MB", source)
+
+class SessionCounters(unittest.TestCase):
+    u"""底部那行会话累计: 轮数 / 命中阈值 / 已迁移。
+
+    参照 btop / bottom: 这类工具把"程序到底在干什么事"的累计数摆在台面上。
+    只报"刷新: 1 秒"的话, 监控是不是真在干活只能靠猜 ——
+    "0 轮"和"3000 轮 0 命中"是两个完全不同的状态,
+    而老界面上这两句话长得一模一样。
+    """
+
+    def _run(self, snap, cycles, overrides):
+        seen = []
+        harness = SnapshotContract()
+        harness.setUp()
+        try:
+            harness.run_monitor(snap, cycles=cycles,
+                              cfg_overrides=overrides,
+                              hooks={"on_sample":
+                                     lambda s: seen.append(dict(s))})
+        finally:
+            harness.tearDown()
+        return seen
+
+    def test_counters_are_cumulative_not_instant(self):
+        u"""计数是单调不降的累计值, 不是瞬时值。
+
+        写成瞬时值的话, 一轮命中 3 个、下一轮命中 0 个, 用户看到的
+        就是"3 次"跳成"0 次" —— 像在被清零, 反而看不出趋势。
+        """
+        seen = self._run([{100: 90.0, 102: 80.0},
+                         {100: 70.0, 102: 60.0}], 2,
+                        {"sustain_samples": 99})
+        rounds = [s["rounds"] for s in seen]
+        self.assertEqual(len(rounds), 2)
+        self.assertTrue(all(b >= a for a, b in zip(rounds, rounds[1:])),
+                        f"轮数必须单调不降: {rounds}")
+
+    def test_hot_candidates_are_counted_as_hits(self):
+        u"""抓到超标候选就计数。
+
+        select_hot_candidates 已经过滤掉排除项, 所以这里数的是
+        "真的候选出来几个", 排除名单挡住的不算漏报。
+        """
+        # 102 也在 PID_NAMES 里: 代不到名字的 pid 拿不到完整路径,
+        # select_hot_candidates 会把它们整行丢掉, 那测的就不是计数了
+        # 一轮采样里两个进程都在: run_monitor 的 samples 是"每轮一个 dict",
+        # 传 list of dict 会被当成多轮, 而不是一轮里的多个进程
+        seen = self._run([{100: 90.0, 102: 80.0}], 1,
+                        {"sustain_samples": 99})
+        self.assertEqual(seen[-1]["hits"], 2,
+                         "两个超标进程各算一次命中")
+
+    def test_a_successful_migration_bumps_the_counter(self):
+        u"""只有写注册表 + 回读确认都通过了才算迁移成功。
+
+        写失败、回读不符都不该计数 —— 报了不存在的"已迁移"比不报
+        更糟: 用户会按这个数去判断要不要重启进程。
+
+        "已迁移"比"命中阈值"晚一个采样周期才出现在快照里, 这是有意的:
+        确认弹窗可能阻塞几十秒(MessageBoxTimeoutW 的 120s 宽限),
+        把迁移挪到快照前面等于让整个面板等用户点确认。累计数晚 5 秒
+        无所谓, 面板卡住不行。
+        """
+        seen = self._run([{100: 90.0}, {100: 0.0}], 2,
+                        {"sustain_samples": 1})
+        self.assertEqual(seen[0]["migrations"], 0,
+                         "迁移发生在快照之后, 同一轮看不到")
+        self.assertEqual(seen[-1]["migrations"], 1,
+                         "下一轮的累计里必须出现这次迁移")
+
+    def test_the_web_page_shows_the_counters(self):
+        u"""Web 面板也要有这一行, 并且进 PARTS 局部刷新。"""
+        snap = dict(ModeDisplay.SNAP)
+        snap.update({"rounds": 12, "hits": 3, "migrations": 1})
+        html = gm.panel_html(snap, {})
+        self.assertIn("id=counters", html)
+        self.assertIn("采样 12 轮", html)
+        self.assertIn("命中阈值 3 次", html)
+        self.assertIn("已迁移 1 个", html)
+        self.assertIn('counters', gm._PANEL_SCRIPT,
+                      "不出现在 PARTS 里就永远停在首次渲染的值")
+
+    def test_an_empty_snapshot_does_not_crash_the_counter_line(self):
+        u"""还没采到一轮时也要能显示出这行, 而不是 KeyError。"""
+        html = gm.panel_html(ModeDisplay.SNAP, {})
+        self.assertIn("id=counters", html)
+        self.assertIn("采样 0 轮", html)
+
+class SettingsKeyboardNav(unittest.TestCase):
+    u"""设置窗的键盘出口: Enter 保存, Esc 取消。
+
+    六个输入格 Tab 走完之后, 键盘用户的手原本必须再去摸一次鼠标点
+    "保存"按钮。Enter 就是给这一步留的路; Esc 与面板 / 详情窗同一个键。
+    """
+
+    def setUp(self):
+        import gpu_tray
+        self.gt = gpu_tray
+        self.saved_tk, self.saved_ttk = gpu_tray.tk, gpu_tray.ttk
+        self.saved_ui = gpu_tray._UI_FILE
+        self.saved_write = gpu_tray.write_json_dict
+        self.fake_tk = mock.MagicMock(name="tk")
+        self.host = self.fake_tk.Tk.return_value
+        gpu_tray.tk = self.fake_tk
+        gpu_tray.ttk = mock.MagicMock(name="ttk")
+        self.fake_tk.ttk = gpu_tray.ttk
+        self.dir = tempfile.mkdtemp(prefix="gpumig-setnav-")
+        self.path = os.path.join(self.dir, "config.json")
+        gpu_tray._UI_FILE = os.path.join(self.dir, "panel_ui.json")
+        self.written = []
+
+        def remember(path, data):
+            self.written.append(dict(data))
+            return True
+
+        gpu_tray.write_json_dict = remember
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump({"threshold_percent": 50}, f)
+        self.app = object.__new__(gpu_tray.TrayApp)
+        self.app.config_path = self.path
+        self.app._settings_open = False
+        self.app._ui_windows = 0
+        # 只做"是不是 None"的哨兵, _settings_build 只用它判早退
+        self.app._ui_root = object()
+
+    def tearDown(self):
+        self.gt.tk, self.gt.ttk = self.saved_tk, self.saved_ttk
+        self.gt._UI_FILE = self.saved_ui
+        self.gt.write_json_dict = self.saved_write
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _build(self):
+        self.app._settings_build()
+        return self.host.Toplevel.return_value
+
+    def test_every_numeric_entry_takes_enter_as_save(self):
+        u"""六个数字格每一格都要绑上 Enter -> 保存。
+
+        少绑一格, 用户在那个格子里按回车就什么都不会发生, 而
+        "刚才在别的格子里明明是好的" —— 同一张表单两种手感。
+        """
+        self._build()
+        # 六个格子共用同一个 Entry 替身实例, 所以看的是 return_value 上
+        # 的 bind 记录, 不是 Entry 这个工厂自己的
+        seqs = [c.args[0]
+                for c in self.fake_tk.Entry.return_value.bind.call_args_list
+                if c.args]
+        self.assertEqual(seqs.count("<Return>"), 6,
+                         f"六个数字格都该绑 Enter: {seqs}")
+
+    def test_the_window_offers_escape_as_cancel(self):
+        u"""Esc = 取消, 与面板 / 详情窗同一个键。"""
+        self._build()
+        # 设置窗的 root 也是 Toplevel.return_value, 和面板那条链路同一个替身
+        keys = [c.args[0]
+                for c in self.fake_tk.Toplevel.return_value.bind
+                .call_args_list if c.args]
+        self.assertIn("<Escape>", keys,
+                      f"设置窗没给键盘留取消键: {keys}")
+class AiProtectionRules(unittest.TestCase):
+    u"""AI 显存保护: 命中名单, 或独显专用显存达到保护阈值。
+
+    这个守卫函数此前零覆盖 —— 全库一次都没直接调它, 只有迁移分支内部
+    在用, 于是它是否正确只活在 docstring 里。而它守的恰恰是最不该出事的
+    地方: 它决定要不要跳过自动重启。返回 False 会让每个被迁移的模型进程
+    当场被杀掉重拉(几十 GB 权重白加载一遍), 恒返回 True 则等于把
+    auto_restart 整个关掉。两个方向都是静默的。
+
+    单位: dedicated_by_pid 是字节, protect_vram_mb 是 MiB (与 §116 起显存
+    两列改成的 MiB 同一口径), 换算就是 1024 * 1024。
+    """
+
+    MB = 1024 * 1024
+
+    def setUp(self):
+        self.cfg = dict(gm.DEFAULT_CONFIG)
+
+    def test_a_name_on_the_builtin_list_is_protected(self):
+        u"""内置名单里的推理服务一个都不许被自动重启。
+
+        取出名单里第一个真条目来问, 而不是自己拼一个名字 —— 名单
+        自己被误删一条时, 这条用例就会红。
+        """
+        self.assertTrue(gm.DEFAULT_AI_PROCESSES, "内置 AI 名单空了")
+        for name in gm.DEFAULT_AI_PROCESSES:
+            self.assertTrue(
+                gm.is_ai_protected(self.cfg, name, 1, {}),
+                name + " 在内置名单里却没被保护")
+
+    def test_the_name_match_ignores_case(self):
+        u"""大小写不敏感: Windows 进程表里大小写本来就说不准。
+
+        LM Studio.exe 的真实进程名大小写取决于启动方式, 按精确匹配
+        会有一半时候漏掉。
+        """
+        name = gm.DEFAULT_AI_PROCESSES[0]
+        self.assertTrue(
+            gm.is_ai_protected(self.cfg, name.upper(), 1, {}),
+            "名单命中必须大小写不敏感")
+
+    def test_the_user_list_extends_the_builtin_one(self):
+        u"""自建推理服务靠 ai_processes 补, 不用改代码。"""
+        cfg = dict(self.cfg, ai_processes=["my-infer.exe"])
+        self.assertTrue(gm.is_ai_protected(cfg, "my-infer.exe", 1, {}))
+        self.assertTrue(gm.is_ai_protected(cfg, "MY-INFER.EXE", 1, {}),
+                        "用户名单同样大小写不敏感")
+        self.assertFalse(gm.is_ai_protected(cfg, "notepad.exe", 1, {}))
+
+    def test_the_vram_fallback_covers_processes_off_every_list(self):
+        u"""显存兜底: 名单外的自建服务只要吃到阈值也算 AI。
+
+        这一条盯着的是"超过阈值就算"而不是"名单里有才算" —— 否则
+        用户自己起的推理进程会被自动重启打掉。
+        """
+        cfg = dict(self.cfg, protect_vram_mb=100)
+        self.assertTrue(
+            gm.is_ai_protected(cfg, "unknown.exe", 7, {7: 100 * self.MB}),
+            "正好踩在阈值上就该保护(>=, 不是 >)")
+        self.assertTrue(
+            gm.is_ai_protected(cfg, "unknown.exe", 7,
+                                {7: 101 * self.MB}))
+        self.assertFalse(
+            gm.is_ai_protected(cfg, "unknown.exe", 7,
+                                {7: 99 * self.MB}),
+            "没到阈值不该顺手保护, 那会关掉 auto_restart")
+
+    def test_zero_threshold_switches_the_fallback_off(self):
+        u"""protect_vram_mb=0 是显式关闭, 不是"0 也算保护"。
+
+        `if limit and ...` 的那个 and 是这里唯一的东西: 写成
+        `>=` 判断的话, 0 会让每一个进程都命中。
+        """
+        cfg = dict(self.cfg, protect_vram_mb=0)
+        self.assertFalse(
+            gm.is_ai_protected(cfg, "unknown.exe", 7,
+                                {7: 9000 * self.MB}),
+            "阈值为 0 必须是关闭, 不是全部命中")
+
+    def test_a_missing_pid_or_an_empty_name_is_not_protected(self):
+        u"""空名字 / pid 不在表里: 两个都不许炸, 也都不算保护。
+
+        采样间隙里 pid 退出是常态, 拿不到名字也是常态; 这里抛异常会
+        顺着迁移分支回到监控循环。
+        """
+        self.assertFalse(gm.is_ai_protected(self.cfg, None, 1, {}))
+        self.assertFalse(gm.is_ai_protected(self.cfg, "", 1, {}))
+        self.assertFalse(gm.is_ai_protected(self.cfg, "x.exe", 99, {}))
+
+    def test_a_config_without_the_key_still_works(self):
+        u"""老 config.json 没有 ai_processes 这个键。"""
+        cfg = {k: v for k, v in self.cfg.items() if k != "ai_processes"}
+        self.assertTrue(gm.is_ai_protected(cfg, "vllm.exe", 1, {}),
+                        "老配置也不该漏掉内置名单")
+
+class AiProcessesConfigCoercion(unittest.TestCase):
+    u"""ai_processes 必须吃上配置归一, 否则整条 AI 保护会失效。
+
+    §124 给 is_ai_protected 补覆盖时顺带发现: ai_processes 不在 _LIST_KEYS 里。
+    两种坏写法各有各的死法:
+      - "ollama.exe" (字符串) -> 原样留下, is_ai_protected 的 set 推导式
+        按字符展开, 名单一条都匹配不上 —— 静默失效;
+      - null -> None 一路传进去, 集合推导式当场 TypeError, 之后每一轮
+        监控都抛一次并把整个迁移分支跳掉。
+    §2 给 hot_reason 修过同一类问题(六个数字键收进 _NUMBER_RULES),
+    只是名单这一侧漏了一个键。
+    """
+
+    def _merged(self, raw):
+        return gm.merged_config({**gm.DEFAULT_CONFIG, "ai_processes": raw})
+
+    def test_a_bare_string_becomes_a_one_item_list(self):
+        u"""单个字符串当成一项, 不逐字符展开。"""
+        cfg = self._merged("ollama.exe")
+        self.assertEqual(cfg["ai_processes"], ["ollama.exe"])
+        # 真正的判据: 用户自己起的那个推理服务现在认得出吗
+        self.assertTrue(
+            gm.is_ai_protected(cfg, "ollama.exe", 1, {}),
+            "写成字符串的 ai_processes 必须仍然生效")
+
+    def test_a_null_falls_back_to_the_default_not_to_none(self):
+        u"""null 退回默认空名单, 不许把 None 留在配置里。
+
+        这一条以前会让 is_ai_protected 抛 TypeError, 而调用点在迁移
+        分支深处 —— 监控循环兜底只会让人看到每轮一条 traceback, 
+        migration 从此不再发生。
+        """
+        cfg = self._merged(None)
+        self.assertEqual(cfg["ai_processes"], [])
+        self.assertFalse(gm.is_ai_protected(cfg, "notepad.exe", 1, {}))
+
+    def test_a_non_list_falls_back_and_says_so(self):
+        u"""数字 / dict 之类也退回默认, 并且记一行日志。"""
+        lines = []
+        saved = gm.log
+        gm.log = lambda msg, logfile=None: lines.append(msg)
+        try:
+            cfg = self._merged(5)
+        finally:
+            gm.log = saved
+        self.assertEqual(cfg["ai_processes"], [])
+        self.assertTrue(any("ai_processes" in m for m in lines),
+                        f"退回默认值必须留一行日志: {lines}")
+
+    def test_every_list_key_in_the_default_config_is_registered(self):
+        u"""新加名单型配置项时必须往 _LIST_KEYS 登记。
+
+        对账而不是逐个点名: 漏一个新键 = 它的归一不存在 = 上面那两种
+        死法随便哪一种。这条用例就是那张对账单。
+        """
+        listy = {k for k, v in gm.DEFAULT_CONFIG.items()
+                 if isinstance(v, list)}
+        self.assertEqual(listy - set(gm._LIST_KEYS), set(),
+                         "这些名单型配置项没有归一: %s"
+                         % (listy - set(gm._LIST_KEYS)))
+
+    def test_a_null_ai_list_cannot_crash_the_guard_itself(self):
+        u"""守寄存了 null 的字典也不许让守卫函数崩。
+
+        归一在 merged_config 一处, 但 is_ai_protected 也可能拿到别处
+        攒的配置(测试替身、将来的调用方)。守卫函数不该把命押在
+        调用方身上。
+        """
+        cfg = {k: v for k, v in gm.DEFAULT_CONFIG.items()
+               if k != "ai_processes"}
+        cfg["ai_processes"] = None
+        self.assertFalse(gm.is_ai_protected(cfg, "notepad.exe", 1, {}))
+
+class EveryConfigurableKeyIsCoerced(unittest.TestCase):
+    u"""每个可配置键都必须有归一, 否则手改 config.json 就是埋雷。
+
+    §125 发现 ai_processes 漏登记 _LIST_KEYS。同一个类别的漏登记还有一个:
+    protect_vram_mb 不在 _NUMBER_RULES 里。它的失效方式更难看:
+      - "2048" / "abc" / [1,2] -> 原样留下, is_ai_protected 的
+        `dedicated >= limit * 1024 * 1024` 当场 TypeError;
+      - -5 -> `if limit` 为真而阈值恒负, 于是每个进程都被判成 AI 保护,
+        auto_restart 被静默关掉, 而界面上什么都看不出来。
+
+    两条用例都是对账而不是点名: 新加配置键忘了登记, 当场红。
+    """
+
+    def _coerced(self, key, raw):
+        return gm.merged_config({**gm.DEFAULT_CONFIG, key: raw})
+
+    def test_every_numeric_key_is_in_the_number_rules(self):
+        u"""DEFAULT_CONFIG 里的数字键必须都被 _NUMBER_RULES 覆盖。
+
+        bool 是 int 的子类, 先剔掉; hotkeys 是 dict, 有自己的 _coerce_hotkeys。
+        """
+        numeric = {k for k, v in gm.DEFAULT_CONFIG.items()
+                   if isinstance(v, (int, float))
+                   and not isinstance(v, bool)}
+        self.assertEqual(numeric - set(gm._NUMBER_RULES), set(),
+                         "这些数字配置项没有归一: %s"
+                         % (numeric - set(gm._NUMBER_RULES)))
+
+    def test_every_list_key_is_in_the_list_rules(self):
+        u"""名单型键同理, 必须都在 _LIST_KEYS 里。"""
+        listy = {k for k, v in gm.DEFAULT_CONFIG.items()
+                 if isinstance(v, list)}
+        self.assertEqual(listy - set(gm._LIST_KEYS), set(),
+                         "这些名单型配置项没有归一: %s"
+                         % (listy - set(gm._LIST_KEYS)))
+
+    def test_every_bool_key_is_in_the_bool_rules(self):
+        u"""开关型键同理, 必须都在 _BOOL_KEYS 里。"""
+        booly = {k for k, v in gm.DEFAULT_CONFIG.items()
+                 if isinstance(v, bool)}
+        self.assertEqual(booly - set(gm._BOOL_KEYS), set(),
+                         "这些开关配置项没有归一: %s"
+                         % (booly - set(gm._BOOL_KEYS)))
+
+    def test_a_stringified_protect_vram_mb_is_coerced(self):
+        u"""protect_vram_mb 写成字符串必须被当成数字, 不是原样留下。"""
+        self.assertEqual(
+            self._coerced("protect_vram_mb", "2048")["protect_vram_mb"],
+            2048)
+
+    def test_a_non_numeric_protect_vram_mb_falls_back_and_does_not_crash(self):
+        u"""None / 列表 / 非数字串都退回默认, 且守卫函数不许抛。
+
+        这三种以前都会让 is_ai_protected 抛 TypeError, 而调用点在迁移
+        分支深处 —— 监控循环兜底只会每 5 秒刷一条 traceback, migration
+        从此不再发生。
+        """
+        MB = 1024 * 1024
+        for bad in (None, [1, 2], "abc", {"a": 1}):
+            cfg = self._coerced("protect_vram_mb", bad)
+            self.assertEqual(cfg["protect_vram_mb"], 2048,
+                             "%r 该退回默认值" % (bad,))
+            # 100MiB 远在默认阈值 2048 之下: 退回默认值的话就不该保护。
+            # 换成 3000MiB 的话, 就算退回默认也会被保护, 断言就什么都
+            # 证明不了。
+            self.assertFalse(
+                gm.is_ai_protected(cfg, "x.exe", 1, {1: 100 * MB}),
+                "%r 不该让守卫函数抛, 也不该顺手保护" % (bad,))
+
+    def test_the_guard_survives_a_raw_unnormalized_config(self):
+        u"""守卫函数自己也得扛住没归过一的配置。
+
+        merged_config 是归一的唯一入口, 但 is_ai_protected 是个纯函数,
+        将来任何调用方(新面板、测试替身、别的入口)都可能把没归一过的
+        dict 递进来。上一次(isinstance 检查)就是为这种情况留的, 没有
+        这条用例它就是死代码 —— 而死代码没人会为它负责。
+        """
+        MB = 1024 * 1024
+        cfg = dict(gm.DEFAULT_CONFIG)
+        cfg["protect_vram_mb"] = "2048"      # 故意绕过 merged_config
+        self.assertFalse(gm.is_ai_protected(cfg, "x.exe", 1, {}),
+                         "非数字阈值必须当作没设, 不该抛 TypeError")
+
+    def test_a_negative_threshold_is_clamped_not_honoured(self):
+        u"""负数阈值必须夹到 0(关闭), 不能变成"全都保护"。
+
+        `if limit` 对负数为真, 而 `dedicated >= -N` 恒成立 —— 一路
+        静默把 auto_restart 关掉。下限取 0 就是为这个。
+        """
+        MB = 1024 * 1024
+        cfg = self._coerced("protect_vram_mb", -5)
+        self.assertEqual(cfg["protect_vram_mb"], 0)
+        self.assertFalse(
+            gm.is_ai_protected(cfg, "x.exe", 1, {1: 3000 * MB}),
+            "负数阈值不许变成全都要保护")
+
+class OneContrastRuler(unittest.TestCase):
+    u"""WCAG 亮度和对比度只能有一把尺。
+
+    这个公式此前被抄了三遍: gpu_monitor._lum/_ratio、gpu_tray._luminance/
+    _contrast_ratio、测试自己的 _wcag_luminance/_wcag_contrast。三份今天数值
+    完全一致(拿十个色值逐个对过), 但那只是巧合式的正确。
+
+    要紧的是第三份: 可读性守卫拿它给生产代码发合格证。尺子和被测对象
+    分家的那一刻, 合格证就不再证明任何事 —— 改了生产的公式, 守卫照旧
+    全绿。这和 §NoiseRowFilter 里 row_is_noise 那条 assertIs 是同一条规矩:
+    判据必须只有一个出处, 不然改一处漏一处。
+    """
+
+    def test_the_tray_uses_the_monitors_ruler(self):
+        import gpu_tray
+        self.assertIs(gpu_tray._luminance, gm._lum)
+        self.assertIs(gpu_tray._contrast_ratio, gm._ratio)
+
+    def test_the_legibility_guard_uses_the_monitors_ruler(self):
+        u"""守卫自己那两把尺必须就是生产实现, 不是抄写的副本。
+
+        这里钉的是函数身份而不是数值: 数值一致是今天的结果, 会变;
+        身份一致是结构, 不会因为有人改了公式而悄悄失效。
+        """
+        import inspect
+        body = inspect.getsource(_wcag_luminance)
+        self.assertIn("gm._lum", body,
+                      "守卫的亮度尺必须调生产实现")
+        body = inspect.getsource(_wcag_contrast)
+        self.assertIn("gm._ratio", body,
+                      "守卫的对比度尺必须调生产实现")
+
+    def test_the_rulers_agree_on_the_palette_that_is_actually_shipped(self):
+        u"""三把尺在同一批真实色值上给出同一个数。
+
+        色值取样式表里实际出现的那些(不是随便编的): 这一条同时证明
+        别名没接错、也没人把某一份改成了别的公式。
+        """
+        import gpu_tray
+        import re as _re
+        colors = set(_re.findall(r"color:(#[0-9a-fA-F]{3,6})",
+                                 gm._PANEL_STYLE))
+        self.assertGreater(len(colors), 5, "样式表里的色值太少, 不像真 palette")
+        for color in sorted(colors):
+            hexs = _hex6(color)
+            rgb = tuple(int(hexs[i:i + 2], 16) for i in (1, 3, 5))
+            self.assertAlmostEqual(
+                gm._lum(rgb), gpu_tray._luminance(rgb), places=12,
+                msg="%s 两把尺给出不同亮度" % color)
+
+    def test_a_shorthand_hex_is_expanded_before_measuring(self):
+        u"""#abc 这种三位缩写展开成 #aabbcc, 不然切不出三段。
+
+        _hex6 以前只被对比度用例间接用到, 它自己没被直接钉过。
+        """
+        self.assertEqual(_hex6("#abc"), "#aabbcc")
+        self.assertEqual(_hex6("#a1b2c3"), "#a1b2c3")
+        self.assertAlmostEqual(_wcag_luminance("#abc"),
+                               _wcag_luminance("#aabbcc"), places=12)
+
+class MibConversionHasOneSource(unittest.TestCase):
+    u"""字节 -> MiB 的换算只能写一遍。
+
+    这个除法在 gpu_monitor.py 里有十处、gpu_tray.py 里两处, 而且两种写法
+    混用: 1024*1024 和 1048576。看着只是风格, 但显存的单位口径正是
+    §116 才澄清过的事(MB vs MiB 差 4.86%)。谁哪天把其中一处顺手改成
+    1000*1000, 那一列就和其它十一个界面对不上, 而改的人完全看不出
+    还有别处存在。常量名叫 MIB 而不是 MB, 就是把答案写进名字里。
+    """
+
+    @staticmethod
+    def _fold(node):
+        u"""把"常量 * 常量"之类的表达式折成整数, 折不动给 None。
+
+        ast.literal_eval 不认乘除(它只放行加减, 免得 "a"*10**9 把内存
+        吃穿), 所以这里自己折一层。
+        """
+        if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op,
+                                                     (ast.Mult, ast.FloorDiv)):
+            a = self_fold = None
+            left = MibConversionHasOneSource._fold(node.left)
+            right = MibConversionHasOneSource._fold(node.right)
+            if left is None or right is None:
+                return None
+            return (left * right if isinstance(node.op, ast.Mult)
+                    else left // right)
+        return None
+
+    def _mib_writers(self, mod):
+        src = io.open(mod.__file__, encoding="utf-8").read()
+        tree = ast.parse(src)
+        out = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.BinOp):
+                continue
+            if self._fold(node) == 1048576:
+                out.append(node.lineno)
+        return out
+
+    def test_the_constant_is_the_one_both_modules_share(self):
+        import gpu_tray
+        self.assertIs(gpu_tray.MIB, gm.MIB)
+        self.assertEqual(gm.MIB, 1048576,
+                         "MiB 是 1024*1024; 写成 1000*1000 就成 MB 了")
+
+    def test_the_magic_number_is_written_exactly_once(self):
+        u"""手写的 MiB 换算只允许有一处, 就是 MIB 自己的定义。
+
+        扫描而不是逐个点名: 新加一处手写的, 这条当场红。注释和 docstring
+        里提到 1048576 是讲道理, 不算违规, 所以扫 AST 而不是文本。
+        """
+        for mod, want in ((gm, 1), (gpu_tray, 0)):
+            hits = self._mib_writers(mod)
+            self.assertEqual(
+                len(hits), want,
+                "%s 里有 %d 处手写 MiB 换算(第 %s 行), 只该 %s"
+                % (mod.__name__, len(hits), hits,
+                   "定义一次 MIB" if want else "一处都没有"))
+
+    def test_the_palette_math_still_uses_the_constant(self):
+        u"""抽查一条真实链路, 证明换成常量没有改变任何读数。"""
+        MB = 1024 * 1024
+        snap = {"dedicated_by_pid": {1: 3 * MB},
+                "shared_by_pid": {2: 2 * MB},
+                "util_by_pid": {1: 40.0},
+                "gpu_all_by_pid": {1: 40.0}, "dgpu_util_by_pid": {}}
+        cards = [c[1] for c in gm.panel_summary(snap)]
+        self.assertEqual(cards[2], "3 MiB")
+        self.assertEqual(cards[3], "2 MiB")
+
+
+class HeatPaletteParity(unittest.TestCase):
+    u"""热度三色在两个界面、两套主题下必须是同一个值。
+
+    托盘的热度色来自 gpu_tray._FLUENT_LIGHT / _FLUENT_DARK 两张 palette,
+    Web 的热度色是 _PANEL_STYLE 里写死的 .hot/.warm/.cool 六条 CSS。两边
+    今天完全一致(逐个对过), 但那是靠人记住同步的结果。
+
+    这不是纯风格问题: 热度色是用户判断这台机器现在忙不忙的主要线索,
+    而托盘图标和 Web 面板是同一个数的两个视图。哪天只改了一边, 同一个
+    62.7% 会在托盘里是橙的、在浏览器里是红的, 而两边都没有错到需要报错的
+    程度 —— 于是谁也不改。
+    """
+
+    def _web_heat(self, css, cls):
+        m = re.search(r"\." + cls + r"\{color:(#[0-9a-fA-F]{6})", css)
+        self.assertIsNotNone(m, "%s 没写颜色" % cls)
+        return m.group(1)
+
+    def _split_style(self):
+        css = gm._PANEL_STYLE
+        at = css.find("@media (prefers-color-scheme:dark)")
+        self.assertGreater(at, 0, "深色档的 @media 块没了")
+        return css[:at], css[at:]
+
+    def test_every_heat_colour_matches_the_tray_palette(self):
+        u"""六个色值逐个对: 两套主题 x 热度三档。"""
+        import gpu_tray
+        light_css, dark_css = self._split_style()
+        pairs = ((light_css, gpu_tray._FLUENT_LIGHT, "浅色"),
+                 (dark_css, gpu_tray._FLUENT_DARK, "深色"))
+        for css, pal, label in pairs:
+            for cls in ("hot", "warm", "cool"):
+                self.assertEqual(self._web_heat(css, cls), pal[cls],
+                                 "%s主题的 %s 两界面不同色" % (label, cls))
+
+    def test_the_tray_derives_them_from_the_palette_not_literals(self):
+        u"""托盘那一侧的分发也必须是同一张表, 不许另立门户。
+
+        托盘给控件上色用的是 _HEAT_COLOR 这个由 palette 派生的字典;
+        哪里要是写死了三个色值, 上面那条对账就落空了。
+        """
+        import gpu_tray
+        for cls in ("hot", "warm", "cool"):
+            self.assertEqual(gpu_tray._HEAT_COLOR[cls],
+                             gpu_tray._PALETTE[cls],
+                             "%s 没有从 palette 派生" % cls)
+
+
+class SparkGeometryConstants(unittest.TestCase):
+    u"""趋势图的几何常量在两个界面、三处代码里必须是同一个数。
+
+    46 这个数出现在四个地方: gpu_monitor._SPARK_H、CSS 的 .sparkwrap /
+    .spark 两个 height、gpu_tray 的 tk.Canvas(height=46)。源码注释里
+    已经写明必须等于 _SPARK_H —— CSS 高度和 viewBox 不一致时纵向会跟着
+    缩放, 阈值线的位置就算错了。但"必须相等"从来只是一句注释, 没有任何
+    东西检查它。180 同理: _SPARK_MAX_POINTS、cmd_monitor 里的
+    deque(maxlen=180)、以及 1800 秒窗口(180 点 x 每 10 秒一点)。
+
+    这类分叉的后果不是崩, 是错位: 阈值线画在错误的高度上, 而用户拿着它
+    判断"什么时候会被判成高占用"—— 那条线在骗人。
+    """
+
+    def _tray_source(self):
+        import gpu_tray
+        return io.open(gpu_tray.__file__, encoding="utf-8").read()
+
+    def test_the_canvas_height_matches_the_svg_height(self):
+        u"""托盘的 Canvas 高度就是 _SPARK_H, 不许另写一个 46。"""
+        tray = self._tray_source()
+        self.assertIn("tk.Canvas(root, height=%d" % gm._SPARK_H, tray,
+                      "托盘 Canvas 高度和 _SPARK_H 不一致: 纵向会跟着缩放, "
+                      "阈值线的位置就算错了")
+
+    def test_the_css_height_matches_the_svg_height(self):
+        u"""CSS 那两条 height 也必须是 _SPARK_H。"""
+        want = "height:%dpx" % gm._SPARK_H
+        self.assertIn(".sparkwrap{position:relative;" + want,
+                      gm._PANEL_STYLE)
+        self.assertIn(".spark{display:block;width:100%;" + want,
+                      gm._PANEL_STYLE)
+
+    def test_the_ring_buffer_matches_the_point_cap(self):
+        u"""cmd_monitor 里的 deque 上限就是 _SPARK_MAX_POINTS。"""
+        mon = io.open(gm.__file__, encoding="utf-8").read()
+        want = "deque(maxlen=%d)" % gm._SPARK_MAX_POINTS
+        self.assertIn(want, mon,
+                      "环形队列上限和点数上限不是同一个数: 趋势图要么拿不到"
+                      "本该能画的点, 要么白存一批永远画不出去的")
+
+    def test_the_window_is_the_cap_times_one_sampling_period(self):
+        u"""窗口秒数 = 点数上限 x 采样周期(每 10 秒一点)。"""
+        self.assertEqual(gm._SPARK_WINDOW_S, gm._SPARK_MAX_POINTS * 10,
+                         "窗口和点数上限对不上: 要么白存一批窗口外的点, "
+                         "要么窗口内还有没画出来的")
+
+
+class PanelScriptJsBehaviour(unittest.TestCase):
+    u"""面板 JS 的行为测试: 真跑一遍, 不是查字符串在不在。
+
+    Python 侧的断言(WebPanelStaleBudget 那几条)只能查文本在不在。
+    这一轮就抓到过一次: 回退暂停分支的计时时, 把 if(paused){...} 删成了
+    语法错误(if 后面直接跟 else) —— Python 断言全绿, 而页面 JS 整个
+    跑不起来, 面板一秒都不刷新。字符串断言对拼错了完全失明。
+
+    所以这里把 _PANEL_SCRIPT 的真值抽出来交给 node 跑, 用假 DOM 驱动
+    停更判定, 断言它说出口的话。node 不在 PATH 时跳过(CI 上未必有),
+    但不静默: 跳过的理由写在消息里。
+    """
+
+    def setUp(self):
+        self.node = shutil.which("node")
+        if not self.node:
+            self.skipTest("PATH 里没有 node: 面板 JS 的行为测试跑不了。"
+                          "装一个 Node.js 就能让它生效 —— 它守的是"
+                          "字符串断言失明的那一类缺陷")
+
+    def _panel_js(self):
+        u"""从 gpu_monitor 里取 _PANEL_SCRIPT 的真值(ast 取常量)。
+
+        不用正则扫源码: 注释里的中文会被当成字符串字面量抠出来,
+        拼出来的 JS 直接语法错误。
+        """
+        import ast
+        src = io.open(gm.__file__, encoding="utf-8").read()
+        for node in ast.parse(src).body:
+            if isinstance(node, ast.Assign) and any(
+                    getattr(t, "id", None) == "_PANEL_SCRIPT"
+                    for t in node.targets):
+                return node.value.value
+        self.fail("_PANEL_SCRIPT 不在 gpu_monitor 里了")
+
+    def test_the_stale_banner_behaves_in_every_state(self):
+        u"""七种(暂停 x 数据新旧 x 宽限)组合下, 顶部那行说得对。"""
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "panel_stale_check.js")
+        self.assertTrue(os.path.exists(script),
+                        "缺少 tests/panel_stale_check.js")
+        env = dict(os.environ)
+        env["PANEL_JS"] = self._panel_js()
+        r = subprocess.run([self.node, script], capture_output=True,
+                           text=True, encoding="utf-8", env=env,
+                           timeout=60)
+        self.assertEqual(r.returncode, 0,
+                         "面板 JS 行为测试挂了:\n" + r.stdout + r.stderr)
+        self.assertIn("all panel stale checks passed", r.stdout,
+                      r.stdout + r.stderr)
+
+class WebPanelFilterBehaviour(unittest.TestCase):
+    u"""Web 面板筛选函数 f() 的行为测试: 真跑, 不是查字符串在不在。
+
+    WebPanelFilter 那五条断言查的是 td.n / indexOf / t++ 这些文本在不在。
+    §131 已经证明这类断言会失明(把 JS 删成语法错误它们照样绿), 而筛选是
+    面板上交互最多的一个功能, 值得真跑一遍。
+
+    这里复用同一套脚手架: ast 取 _PANEL_SCRIPT 真值 -> 环境变量传给 node ->
+    假 DOM 驱动 f() -> 断言它让哪些行可见、提示行说什么。
+    """
+
+    def setUp(self):
+        self.node = shutil.which("node")
+        if not self.node:
+            self.skipTest("PATH 里没有 node: 面板 JS 的行为测试跑不了。"
+                          "装一个 Node.js 就能让它生效 —— 它守的是"
+                          "字符串断言失明的那一类缺陷")
+
+    def _panel_js(self):
+        import ast
+        src = io.open(gm.__file__, encoding="utf-8").read()
+        for node in ast.parse(src).body:
+            if isinstance(node, ast.Assign) and any(
+                    getattr(t, "id", None) == "_PANEL_SCRIPT"
+                    for t in node.targets):
+                return node.value.value
+        self.fail("_PANEL_SCRIPT 不在 gpu_monitor 里了")
+
+    def test_the_filter_behaves_in_every_state(self):
+        u"""十三种筛选输入下, 可见行与提示行都对。"""
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "panel_filter_check.js")
+        self.assertTrue(os.path.exists(script),
+                        "缺少 tests/panel_filter_check.js")
+        env = dict(os.environ)
+        env["PANEL_JS"] = self._panel_js()
+        r = subprocess.run([self.node, script], capture_output=True,
+                           text=True, encoding="utf-8", env=env,
+                           timeout=60)
+        self.assertEqual(r.returncode, 0,
+                         "面板筛选行为测试挂了:\n" + r.stdout + r.stderr)
+        self.assertIn("all panel filter checks passed", r.stdout,
+                      r.stdout + r.stderr)
+
+class PanelConnBehaviour(unittest.TestCase):
+    u"""断连提示 connshow/connhide 的行为测试: 真跑, 不是查字符串在不在。
+
+    WebPanelLiveUpdate 那几条断言查的是 ++fails>=3 / connhide() / r.ok 这些
+    文本在不在。§131 已经证明这类断言会失明, 而"取不到数据时页面说什么"
+    是用户判断监控是否还活着的唯一依据, 值得真跑一遍。
+
+    复用 §131/§132 那套脚手架: ast 取 _PANEL_SCRIPT 真值 -> 环境变量传给
+    node -> 可控的假 fetch 驱动 pull() -> 断言 conn 的终态。
+    """
+
+    def setUp(self):
+        self.node = shutil.which("node")
+        if not self.node:
+            self.skipTest("PATH 里没有 node: 面板 JS 的行为测试跑不了。"
+                          "装一个 Node.js 就能让它生效 —— 它守的是"
+                          "字符串断言失明的那一类缺陷")
+
+    def _panel_js(self):
+        import ast
+        src = io.open(gm.__file__, encoding="utf-8").read()
+        for node in ast.parse(src).body:
+            if isinstance(node, ast.Assign) and any(
+                    getattr(t, "id", None) == "_PANEL_SCRIPT"
+                    for t in node.targets):
+                return node.value.value
+        self.fail("_PANEL_SCRIPT 不在 gpu_monitor 里了")
+
+    def test_the_disconnect_banner_behaves_in_every_state(self):
+        u"""七种(失败次数 x 是否恢复 x 是否 502)组合下, 顶部那行说得对。"""
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "panel_conn_check.js")
+        self.assertTrue(os.path.exists(script),
+                        "缺少 tests/panel_conn_check.js")
+        env = dict(os.environ)
+        env["PANEL_JS"] = self._panel_js()
+        r = subprocess.run([self.node, script], capture_output=True,
+                           text=True, encoding="utf-8", env=env,
+                           timeout=60)
+        self.assertEqual(r.returncode, 0,
+                         "面板断连行为测试挂了:\n" + r.stdout + r.stderr)
+        self.assertIn("all panel conn checks passed", r.stdout,
+                      r.stdout + r.stderr)
+
+class PanelJsHarnessSelfCheck(unittest.TestCase):
+    u"""脚手架自检: drain() 给的 tick 必须够一轮 pull() 落地。
+
+    drain 的 tick 数曾经是拍脑袋的 magic number。它不够时的失败形态很坏:
+    断言读到还没落地的 Promise 状态, 看起来像产品有 bug, 实际是脚手架
+    没等够。页面里再多一级 then, 这里会先红。
+
+    判据是 PARTS 元素的 innerHTML —— 只有 pull() 的成功路径会写它,
+    页面初始化时不碰(不像 hint.textContent, f() 一启动就写了)。
+    """
+
+    def setUp(self):
+        self.node = shutil.which("node")
+        if not self.node:
+            self.skipTest("PATH 里没有 node: 面板 JS 的行为测试跑不了。"
+                          "装一个 Node.js 就能让它生效")
+
+    def _panel_js(self):
+        import ast
+        src = io.open(gm.__file__, encoding="utf-8").read()
+        for node in ast.parse(src).body:
+            if isinstance(node, ast.Assign) and any(
+                    getattr(t, "id", None) == "_PANEL_SCRIPT"
+                    for t in node.targets):
+                return node.value.value
+        self.fail("_PANEL_SCRIPT 不在 gpu_monitor 里了")
+
+    def test_one_pull_lands_within_the_drain_budget(self):
+        u"""drain(1) 之后, 成功路径该写的都必须写完。"""
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "panel_harness_selfcheck.js")
+        self.assertTrue(os.path.exists(script),
+                        "缺少 tests/panel_harness_selfcheck.js")
+        env = dict(os.environ)
+        env["PANEL_JS"] = self._panel_js()
+        r = subprocess.run([self.node, script], capture_output=True,
+                           text=True, encoding="utf-8", env=env,
+                           timeout=60)
+        self.assertEqual(r.returncode, 0,
+                         "脚手架自检挂了:\n" + r.stdout + r.stderr)
+        self.assertIn("harness self-check passed", r.stdout,
+                      r.stdout + r.stderr)
 
 class CrossSurfaceRowOrder(unittest.TestCase):
     """同一份快照, --list / Web 面板 / 托盘三面必须落在同一个行序上。
@@ -5162,12 +6541,12 @@ class PanelSummaryCards(unittest.TestCase):
         return {**ModeDisplay.SNAP, **kw}
 
     def _card(self, snap, label):
-        return {l: (t, c) for l, t, c in gm.panel_summary(snap)}[label]
+        return {l: (t, c) for l, t, c, _tip in gm.panel_summary(snap)}[label]
 
     def test_an_idle_machine_still_shows_all_six_cards(self):
         summary = gm.panel_summary(self._snap())
-        self.assertEqual([t for _l, t, _c in summary],
-                         ["0.0%", "0.0%", "0 MB", "0 MB", "0", "40%"],
+        self.assertEqual([t for _l, t, _c, _tip in summary],
+                         ["0.0%", "0.0%", "0 MiB", "0 MiB", "0", "40%"],
                          "开机空转也要有这六项, 少一项面板就塌一块")
 
     def test_missing_or_null_maps_are_not_fatal(self):
@@ -5176,8 +6555,8 @@ class PanelSummaryCards(unittest.TestCase):
                           "dgpu_util_by_pid": None, "shared_by_pid": None,
                           "dedicated_by_pid": None, "threshold": None}):
             with self.subTest(snap=snap):
-                texts = [t for _l, t, _c in gm.panel_summary(snap)]
-                self.assertEqual(texts, ["0.0%", "0.0%", "0 MB", "0 MB",
+                texts = [t for _l, t, _c, _tip in gm.panel_summary(snap)]
+                self.assertEqual(texts, ["0.0%", "0.0%", "0 MiB", "0 MiB",
                                          "0", "0%"])
 
     def test_occupancy_is_the_busiest_process_not_the_sum(self):
@@ -5191,8 +6570,8 @@ class PanelSummaryCards(unittest.TestCase):
         mb = 1024 * 1024
         snap = self._snap(dedicated_by_pid={1: mb, 2: 2 * mb},
                           shared_by_pid={1: 3 * mb, 3: mb})
-        self.assertEqual(self._card(snap, "专用显存")[0], "3 MB")
-        self.assertEqual(self._card(snap, "共享显存")[0], "4 MB")
+        self.assertEqual(self._card(snap, "专用显存")[0], "3 MiB")
+        self.assertEqual(self._card(snap, "共享显存")[0], "4 MiB")
 
     def test_the_process_count_is_the_union_of_all_maps(self):
         snap = self._snap(util_by_pid={1: 5.0},
@@ -5214,6 +6593,41 @@ class PanelSummaryCards(unittest.TestCase):
         self.assertIn("核显占用 62.7%", title,
                       "悬停和汇总卡必须逐字同一个数, 不能一个取整一个小数")
 
+
+    def test_every_card_carries_a_nonempty_tip(self):
+        """六张卡都必须有悬停解释, 空的等于没有实现。
+
+        panel_summary 是四元组之后, 第四项空串会安静地退化成旧行为 ——
+        HTML 里 title='' 是个合法属性, 什么测试都不会红。所以这里逐个
+        卡查非空, 并且规定最短长度, 免得将来塞个"占用"两个字交差。
+        """
+        for label, _t, _c, tip in gm.panel_summary(ModeDisplay.SNAP):
+            self.assertTrue(tip.strip(), label + " 缺悬停解释")
+            self.assertGreater(len(tip), 10)
+
+    def test_the_card_tip_reaches_the_html_title(self):
+        """Web 卡片悬停 = panel_summary 第四项, 不是另写的一套文案。
+
+        Web 端没有托盘那种 Tk 弹泡, title 属性就是全部实现; 口径跑偏的
+        话两边说着两件事, 用户只能信一个。
+        """
+        html = gm.panel_html(ModeDisplay.SNAP, {})
+        for label, _t, _c, tip in gm.panel_summary(ModeDisplay.SNAP):
+            self.assertIn(f"<div class=card title='{tip}'>"
+                          f"<span>{label}</span>", html)
+
+    def test_every_header_carries_a_nonempty_tip(self):
+        """八个表头都要有解释: 专用MB 和 GPU% 光看列名看不出口径。
+
+        表头解释放在 _HDR_TIPS, 与托盘列头共用; 漏一个的表现是那一列
+        悬停什么都不弹, 而别的列都弹 —— 很难看, 也看不出是漏了。
+        """
+        for col in ("name", "pid", "gpu", "igpu", "dgpu",
+                    "dmem", "smem", "pref"):
+            tip = gm._HDR_TIPS.get(col, "")
+            self.assertTrue(tip.strip(), col + " 缺表头解释")
+            html = gm.panel_html(ModeDisplay.SNAP, {})
+            self.assertIn(gm._tip(col) + ">", html)
 
     def test_summary_cards_do_not_emit_an_empty_class_attribute(self):
         """不需要热度类的卡不能输出 `class=`。
@@ -5372,7 +6786,7 @@ class TrayPanelChrome(unittest.TestCase):
 
     def test_summary_cards_take_the_shared_numbers(self):
         cards = {label: self._Label()
-                 for label, _t, _c in gm.panel_summary({})}
+                 for label, _t, _c, _tip in gm.panel_summary({})}
         snap = self._snap({100: (50.0, 2.0)}, util={100: 70.0})
         self.app.snapshot = snap
         self._prepare({100: "heavy.exe"})
@@ -5447,7 +6861,7 @@ class TrayPanelChrome(unittest.TestCase):
                                hint)
         text = hint.calls[-1][0]
         self.assertIn("显示 1/1 行", text)
-        self.assertIn("(已隐藏 1 个 0.0% / 0MB)", text)
+        self.assertIn("(已隐藏 1 个 0.0% / 0MiB)", text)
 
     def test_all_zero_rows_never_reach_the_table(self):
         """0.0% / 0MB / 0MB 的行: Web 面板按同一个判据滤掉。"""
@@ -6192,7 +7606,7 @@ class PanelHtmlProcessNames(unittest.TestCase):
         snap = {**ModeDisplay.SNAP, "gpu_all_by_pid": {100: 50.0},
                 "pid_names": {100: "heavy.exe"}}
         html = gm.panel_html(snap, {})
-        self.assertIn("<th class=n>进程</th>", html)
+        self.assertIn("<th class=n" + gm._tip("name") + ">进程</th>", html)
         self.assertIn("<td class=n>heavy.exe</td><td class=pid>100</td>",
                       html)
 
@@ -6249,7 +7663,10 @@ class WebPanelPrefColumn(unittest.TestCase):
 
     def test_the_header_gains_the_column(self):
         html = gm.panel_html(ModeDisplay.SNAP, {})
-        self.assertIn("<th>专用MB</th><th>共享MB</th><th>迁移状态</th>",
+        for col, label in (("dmem", "专用MiB"), ("smem", "共享MiB"),
+                           ("pref", "迁移状态")):
+            self.assertIn("<th title='" + gm._HDR_TIPS[col] + "'>"
+                          + label + "</th>",
                       html)
 
     def test_a_pinned_process_is_marked(self):
@@ -6341,6 +7758,50 @@ class WebPanelResponsive(unittest.TestCase):
         self.assertIn("</table></div>", html)
         self.assertIn(".tw{overflow-x:auto}", gm._PANEL_STYLE)
 
+
+class FilterParity(unittest.TestCase):
+    u"""托盘筛选与 Web 筛选必须是同一个口径。
+
+    Web 侧匹配 td.n / td.pid 两个单元格; 托盘侧对应名字与 PID。
+    整行 textContent 匹配的老写法会把百分比列也算进去 —— 输入 "12"
+    会留下独显% 12.3 的行, 还让人以为它真的在跑 12%。托盘那边
+    不会, 于是同一个筛选词在两个界面给出两张名单。
+    """
+
+    def setUp(self):
+        self.app = object.__new__(gpu_tray.TrayApp)
+        self.app.filter_text = ""
+
+    def test_a_number_only_needle_catches_the_pid_not_the_percent(self):
+        u"""纯数字词只该命中 PID, 不该顺手把 GPU% 列捎上。
+
+        这一条拿"名字里也带这个数字"做对照: 两种命中都合法,
+        但要分得清是哪一种。
+        """
+        self.app._set_filter("200")
+        self.assertTrue(self.app._matches_filter("steam.exe", 200))
+        self.assertFalse(self.app._matches_filter("v2ray.exe", 100),
+                          "名字里没有 200、PID 也不是 200, 不该留下")
+
+    def test_a_pid_needle_is_not_a_substring_of_a_longer_pid(self):
+        u"""PID 匹配也是子串, 这一条只是把这个事实讲明白。
+
+        托盘与 Web 都是 indexOf 语义, 谁想改成"整串相等"都得同时
+        改两处 —— 这条用例就是那个提醒。
+        """
+        self.app._set_filter("20")
+        self.assertTrue(self.app._matches_filter("steam.exe", 200))
+
+    def test_blank_and_noise_needles_keep_the_whole_table(self):
+        u"""空串 / 全空格都等于"不筛选", 不是"筛掉一切"。"""
+        for needle in ("", "   ", None):
+            self.app._set_filter(needle)
+            self.assertTrue(self.app._matches_filter("a.exe", 7))
+
+    def test_the_web_side_reads_the_same_two_cells(self):
+        u"""Web 那边也钉一下: 匹配的是 td.n 和 td.pid, 不是整行。"""
+        self.assertIn("td.n", gm._PANEL_SCRIPT)
+        self.assertIn("td.pid", gm._PANEL_SCRIPT)
 
 class WebPanelFilter(unittest.TestCase):
     """筛选口径必须和托盘面板 _matches_filter 一致: 只认进程名和 PID。"""
@@ -6517,8 +7978,8 @@ class WebPanelLiveUpdate(unittest.TestCase):
         self.assertEqual(len(ids), 1, "没找到 PARTS 清单")
         parts = re.findall(r"'([a-z]+)'", ids[0])
         self.assertEqual(parts, ["policy", "gpuinfo", "cards", "spark",
-                                 "rows", "hint", "hidden", "snapts",
-                                 "paused", "staleafter"],
+                                 "rows", "counters", "hint", "hidden",
+                                 "snapts", "paused", "staleafter"],
                          parts)
         # hidden 只有真滤掉了噪声行才渲染, 所以这里用带噪声行的快照
         snap = {**ModeDisplay.SNAP,
@@ -6604,9 +8065,18 @@ class WebPanelLiveUpdate(unittest.TestCase):
         # 暂停时的文案, 不能和“监控进程可能已停止”混用
         self.assertIn("监控已暂停", script)
         self.assertIn("从托盘菜单或热键恢复", script)
-        # 暂停时不详判停更: 两个原因都会让 snap_ts 停走,
-        # 不分清就会把人为暂停说成监控死掉
-        self.assertIn("if(!paused&&dts", script)
+        # 暂停与死掉要分开说, 但暂停也要报数据年龄 —— 见下面三条与
+        # PanelScriptJsBehaviour 的行为测试
+        # 暂停时也要报数据年龄: 老代码暂停分支只给一句数据停在,
+        # 暂停三分钟和三小时在页面上长得一模一样
+        self.assertIn("staleshow(dts*1000,'已暂停')", script,
+                      "暂停超时后要说出数据停了多久")
+        self.assertIn("else if(dts&&Date.now()", script,
+                      "未暂停的分支不能被暂停分支吃掉")
+        # staleshow 的原因由调用方给, 否则暂停时会说成可能已停止
+        self.assertIn("function staleshow(ts,why)", script)
+        self.assertIn("why||'监控进程可能已停止'", script,
+                      "默认原因要留在未暂停那一侧")
         # 暂停标记必须跟局部刷新一起换
         self.assertIn("'paused'", script)
 
@@ -6661,7 +8131,7 @@ class NoiseRowFilter(unittest.TestCase):
         snap = {**ModeDisplay.SNAP,
                 "gpu_all_by_pid": {100: 50.0, 300: 0.0},
                 "util_by_pid": {100: 50.0, 300: 0.0}}
-        texts = [t for _l, t, _c in gm.panel_summary(snap)]
+        texts = [t for _l, t, _c, _tip in gm.panel_summary(snap)]
         self.assertEqual(texts[4], "2")
         self.assertEqual(gm.hidden_noise_count(snap), 1)
 
@@ -6931,16 +8401,21 @@ class CollectGpuSampleWindow(unittest.TestCase):
         gm.collect_gpu_sample()
         self.assertEqual(self.slept, [1.0])
 def _wcag_luminance(hexs):
-    """WCAG 相对亮度。"""
-    ch = [int(hexs[i:i + 2], 16) / 255.0 for i in (1, 3, 5)]
-    ch = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-          for c in ch]
-    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+    """WCAG 相对亮度。
+
+    直接调生产实现的 gm._lum: 测试用的尺和生产用的尺必须是同一把。
+    以前这里自己抄了一遍公式 —— 三份抄写今天数值一致, 但谁改了生产
+    那份, 这条守卫还在按旧公式发合格证。
+    """
+    return gm._lum(_hex6_rgb(_hex6(hexs)))
+
+
+def _hex6_rgb(hexs):
+    return tuple(int(hexs[i:i + 2], 16) for i in (1, 3, 5))
 
 
 def _wcag_contrast(fg, bg):
-    a, b = _wcag_luminance(fg), _wcag_luminance(bg)
-    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    return gm._ratio(_hex6_rgb(_hex6(fg)), _hex6_rgb(_hex6(bg)))
 
 
 def _hex6(color):

@@ -335,7 +335,7 @@ def _video_controller_ram():
                 # —— 独显被判成核显, 反过来把进程往集显上赶。只在负数时补回
                 # 2^32: 正数原样留下, 真的是 8GB 的卡仍读作 8192。
                 ram += 1 << 32
-            mb[name.strip().lower()] = ram // (1024 * 1024)
+            mb[name.strip().lower()] = ram // MIB
     except Exception:
         pass
     _DEDICATED_MB = mb
@@ -776,15 +776,6 @@ def save_ignore_process(config_path, pname):
 
 # 这些常驻组件的高核显占用属于正常行为 (桌面合成/图标/输入法等),
 # 迁移它们有害无益; exclude_defaults=false 可关闭
-# AI/推理服务进程: 模型加载到显存需要数分钟, 且空闲时利用率很低。
-# 对它们做"省电切回"或"自动重启"会毁掉已加载的模型, 必须完全豁免。
-DEFAULT_AI_PROCESSES = [
-    "ollama.exe", "llama-server.exe", "llama-cli.exe", "llama-quantize.exe",
-    "koboldcpp.exe", "comfyui.exe", "lm studio.exe", "gpt4all.exe",
-    "jan.exe", "vllm.exe", "sglang.exe", "tabbyapi.exe", "textgen.exe",
-    "webui.exe", "sd-webui.exe", "stable-diffusion.exe", "gguf.exe",
-]
-
 DEFAULT_EXCLUDE_PROCESSES = [
     "dwm.exe", "explorer.exe", "taskmgr.exe", "searchhost.exe",
     "shellexperiencehost.exe", "startmenuexperiencehost.exe",
@@ -796,13 +787,15 @@ DEFAULT_EXCLUDE_PROCESSES = [
 DEFAULT_CONFIG = {
     "exclude_defaults": True,    # 启用上面的内置排除名单
     "threshold_percent": 50.0,   # 核显利用率超过该值视为高占用
-    "vram_threshold_mb": 1024,   # 核显显存(专用+共享)超该 MB 也触发（0 关闭）
+    # _mb 后缀是接口字节数的 MiB 口径(1048576 字节), 键名不改: 现网
+    # config.json 已经用了这个名字, 改了等于把用户的阈值清零
+    "vram_threshold_mb": 1024,   # 核显显存(专用+共享)超该值也触发（0 关闭）
     "sustain_samples": 5,        # 连续多少个采样周期超标才迁移
     "interval_seconds": 5,       # 采样周期
     "auto_restart": False,       # 自动结束并重启超标进程（使设置立即生效）
     "auto_restart_processes": [],  # 仅对这些进程自动重启；留空 = 对所有超标进程
     "ai_processes": [],          # AI 名单补充: 永不省电切回/自动重启
-    "protect_vram_mb": 2048,     # 独显专用显存>=该值按 AI 保护 (0 关闭)
+    "protect_vram_mb": 2048,     # 独显专用显存 >= 该值按 AI 保护 (0 关闭)
     "confirm_mode": False,       # 迁移前弹窗确认（确认/忽略都会被记住）
     "ignore_processes": [],      # 确认模式下选择“忽略”的进程名，不再询问
     "power_saver_notify": False, # 独显上低负载程序提醒（可切回核显省电）
@@ -818,8 +811,6 @@ DEFAULT_CONFIG = {
     "normalize_total": False,    # true=所有进程总和强制<=100% (单进程读数会缩水);
                                  # false=任务管理器口径, 单进程读数最准确
     "game_processes": [],        # 游戏名单: 自动确保独显+免打扰+时长统计
-    "ai_processes": [],          # AI 名单补充: 这些进程永不省电切回/自动重启
-    "protect_vram_mb": 2048,     # 独显专用显存>=该值的进程按 AI 保护 (0 关闭)
     "power_aware": True,         # 电源感知: 用电池时自动切换省电策略
     "battery_threshold_percent": 40,   # 电池下的迁移阈值
     "nvml_temp": True,           # 独显温度监控 (NVML, NVIDIA 驱动自带)
@@ -843,12 +834,24 @@ _NUMBER_RULES = {   # key: (下限, 上限, 取整)
     "power_saver_samples": (1, None, True),
     "temp_limit": (1, None, True),
     "web_port": (0, 65535, True),
+    # protect_vram_mb 以前不在这张表里(和 ai_processes 是同一类漏登记, 见
+    # _LIST_KEYS 那段): 手改写错时它原样留在配置里, 而 is_ai_protected 拿
+    # 它做 `dedicated >= limit * 1024 * 1024` —— 字符串/列表在这里直接
+    # TypeError; 负数更糟, `if limit` 为真而阈值恒负, 于是每个进程都被
+    # 判成 AI 保护, auto_restart 被静默关掉。0 是合法的"关闭", 所以下限取 0。
+    "protect_vram_mb": (0, None, True),
 }
 _BOOL_KEYS = ("exclude_defaults", "auto_restart", "confirm_mode",
               "power_saver_notify", "power_saver_auto", "notify",
               "notify_fullscreen_ignore", "history", "normalize_total",
               "power_aware", "nvml_temp", "log_to_file")
-_LIST_KEYS = ("auto_restart_processes", "ignore_processes",
+# ai_processes 以前不在这个表里: 手改 config.json 写成 "ollama.exe" 时
+# 它原样以字符串留在配置里, is_ai_protected 拿 {x.lower() for x in ...} 一
+# 逐字符展开成 {'o','l','a','m','.','e','x'}, 用户的 AI 名单一条都匹配不上
+# —— 静默失效。写成 null 更糟: None 一路传到 is_ai_protected, set 推导式
+# 当场 TypeError, 之后每一轮监控都抛一次并把整个迁移分支跳掉。
+# 所以新加列表型配置项时必须往这里登记, 别只改 DEFAULT_CONFIG。
+_LIST_KEYS = ("ai_processes", "auto_restart_processes", "ignore_processes",
               "exclude_processes", "exclude_full_paths", "force_igpu_names",
               "game_processes")
 
@@ -954,7 +957,7 @@ def merged_config(data):
 SETTINGS_LABELS = {
     "threshold_percent": "迁移阈值 %",
     "battery_threshold_percent": "电池阈值 %",
-    "vram_threshold_mb": "显存阈值 MB",
+    "vram_threshold_mb": "显存阈值 MiB",
     "interval_seconds": "采样周期 秒",
     "temp_limit": "温度提醒 °C",
     "web_port": "Web 端口",
@@ -1195,7 +1198,11 @@ def heat_class(pct):
 
 
 def panel_summary(snap):
-    """面板顶部那几个汇总数, 返回 [(标签, 文本, 热度类)]。
+    """面板顶部那几个汇总数, 返回 [(标签, 文本, 热度类, 悬停解释)]。
+
+    第四项是悬停解释: 汇总卡只有“标签 + 数字”, 光看这两样分不清
+    “最强引擎”和“跨适配器求和”分别是什么。Web 卡片用 title
+    呈现, 托盘端用弹泡呈现, 两边都从同一份取。
 
     口径只有一份, 托盘面板和 Web 面板都从这里取: 占用取"最强引擎"
     (任务管理器口径), 显存取跨适配器求和。界面自己再算一遍就会出现
@@ -1205,19 +1212,25 @@ def panel_summary(snap):
     dgpu = snap.get("dgpu_util_by_pid") or {}
     ig_pct = max(util.values()) if util else 0.0
     dg_pct = max(dgpu.values()) if dgpu else 0.0
-    ded_mb = sum((snap.get("dedicated_by_pid") or {}).values()) / 1048576
-    sh_mb = sum((snap.get("shared_by_pid") or {}).values()) / 1048576
+    ded_mb = sum((snap.get("dedicated_by_pid") or {}).values()) / MIB
+    sh_mb = sum((snap.get("shared_by_pid") or {}).values()) / MIB
     pids = set()
     for key in ("util_by_pid", "gpu_all_by_pid", "dgpu_util_by_pid",
                 "shared_by_pid", "dedicated_by_pid"):
         pids |= set(snap.get(key) or {})
     return [
-        ("核显占用", f"{ig_pct:.1f}%", heat_class(ig_pct)),
-        ("独显占用", f"{dg_pct:.1f}%", heat_class(dg_pct)),
-        ("专用显存", f"{ded_mb:.0f} MB", ""),
-        ("共享显存", f"{sh_mb:.0f} MB", ""),
-        ("GPU 进程", str(len(pids)), ""),
-        ("生效阈值", f"{snap.get('threshold') or 0:g}%", ""),
+        ("核显占用", f"{ig_pct:.1f}%", heat_class(ig_pct),
+         "核显上最忙的那个进程占核显的百分比。多个进程不相加, 取最大值。"),
+        ("独显占用", f"{dg_pct:.1f}%", heat_class(dg_pct),
+         "独显上最忙的那个进程占独显的百分比。"),
+        ("专用显存", f"{ded_mb:.0f} MiB", "",
+         "各进程专用显存之和。专用显存只给拥有它的显卡用。"),
+        ("共享显存", f"{sh_mb:.0f} MiB", "",
+         "各进程共享显存之和。共享显存是系统内存虚拟成显存, 核显独显都能往里写。"),
+        ("GPU 进程", str(len(pids)), "",
+         "本次采样里出现过的进程数。百分比为零也算, 因为他们已经打开过 GPU 计数器。"),
+        ("生效阈值", f"{snap.get('threshold') or 0:g}%", "",
+         "当前生效的迁移阈值, 已经把电池覆盖算进去。"),
     ]
 
 
@@ -1247,6 +1260,11 @@ def spark_ymax(pts, threshold=0):
 
 
 _WEB_STALE_MIN_S = 25.0   # Web 面板停更判定下限(秒): 短周期时的灵敏度
+
+# 字节 -> MiB。口径只有一份: 全库显存换算都走它, 不许再各自写
+# 1024*1024 或 1048576 —— 两种写法混在同一文件里, 迟早有一处被改成
+# 1000*1000(那是 MB 不是 MiB, 差 4.86%), 而改的人看不出还有十处。
+MIB = 1024 * 1024
 _SPARK_WINDOW_S = 1800     # 趋势图窗口: 最新一点往前 30 分钟
 _SPARK_MAX_POINTS = 180    # 内存里最多留多少个点
 
@@ -1372,8 +1390,8 @@ def hidden_noise_count(snap):
     shm = snap.get("shared_by_pid") or {}
     gpu = snap.get("gpu_all_by_pid") or {}
     return sum(1 for pid in pids
-               if row_is_noise(gpu.get(pid, 0), ded.get(pid, 0) / 1048576,
-                               shm.get(pid, 0) / 1048576))
+               if row_is_noise(gpu.get(pid, 0), ded.get(pid, 0) / MIB,
+                               shm.get(pid, 0) / MIB))
 
 
 NOISE_UTIL_PCT = 0.1   # 利用率噪声地板: row_is_noise 与"当前所在"共用同一档
@@ -1593,6 +1611,7 @@ _PANEL_STYLE = (
     "#hint{color:#5d5d5d;font-size:12px;margin:8px 0 0}"
     "#conn{color:#b02a1a;font-size:12px;margin:0 0 6px}"
     "#hidden{color:#666666;font-size:12px;margin:2px 0 0}"
+    "#counters{color:#666666;font-size:12px;margin:2px 0 0}"
     # 窄屏(手机)上表格横向滚动, 不把布局撑破
     ".tw{overflow-x:auto}"
     # 下面两行的 46 必须等于 _SPARK_H: CSS 高度和 viewBox 不一致时纵向会
@@ -1629,6 +1648,7 @@ _PANEL_STYLE = (
     "#hint{color:#b4b4b4}"
     "#conn{color:#ff99a4}"
     "#hidden{color:#9a9a9a}"
+    "#counters{color:#9a9a9a}"
     ".sparkempty{color:#b4b4b4}"
     ".spark .thr{stroke:#ff99a4}"
     ".spark .line{stroke:#6ccb5b}"
@@ -1681,11 +1701,15 @@ _PANEL_SCRIPT = (
     # 静默死亡时就是这样, Web 线程还活着, 每秒发回的都是同一份数。
     # 数据时刻取自服务端渲染的 #snapts(毫秒 epoch), 25 秒约等于
     # 两三个采样周期: 采样卡住或循环死掉, 都该说出来。
-    "function staleshow(ts){conn.textContent='数据已停更, 最后更新 '"
+    # why 由调用方给: 未暂停时是"可能已停止", 暂停时是"已暂停"。
+    # 暂停分支也走这个函数, 为的是让用户看见数据停了多久 ——
+    # 老代码暂停时只报"数据停在 HH:MM:SS", 暂停三分钟和三小时
+    # 长得一模一样。
+    "function staleshow(ts,why){conn.textContent='数据已停更, 最后更新 '"
     "+new Date(ts).toLocaleTimeString('zh-CN',"
-    "{hour12:false})+' (监控进程可能已停止)';"
+    "{hour12:false})+' ('+(why||'监控进程可能已停止')+')';"
     "conn.hidden=false;}"
-    "var PARTS=['policy','gpuinfo','cards','spark','rows','hint',"
+    "var PARTS=['policy','gpuinfo','cards','spark','rows','counters','hint',"
     "'hidden','snapts','paused','staleafter'];"
     "function pull(){"
     "if(typeof fetch!=='function'){"
@@ -1706,22 +1730,67 @@ _PANEL_SCRIPT = (
     # 就是妥妥的误报 —— 托盘上都写着 [已暂停] 呢。
     "var pz=document.getElementById('paused');"
     "var paused=pz&&pz.textContent==='1';"
-    "if(paused){conn.textContent='监控已暂停, 数据停在 '"
-    "+(lastok||'页面加载时')"
-    "+' (从托盘菜单或热键恢复)';conn.hidden=false;}"
     "var st=document.getElementById('snapts'),"
     "dts=st?Number(st.textContent||0)/1000:0;"
     # 宽限秒数由服务端按采样周期算好塞在 #staleafter 里:
     # 写死 25 秒的话, 周期 30s/60s 的健康监控会被当成死掉
     "var sa=document.getElementById('staleafter'),"
     "stal=sa?Number(sa.textContent||0):0;"
-    "if(!paused&&dts&&Date.now()/1000-dts>(stal||25))"
+    # 暂停时也要说清数据有多旧。老代码在这里 return 式的只给一句
+    # "数据停在 HH:MM:SS" —— 暂停三分钟和三小时长得一模一样, 而用户
+    # 想知道的是"我离开这段时间它到底采到没有"。btop 的暂停视图同样
+    # 保留数据年龄。所以暂停分支也走 staleshow 的计时, 只是文案换成
+    # "已暂停", 不提"可能已停止"。
+    "if(paused){"
+    "if(dts&&Date.now()/1000-dts>(stal||25))staleshow(dts*1000,'已暂停');"
+    "else{conn.textContent='监控已暂停, 数据停在 '"
+    "+(lastok||'页面加载时')"
+    "+' (从托盘菜单或热键恢复)';conn.hidden=false;}}"
+    "else if(dts&&Date.now()/1000-dts>(stal||25))"
     "staleshow(dts*1000);})"
     # 取不到数据不能没声: 监控进程一死, 页面停在最后一份快照上,
     # 看着跟还活着一样。连挂 3 次才说, 单次抖动不打扰。
     ".catch(function(){if(++fails>=3)connshow();});}"
     "setInterval(pull,1000);</script>"
 )
+
+
+def _tip(col):
+    """表头悬停解释, 返回 <th 属性尾巴。title 必须单引号包:
+    _html_escape 只转 & < > 不转引号, 文案本身不引外来文本。
+    """
+    return " title='%s'" % _HDR_TIPS.get(col, "")
+
+
+# 列名只有这一份: CLI(--list) / Web 面板 / 托盘三处都从这里取。
+# 以前托盘自己抄了一份字典、Web 在 f-string 里写字面量、CLI 又抄一遍,
+# 改一个列名要同时记得三个地方 —— 漏一处就是"同一份数据三张脸"。
+# 显存两列写 MiB 不写 MB: PDH / WMI 给的是字节, 代码里除以 1024*1024
+# 得出来的是 MiB(1048576 字节)。任务管理器把 MiB 标成 MB 是它的老毛病,
+# nvtop / GPU-Z 都老老实实写 MiB, 这里跟着老实的那一边 —— 差 4.86%,
+# 对着显卡规格书核不上。
+COL_LABELS = {
+    "name": "进程",
+    "pid": "PID",
+    "gpu": "GPU%",
+    "igpu": "核显%",
+    "dgpu": "独显%",
+    "dmem": "专用MiB",
+    "smem": "共享MiB",
+    "pref": "迁移状态",
+}
+
+_HDR_TIPS = {
+    "name": "进程名。取不到名字时显示 pid NNNN, 即该 pid 在采样间隔里退出了。",
+    "pid": "进程号。托盘面板里右键这一行可把它加进永不迁移名单。",
+    "gpu": "任务管理器的 GPU 引擎占用: 三个引擎里最忙的那个的百分比。",
+    "igpu": "核显(集显)引擎占用, 同样是取最忙的那个引擎的百分比。",
+    "dgpu": "独显引擎占用。两台显卡都在的机器上这一栏独立算。",
+    "dmem": "专用显存, 只给拥有它的那块显卡用, 单位 MiB(1048576 字节)。",
+    "smem": "共享显存, 由系统内存虚拟出来, 核显独显都能写, 单位 MiB。"
+             "跨进程求和, 所以加起来可能超过物理显存。",
+    "pref": "迁移状态。加入永不迁移名单的进程显示在此, 提示被抑制。",
+}
 
 
 def panel_html(snap, names):
@@ -1737,13 +1806,13 @@ def panel_html(snap, names):
     pid_names = snap.get("pid_names") or {}
     for pid in sorted(pids, key=lambda x: (-activity_key(
         snap.get("gpu_all_by_pid", {}).get(x, 0),
-        snap.get("dedicated_by_pid", {}).get(x, 0) / (1024 * 1024),
-        snap.get("shared_by_pid", {}).get(x, 0) / (1024 * 1024)), x)):
+        snap.get("dedicated_by_pid", {}).get(x, 0) / MIB,
+        snap.get("shared_by_pid", {}).get(x, 0) / MIB), x)):
         gpu = snap.get("gpu_all_by_pid", {}).get(pid, 0)
         ig = snap.get("util_by_pid", {}).get(pid, 0)
         dg = snap.get("dgpu_util_by_pid", {}).get(pid, 0)
-        ded = snap.get("dedicated_by_pid", {}).get(pid, 0) / 1048576
-        shm = snap.get("shared_by_pid", {}).get(pid, 0) / 1048576
+        ded = snap.get("dedicated_by_pid", {}).get(pid, 0) / MIB
+        shm = snap.get("shared_by_pid", {}).get(pid, 0) / MIB
         # 与托盘面板同一个判据: 全零行进表只会把该看的行挤下去
         if row_is_noise(gpu, ded, shm):
             continue
@@ -1770,10 +1839,10 @@ def panel_html(snap, names):
     # 类名"这条路上没上心: cls 里一旦带进空格或符号, 属性当场截断。
     # (托盘侧 _heat_color("") 有兜底, Web 这边得自己在模板里挡。)
     cards = "".join(
-        f"<div class=card><span>{label}</span>"
+        f"<div class=card title='{tip}'><span>{label}</span>"
         + (f"<b class={cls}>{text}</b>" if cls else f"<b>{text}</b>")
         + "</div>"
-        for label, text, cls in panel_summary(snap))
+        for label, text, cls, tip in panel_summary(snap))
     policy = policy_text(snap.get("mode"), snap.get("threshold") or 0,
                          snap.get("power_saver_auto"),
                          snap.get("on_battery"))
@@ -1803,7 +1872,13 @@ def panel_html(snap, names):
     stale_line = ("<span id=staleafter hidden>"
                   f"{snap.get('stale_after') or _WEB_STALE_MIN_S:g}</span>")
     hidden_line = (f"<p id=hidden class=hidden>已隐藏 {hidden} 个"
-                   f" 0.0% / 0MB 的进程</p>" if hidden else "")
+                   f" 0.0% / 0MiB 的进程</p>" if hidden else "")
+    # 会话累计: 与托盘底部那一行同一个快照字段。摆到台面上是因为"刷新: 1 秒"
+    # 说明不了监控在不在干活 —— 0 轮和 3000 轮 0 命中是两个完全不同的状态。
+    counters_line = (f"<p id=counters class=hidden>本次启动: 采样"
+                     f" {snap.get('rounds') or 0} 轮 · 命中阈值"
+                     f" {snap.get('hits') or 0} 次 · 已迁移"
+                     f" {snap.get('migrations') or 0} 个</p>")
     # 暂停标记: 用户从托盘/热键暂停时采样循环被
     # before_cycle 挡住, snap_ts 也会停走 —— 前端得先
     # 知道这是人为暂停, 不是监控死掉。总是渲染
@@ -1830,13 +1905,19 @@ def panel_html(snap, names):
         f"{sparkline_html(snap.get('history'), snap.get('threshold') or 0)}"
         f"</div>"
         "<input id=q aria-label='筛选进程名或 PID' placeholder='筛选进程名或 PID...'>"
-        "<div class=tw><table><thead><tr><th class=n>进程</th><th>PID</th>"
-        "<th>GPU%</th><th>核显%</th><th>独显%</th>"
-        "<th>专用MB</th><th>共享MB</th><th>迁移状态</th>"
+        "<div class=tw><table><thead><tr><th class=n" + _tip("name")
+        + ">" + COL_LABELS["name"] + "</th><th" + _tip("pid") + ">"
+        + COL_LABELS["pid"] + "</th>"
+        "<th" + _tip("gpu") + ">" + COL_LABELS["gpu"] + "</th><th"
+        + _tip("igpu") + ">" + COL_LABELS["igpu"] + "</th><th"
+        + _tip("dgpu") + ">" + COL_LABELS["dgpu"] + "</th>"
+        "<th" + _tip("dmem") + ">" + COL_LABELS["dmem"] + "</th><th"
+        + _tip("smem") + ">" + COL_LABELS["smem"] + "</th><th"
+        + _tip("pref") + ">" + COL_LABELS["pref"] + "</th>"
         "</tr></thead><tbody id=rows>"
         f"{body}</tbody></table></div>"
         "<p id=hint></p>"
-        f"{hidden_line}{snap_line}{paused_line}{stale_line}"
+        f"{counters_line}{hidden_line}{snap_line}{paused_line}{stale_line}"
         f"{_PANEL_SCRIPT}"
         "</body></html>")
 
@@ -2089,14 +2170,14 @@ def cmd_list(cfg=None):
     rows = []
     for pid in sorted(pids, key=lambda x: (-activity_key(
         all_by_pid.get(x, 0),
-        de_by_pid.get(x, 0) / (1024 * 1024),
-        sh_by_pid.get(x, 0) / (1024 * 1024)), x)):
+        de_by_pid.get(x, 0) / MIB,
+        sh_by_pid.get(x, 0) / MIB), x)):
         info = pid_to_name(pid)
         name = info[0] if info else "?"
         rows.append((name, pid, all_by_pid.get(pid, 0),
                      per_pid.get(pid, 0), dg_by_pid.get(pid, 0),
-                     de_by_pid.get(pid, 0) / (1024 * 1024),
-                     sh_by_pid.get(pid, 0) / (1024 * 1024)))
+                     de_by_pid.get(pid, 0) / MIB,
+                     sh_by_pid.get(pid, 0) / MIB))
     # 列宽跟着内容走: %-28s 不截断, UWP 那种四五十字符的进程名会把后面
     # 所有列一起推走, 数字错位就没法纵向比大小了。封顶 40, 再长就截断加
     # 省略号 —— 宁可少看几个字符, 也不能让整张表散架。
@@ -2108,12 +2189,14 @@ def cmd_list(cfg=None):
     # 表头也得按显示宽度补空: CJK 字符在终端占两格,
     # %-7s 按字符数补空, "核显%" 只补 4 个空格却占 6 格,
     # 每列头都比数字列宽, 整张表的列线就是斜的。
-    print("  " + _fit_disp("进程", wide) + " " + _fit_disp("pid", 7)
-          + " " + _fit_disp("GPU%", 6, True) + " "
-          + _fit_disp("核显%", 7, True) + " "
-          + _fit_disp("独显%", 7, True) + " "
-          + _fit_disp("专用MB", 8, True) + " "
-          + _fit_disp("共享MB", 8, True))
+    # 列名从 COL_LABELS 取: 那里是三个界面唯一的一份
+    print("  " + _fit_disp(COL_LABELS["name"], wide) + " "
+          + _fit_disp(COL_LABELS["pid"], 7) + " "
+          + _fit_disp(COL_LABELS["gpu"], 6, True) + " "
+          + _fit_disp(COL_LABELS["igpu"], 7, True) + " "
+          + _fit_disp(COL_LABELS["dgpu"], 7, True) + " "
+          + _fit_disp(COL_LABELS["dmem"], 8, True) + " "
+          + _fit_disp(COL_LABELS["smem"], 8, True))
     for name, pid, gpu, ig, dg, de, sh in rows:
         print("  %s %-7d %5.1f%% %6.1f%% %6.1f%% %8.0f %8.0f"
               % (_fit_disp(_ellipsize_disp(name, wide), wide), pid, gpu, ig,
@@ -2186,7 +2269,7 @@ def hot_reason(u, mb, threshold, vram_mb):
     if u >= threshold:
         return f"核显利用率 {u:.1f}%"
     if vram_mb and mb >= vram_mb:
-        return f"核显显存(专用+共享) {mb:.1f} MB"
+        return f"核显显存(专用+共享) {mb:.1f} MiB"
     return None
 
 
@@ -2204,7 +2287,7 @@ def select_hot_candidates(cfg, util_by_pid, igpu_mem_by_pid, threshold,
     hot = []
     for pid in set(util_by_pid) | set(igpu_mem_by_pid):
         reason = hot_reason(util_by_pid.get(pid, 0.0),
-                            igpu_mem_by_pid.get(pid, 0.0) / (1024 * 1024),
+                            igpu_mem_by_pid.get(pid, 0.0) / MIB,
                             threshold, vram_mb)
         if not reason:
             continue
@@ -2285,12 +2368,20 @@ def is_ai_protected(cfg, pname, pid, dedicated_by_pid):
     if pname and pname.lower() in {x.lower()
                                    for x in DEFAULT_AI_PROCESSES}:
         return True
+    # `or []` 而不是 .get(..., []): 键存在但值是 null 时, 后者会拿到
+    # None 并让下面的集合推导式抛 TypeError(merged_config 通常已经挡掉
+    # 这种情况, 但守卫函数不该把命押在调用方身上)
     if pname and pname.lower() in {x.lower()
-                                   for x in cfg.get("ai_processes", [])}:
+                                   for x in cfg.get("ai_processes") or []}:
         return True
+    # isinstance 那一道不是多余的: merged_config 已经把这个键收进
+    # _NUMBER_RULES, 但守卫函数也可能拿到别处攒的配置(测试替身、将来的
+    # 调用方)。非数字在这里必须当作"没设阈值", 而不是让 * 1024 * 1024
+    # 抛 TypeError —— 那会顺着迁移分支回到监控循环。
     limit = cfg.get("protect_vram_mb", 2048)
-    if limit and dedicated_by_pid.get(pid, 0) >= limit * 1024 * 1024:
-        return True
+    if isinstance(limit, (int, float)) and limit:
+        if dedicated_by_pid.get(pid, 0) >= limit * MIB:
+            return True
     return False
 
 
@@ -2455,7 +2546,8 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                if cfg["log_to_file"] else None)
     _LOGFILE = logfile
     log(f"启动监控: 阈值 {cfg['threshold_percent']}%, 显存阈值 "
-        f"{cfg.get('vram_threshold_mb', 0)}MB, 确认模式={cfg['confirm_mode']}, "
+        f"{cfg.get('vram_threshold_mb', 0)}MiB, "
+                                     f"确认模式={cfg['confirm_mode']}, "
         f"自动重启={cfg['auto_restart']}", logfile)
     log("提示: 迁移通过写入图形首选项实现，进程重启后生效。", logfile)
 
@@ -2499,6 +2591,12 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
     hist_points = deque(maxlen=180)   # 趋势图: (ts, 核显总占用%) 最近 180 点
     game_seen = {}        # pname -> 最近一次活跃时间 (游戏模式)
     game_secs = defaultdict(float)   # 游戏时长累计 (秒)
+    # 会话计数: 给托盘/Web 底部状态行用。"本轮监控一共看过多少轮、抓到多少
+    # 超标候选、真的迁走了几个" —— 只报瞬时值的话, 监控在不在干活全靠猜。
+    # btop / bottom 这类工具都把这类累计数摆在台面上。
+    n_rounds = 0
+    n_hits = 0
+    n_migrations = 0
     ps_check = [0.0]
     temp_check = [0.0]
     dgpu_temp = None        # 最近一次 NVML 读数, 每轮跟着快照一起发布
@@ -2547,6 +2645,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
     while True:
         try:
             cycle_start = time.time()
+            n_rounds += 1
             if hooks and hooks.get("before_cycle") \
                     and hooks["before_cycle"]() is False:
                 break
@@ -2575,6 +2674,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                     window=cfg["interval_seconds"])
             except OSError as e:
                 log(f"采样失败: {e}，{cfg['interval_seconds']}s 后重试", logfile)
+                n_rounds += 1
                 time.sleep(cfg["interval_seconds"])
                 continue
 
@@ -2693,6 +2793,16 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                     daily = append_history(now_ts, total_util, daily,
                                            game_secs, cfg)
 
+            # 候选筛选必须在快照之前: 命中计数学着要写进同一份快照,
+            # 放到后面的话界面永远比真实情况晚一轮 —— 第一轮明明有两个
+            # 进程超标, 底部却写着"命中阈值 0 次"。
+            # select_hot_candidates 只读 cfg/util/mem 并往 done 里补
+            # "已经设在独显"的项, 在这里先跑不影响后面的迁移动作。
+            hot = select_hot_candidates(cfg, util_by_pid, mem_by_pid,
+                                        eff_threshold, vram_mb, ignore, done)
+            active = {h[2] for h in hot}
+            n_hits += len(hot)
+
             # 生效策略与逐进程指标放在一起: 面板/托盘读快照就够了, 不必回头
             # 猜 config.json 里那套参数有没有真被吃进去。
             # 进程名对界面是刚需: Web 面板原来只发得出 PID, 看见了也没法判断
@@ -2737,7 +2847,11 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                 # 健康的监控报成"可能已停止"。见 web_stale_after。
                 "stale_after": web_stale_after(cfg["interval_seconds"]),
                 "history": list(hist_points),
-                "dgpu_temp": dgpu_temp, **policy}
+                "dgpu_temp": dgpu_temp,
+                # 会话累计: 轮数 / 超标候选数 / 已迁移数
+                "rounds": n_rounds, "hits": n_hits,
+                "migrations": n_migrations,
+                **policy}
 
             if hooks and hooks.get("on_sample"):
                 hooks["on_sample"]({
@@ -2757,6 +2871,8 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                     "history": list(hist_points),
                     "snap_ts": now_ts,
                     "stale_after": web_stale_after(cfg["interval_seconds"]),
+                    "rounds": n_rounds, "hits": n_hits,
+                    "migrations": n_migrations,
                     **policy,
                 })
 
@@ -2769,9 +2885,6 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                 advance_power_saver(cfg, dgpu_util_by_pid, ps_streak, ps_notified,
                                     eff_ps_auto, logfile, dedicated_by_pid)
 
-            hot = select_hot_candidates(cfg, util_by_pid, mem_by_pid,
-                                        eff_threshold, vram_mb, ignore, done)
-            active = {h[2] for h in hot}
             for pid, pname, full, reason in hot:
                 streak[full] += 1
                 if streak[full] >= cfg["sustain_samples"]:
@@ -2808,6 +2921,7 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                         streak[full] = 0
                         continue
                     done.add(full)
+                    n_migrations += 1
                     if pname not in daily["migrated"]:
                         daily["migrated"].append(pname)
                     log(f"  -> 已设置 {full} 为高性能GPU(GpuPreference=2;)",

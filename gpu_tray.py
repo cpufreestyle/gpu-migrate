@@ -22,8 +22,11 @@ os_name = os.name
 from PIL import Image, ImageDraw, ImageFont
 
 from gpu_monitor import (activity_key, cmd_monitor, clear_gpu_preference,
+                         COL_LABELS, MIB,
+                         _lum, _ratio,
+                         COL_LABELS,
                          empty_row_text, get_gpu_preference,
-                         gpu_where_text, heat_class,
+                         gpu_where_text, heat_class, _HDR_TIPS,
                          hidden_noise_count, is_high_performance, load_config,
                          mode_text, panel_summary, PREF_HIGH_TEXT,
                          pid_to_name, policy_text,
@@ -145,20 +148,13 @@ def _readable_fg(bg_hex):
     return "#000000"
 
 
-def _contrast_ratio(a, b):
-    la = _luminance(a)
-    lb = _luminance(b)
-    lo = la if la <= lb else lb
-    hi = lb if la <= lb else la
-    return (hi + 0.05) / (lo + 0.05)
-
-
-def _luminance(rgb):
-    lin = []
-    for ch in rgb:
-        c = ch / 255.0
-        lin.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
-    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+# WCAG 相对亮度与对比度: 判据只有一个出处(gpu_monitor._lum / _ratio),
+# 这里只做别名。托盘、Web、测试三方各抄一遍公式的时代过去了 ——
+# 抄出来的三份今天数值一致, 但谁改了公式另外两个不知道, 而 legibility
+# 守卫用的正是同一个判据: 测试那把尺和生产这把尺一旦分叉, 守的就
+# 不再是生产代码了。
+_luminance = _lum
+_contrast_ratio = _ratio
 
 
 
@@ -264,10 +260,10 @@ _FONT_UI_SPEC = ("Segoe UI Variable Text", 9)
 _FONT_UI = _FONT_UI_SPEC
 _FONT_UI_BOLD = (_FONT_UI_SPEC[0], _FONT_UI_SPEC[1], "bold")
 _FONT_NUM = ("Consolas", 12)
-_FILTER_HINT = "筛选进程名或 PID (Esc 清空)"
-_COL_LABELS = {"name": "进程", "pid": "PID", "gpu": "GPU%",
-               "igpu": "核显%", "dgpu": "独显%", "dmem": "专用MB",
-               "smem": "共享MB", "pref": "迁移状态"}
+_FILTER_HINT = "筛选进程名或 PID (/ 聚焦, Esc 清空)"
+# 列名只有一份, 在 gpu_monitor.COL_LABELS: 托盘 / Web / CLI 三个界面
+# 一起用它。这里以前自己抄了一份字典, 改列名漏一处就三张脸。
+_COL_LABELS = COL_LABELS
 
 
 def sort_button_text(state):
@@ -329,16 +325,84 @@ def fit_tip_title(base, suffix=""):
     return out
 
 
-def _row_num(vals, idx):
+def _row_pid(vals):
+    """从一行渲染好的 values 里取 PID, 取不到给 None。
+
+    占位行("还没有采样到数据"那一行)的 PID 列是 "-", 前端 UI 上它和
+    真行长得一样。不挡这一下, "回车进详情"会拿 "-" 去建详情窗,
+    "永不迁移"会把 "-" 写进 config.json 的排除名单。
+    """
+    if not vals:
+        return None
+    try:
+        text = str(vals[1]).strip()
+    except (TypeError, IndexError):
+        return None
+    return int(text) if text.isdigit() else None
+
+
+def _sel_item(tree):
+    """当前选中行的 item id; 没有选中或控件不返回序列时给 None。
+
+    ttk.Treeview 的 selection() 在真 Tk 下返回 tuple; 测试替身与
+    MagicMock 不一定有这个方法, 所以不许它把调用方带崩。
+    """
+    try:
+        sel = tree.selection()
+    except (AttributeError, TypeError):
+        return None
+    if not isinstance(sel, (tuple, list)) or not sel:
+        return None
+    return sel[0]
+
+
+def _reselect_pid(tree, pid):
+    """重新渲染后把选中项还给 pid 那一行。
+
+    刷新是每秒一次的 tree.delete + tree.insert, 选中态每次都跟着被
+    清空 —— 于是用键盘上下键选择时, 光标每秒被踢回起点, 键盘导航
+    根本用不了。这里按进程身份(PID)而不是行号找回选中项: 排序一变
+    行号就全变, PID 才是用户心里盯着的那个东西。
+    """
+    if pid is None:
+        return False
+    try:
+        kids = tree.get_children()
+        if not isinstance(kids, (tuple, list)):
+            return False
+    except (AttributeError, TypeError):
+        return False
+    for iid in kids:
+        try:
+            vals = tree.item(iid, "values")
+        except (AttributeError, TypeError):
+            return False
+        if _row_pid(vals) == pid:
+            tree.selection_set(iid)
+            try:
+                tree.focus(iid)
+                tree.see(iid)
+            except (AttributeError, TypeError):
+                pass
+            return True
+    return False
+
+
+def _row_num(vals, idx, bad=0.0):
     """把表格单元格("45.2%" / "120")还原成 float, 缺列或脏值一律 0.0。
 
     详情窗要的是"点击那一行"的读数, 而行是以渲染好的字符串存着的;
     直接 float() 会把 "45.2%" 和缺列两种情况一起抛, 详情窗就开不出来。
+
+    排序那一侧原来自己写了一份 `str(v).replace("%","").replace(" MB","")`,
+     .rstrip("%") 管不了嵌在中间的单位。口径只有一份: 这里既服务详情窗,
+    也服务点表头排序 —— 两处对同一列给出两种读数的规矩不可接受。
     """
     try:
-        return float(str(vals[idx]).strip().rstrip("%"))
+        return float(str(vals[idx]).strip().rstrip("%").replace("MiB", "")
+                     .replace("MB", ""))
     except (IndexError, ValueError, AttributeError):
-        return 0.0
+        return bad
 
 
 # clam 是 Windows 内置主题里唯一肯整体改色的一个
@@ -350,6 +414,155 @@ def _heat_color(cls):
     return _HEAT_COLOR.get(cls, _FG)
 
 
+_TIP_DELAY_MS = 500        # 停多久才弹: 一扫而过不该弹泡
+_TIP_WRAP_PX = 320          # 弹泡内容折行宽度, 比面板还宽就没意义了
+
+
+def _bind_tip(widget, text):
+    """给 Tk 控件挂原生 tooltip (Enter 弹 / Leave 收)。
+
+    Tk 的 Label 没有 tooltip 属性, 汇总卡又是"标签 + 数字"两个 Label
+    拼的, 光看那两样分不清"占用取最忙进程"和"显存取跨适配器求和"
+    的区别。Web 端用 title 属性就有了, 托盘这边自己实现一个, 两边
+    文案从 panel_summary 同一份取。
+    """
+    if not text:
+        return
+    state = {"win": None, "after": None}
+
+    def _hide(_event=None):
+        if state["after"] is not None:
+            try:
+                widget.after_cancel(state["after"])
+            except Exception:
+                pass
+            state["after"] = None
+        win = state["win"]
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            state["win"] = None
+
+    def _show(_event=None):
+        if state["win"] is not None or not widget.winfo_exists():
+            return
+        win = tk.Toplevel(widget)
+        state["win"] = win
+        try:
+            win.wm_overrideredirect(True)
+            win.wm_attributes("-topmost", True)
+            win.configure(bg=_LINE)
+            lab = tk.Label(win, text=text, bg=_PANEL_BG, fg=_FG,
+                           font=_FONT_UI, justify="left",
+                           wraplength=_TIP_WRAP_PX, padx=8, pady=6)
+            lab.pack()
+            widget.update_idletasks()
+            x = widget.winfo_rootx()
+            y = widget.winfo_rooty() + widget.winfo_height() + 4
+            # 弹泡超出屏幕右缘时收回内侧: 汇总卡在窗口右侧, 面板又常
+            # 常贴着屏幕右边放, 不收敛的话 tooltip 整个开在视口外。
+            w = win.winfo_reqwidth()
+            sw = win.winfo_screenwidth()
+            if x + w + 8 > sw:
+                x = max(0, sw - w - 8)
+            win.wm_geometry("+%d+%d" % (x, y))
+        except Exception:
+            _hide()
+
+    def _schedule(_event=None):
+        if state["win"] is not None:
+            return
+        _hide()
+        state["after"] = widget.after(_TIP_DELAY_MS, _show)
+
+    widget.bind("<Enter>", _schedule)
+    widget.bind("<Leave>", _hide)
+    widget.bind("<ButtonPress>", _hide)
+    return state
+
+
+def _bind_tree_tip(tree, col, text):
+    """给 ttk.Treeview 的某一列列头挂悬停解释。
+
+    Treeview 的列头不是独立 widget, 拿不到可以直接绑 Enter 的东西;
+    heading 名称之外的整个表头区都要经过一次 Motion 分发。鼠标移进
+    列头时才弹, 移开即收, 与卡片 tooltip 同一套延迟。
+    """
+    if not text:
+        return
+    state = {"win": None, "after": None, "col": col}
+
+    def _hide(_event=None):
+        if state["after"] is not None:
+            try:
+                tree.after_cancel(state["after"])
+            except Exception:
+                pass
+            state["after"] = None
+        win = state["win"]
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+            state["win"] = None
+
+    def _show(_event=None):
+        if state["win"] is not None or not tree.winfo_exists():
+            return
+        try:
+            win = tk.Toplevel(tree)
+            state["win"] = win
+            win.wm_overrideredirect(True)
+            win.wm_attributes("-topmost", True)
+            win.configure(bg=_LINE)
+            tk.Label(win, text=text, bg=_PANEL_BG, fg=_FG,
+                     font=_FONT_UI, justify="left",
+                     wraplength=_TIP_WRAP_PX, padx=8, pady=6).pack()
+            # 列头没有现成 bbox: 取列在表内的 x 偏移, y 贴表格顶边。
+            x = tree.winfo_rootx() + (tree.column(col, "width") or 0)
+            y = tree.winfo_rooty()
+            w = win.winfo_reqwidth()
+            sw = win.winfo_screenwidth()
+            if x + w + 8 > sw:
+                x = max(0, sw - w - 8)
+            win.wm_geometry("+%d+%d" % (x, y))
+        except Exception:
+            _hide()
+
+    def _motion(event):
+        # identify_column 返回 '#N'; 表头之外(行区/空白)一律不当列头
+        ident = tree.identify_column(event.x)
+        if not ident.startswith("#"):
+            _hide()
+            return
+        try:
+            idx = int(ident[1:]) - 1
+        except ValueError:
+            _hide()
+            return
+        if idx < 0 or idx >= len(cols_all):
+            _hide()
+            return
+        cid = cols_all[idx]
+        if cid != col:
+            _hide()
+            return
+        if state["win"] is not None:
+            return
+        if state["after"] is not None:
+            return
+        state["after"] = tree.after(_TIP_DELAY_MS, _show)
+
+    cols_all = tuple(tree.cget("columns"))
+    tree.bind("<Motion>", _motion, add=True)
+    # 窗口一关, 弹泡不能留在屏幕上: 面板 destroy 时 Toplevel 子窗会
+    # 跟着走, 但 after 链不会, 这里补一次兜底。
+    tree.bind("<Leave>", _hide, add=True)
+    state["hide"] = _hide
+    return state
 def _rebuild_fonts():
     """按机器上真装了的字体挑 UI 字族(没有 Tk 解释器时保持首选值)。
 
@@ -820,11 +1033,15 @@ class TrayApp:
                 var = tk.StringVar(value=str(cfg.get(key, "")))
                 e = tk.Entry(grid, textvariable=var, width=width)
                 e.grid(row=len(rows), column=1, sticky="w", pady=2)
+                # Enter 直接保存: 六个格子 Tab 走完再摸鼠标去点那个按钮,
+                # 键盘用户的手要在键盘和鼠标之间来回搬一趟。save 定义在
+                # 下面, lambda 调用时才查名, 赶得上(与面板 refresh 同款)。
+                e.bind("<Return>", lambda _e=None: save())
                 rows.append(var)
                 return var
 
             v_thr = add_entry("迁移阈值 %", "threshold_percent")
-            v_vram = add_entry("显存阈值 MB", "vram_threshold_mb")
+            v_vram = add_entry("显存阈值 MiB", "vram_threshold_mb")
             v_bthr = add_entry("电池阈值 %", "battery_threshold_percent")
             v_temp = add_entry("温度提醒 °C", "temp_limit")
             v_int = add_entry("采样周期 秒", "interval_seconds")
@@ -916,6 +1133,10 @@ class TrayApp:
                               command=save, bg=_ACCENT, fg=_FG)
             saver.pack(pady=8)
             root.protocol("WM_DELETE_WINDOW", close)
+            # Esc = 取消, 和面板 / 详情窗同一个键。填到一半按错一下会丢掉
+            # 没保存的输入 —— 这是对话框的通行语义, 比"每个键都关不掉"
+            # 一致得多; 真想留着的值用户本来就会去点保存。
+            root.bind("<Escape>", lambda _e=None: close())
             _darken_tree(root)
             # 保存键是这个窗唯一想留住的强调色: 用 Windows 强调色而不是
             # 自造的高饱和绿 —— 白色按键字压 4.53:1, 比暗底压亮绿清楚。
@@ -1049,7 +1270,7 @@ class TrayApp:
         desc = self.sort_state["desc"]
         if col == "auto":
             # 与 --list / Web 面板同口径: 主键为三面共用的活动量
-            # (GPU%、专用MB、共享MB 取最大), 并列按 pid 升序, 三面行序
+            # (GPU%、专用MiB、共享MiB 取最大), 并列按 pid 升序, 三面
             # 逐行相同。
             if desc:
                 return sorted(rows, key=lambda r: (-r[0], r[1][1]))
@@ -1059,17 +1280,15 @@ class TrayApp:
         numeric = col in self._SORT_NUM_COLS
 
         def key(row):
-            v = row[1][idx]
             if numeric:
-                try:
-                    return float(str(v).replace("%", "")
-                                 .replace(" MB", ""))
-                except ValueError:
-                    return -1.0
+                # 与详情窗共用 _row_num: 以前这里自己 replace 一遍,
+                # 对带单位的写法会给错值。解析失败要沉底而不是和 0 并列,
+                # 所以 bad 传 -1.0 (详见 test_unparsable_numbers_sink_to_the_bottom)
+                return _row_num(row[1], idx, -1.0)
             # 进程名按大小写不敏感排: 大写码位全排在小写前面, 按 str()
             # 直接排会把 "Zebra.exe" 排到 "adc.exe" 前头, 同名的大小写
             # 变体(chrome/Chrome)也被拆到桌子两头 —— 资源管理器从不这么排。
-            return str(v).lower()
+            return str(row[1][idx]).lower()
 
         # 先按 pid 升序打底再排主键(稳定排序): rows 是拿 set 迭代攒出来的,
         # 主键并列时不定个序, 同一份快照两次刷新就能给出两种行序 ——
@@ -1300,7 +1519,8 @@ class TrayApp:
             cards.pack(fill="x", padx=8, pady=(8, 4))
             card_labels = {}
             last = len(panel_summary(self.snapshot or {})) - 1
-            for i, (label, text, cls) in enumerate(
+            tips = {}
+            for i, (label, text, cls, tip) in enumerate(
                     panel_summary(self.snapshot or {})):
                 cell = tk.Frame(cards, bg=_PANEL_BG, highlightthickness=1,
                                 highlightbackground=_LINE)
@@ -1316,6 +1536,8 @@ class TrayApp:
                                font=_FONT_UI_BOLD)
                 val.pack(anchor="w", padx=9, pady=(0, 5))
                 card_labels[label] = val
+                tips[label] = tip
+                _bind_tip(val, tip)
 
             # 筛选框: 进程多的时候这一栏比表格本身更有用
             fbar = tk.Frame(root, bg=_BG)
@@ -1367,6 +1589,11 @@ class TrayApp:
 
             tree = ttk.Treeview(root, columns=cols, show="headings", height=12)
             for cid, text in _COL_LABELS.items():
+                # 列头悬停解释跟在 Web 面板用同一份 _HDR_TIPS: 光看
+                # "专用MiB" 也看不出是不是跨进程求和 —— 列名写清了单位
+                # (字节 / 1048576 = MiB), 口径还要靠悬停讲。
+                # Web 那边 title 属性自带, 托盘这边没有等价物, 挂到
+                # Enter/Leave 上自己弹。
                 # 点列头要当场重排: 只改 sort_state 的话要等下一轮 1 秒
                 # 刷新才见效, 而"复原排序"按钮是立即的 —— 同一种操作两种
                 # 手感。refresh 定义在下面, lambda 调用时才查名, 赶得上。
@@ -1377,6 +1604,7 @@ class TrayApp:
                                            refresh()))
                 tree.column(cid, width=widths.get(cid, defaults[cid]),
                             anchor="center")
+                _bind_tree_tip(tree, cid, _HDR_TIPS.get(cid, ""))
             for cls, color in _HEAT_COLOR.items():
                 if cls:
                     tree.tag_configure(cls, foreground=color)
@@ -1386,8 +1614,15 @@ class TrayApp:
 
             # Esc: 有筛选词先清空, 已经空了才关窗 (和常见工具的套路一致)
             def _on_escape(_event=None):
+                # 清完筛选词顺手把键盘还给表格。不还的话用户按完 Esc 按
+                # 方向键, 动的还是输入框里的光标, 表格一动不动 —— 键盘
+                # 导航在最常用的那个出口上断掉, 而且看不出是为什么。
                 if fvar.get():
                     fvar.set("")
+                    try:
+                        tree.focus_set()
+                    except Exception:
+                        pass
                     return "break"
                 on_close()
                 return "break"
@@ -1401,10 +1636,16 @@ class TrayApp:
             spark.pack(fill="x", padx=6, pady=(0, 0))
 
             # 和 Web 面板同一把尺: 弱化色在卡片底上必须过 AA。
-            # 这行(核显/独显名 + 刷新节奏 + 右键提示)是面板底部唯一的
-            # 状态说明, 读不出来等于没有
+            # 这行(核显/独显名 + 刷新节奏 + 键盘/右键入口)是面板底部唯一
+            # 的状态说明, 读不出来等于没有。快捷键不说出来就等于没有 ——
+            # 键盘用户看不见菜单, 只有这一行告诉他们回车能干什么。
             tip = tk.Label(root, text="", anchor="w", fg=_MUTED)
-            tip.pack(fill="x", padx=8, pady=(0, 6))
+            tip.pack(fill="x", padx=8, pady=(0, 1))
+            # 会话累计: 采了多少轮、抓到多少超标、迁走几个。btop / bottom
+            # 把这类数摆在台面上 —— 只报"刷新: 1 秒"的话, 监控是不是真在
+            # 干活只能靠猜, 而"0 轮"和"3000 轮 0 命中"是两个完全不同的状态。
+            count = tk.Label(root, text="", anchor="w", fg=_MUTED)
+            count.pack(fill="x", padx=8, pady=(0, 6))
 
             # 右键菜单: 永不迁移
             menu = tk.Menu(root, tearoff=0)
@@ -1419,18 +1660,125 @@ class TrayApp:
                 sel = tree.selection()
                 if not sel:
                     return
-                pname = tree.item(sel[0], "values")[0]
-                self._never_migrate(pname, tip)
+                vals = tree.item(sel[0], "values")
+                if _row_pid(vals) is None:
+                    # 占位行不是进程, 不能往排除名单里写东西
+                    return
+                self._never_migrate(vals[0], tip)
 
             menu.add_command(label="永不迁移此程序", command=_never_add)
             tree.bind("<Button-3>", _never)
             tree.bind("<Double-1>",
                       lambda e: self._open_detail(tree, e))
 
+            # 键盘导航, 参照 htop / nvtop / 任务管理器的表格交互:
+            # ↑↓ 移动选中(这条 ttk.Treeview 自己就会, 不用重造, 缺的是
+            # "选中项要活着跨过每秒一次的重渲染", 见 _refresh_tree 的
+            # keep_pid), 回车进详情, Del 永不迁移, "/" 或 Ctrl-F 回筛选框。
+            def _never_key(_event=None):
+                _never_add()
+                return "break"
+
+            def _focus_filter(_event=None):
+                if entry.focus_get() is not entry:
+                    entry.focus_set()
+                return "break"
+
+            def _seed_selection(last=False):
+                """空选中态下按方向键: 先把光标放到第一行/最后一行。
+
+                ttk.Treeview 实测(见 .tmptest/probe_tk.py): 选中集为空时
+                按 Down 什么都不会发生 —— 键盘用户必须先拿鼠标点一行, 方向
+                键才认。htop / nvtop 这类工具不这样, 它们永远有个光标。
+                这里补上“播种”。已经选中的话什么都不做 —— 移动交给 ttk
+                自己的绑定。
+                """
+                if _sel_item(tree) is not None:
+                    return False
+                kids = tree.get_children()
+                if not kids:
+                    return False
+                iid = kids[-1] if last else kids[0]
+                tree.selection_set(iid)
+                try:
+                    tree.focus(iid)
+                    tree.see(iid)
+                except (AttributeError, TypeError):
+                    pass
+                # 已经替用户落了脚, 就得拦住 ttk 自己的上下键绑定: 不拦的
+                # 话它会把光标再推一格, 第一次按 Down 直接跳到第二行。
+                return True
+
+            def _seed_down(_event=None):
+                return "break" if _seed_selection() else None
+
+            def _seed_up(_event=None):
+                return "break" if _seed_selection(last=True) else None
+
+            # 面板一开就把键盘交给表格: 否则第一次按方向键没人理, 用户
+            # 会以为这个面板没有键盘支持。窗口还没映射时 focus_set 会抛
+            # TclError, 那也只是一次焦点变故, 不该把整个面板搭到一半。
+            try:
+                tree.focus_set()
+            except Exception:
+                pass
+
+            tree.bind("<Return>", lambda _e=None: self._open_detail(tree))
+            tree.bind("<KP_Enter>", lambda _e=None: self._open_detail(tree))
+            tree.bind("<Delete>", _never_key)
+            tree.bind("<Down>", _seed_down)
+            tree.bind("<Up>", _seed_up)
+            root.bind("<Return>", lambda _e=None: self._open_detail(tree))
+            root.bind("<slash>", _focus_filter)
+
+            # 排序也要能用键盘使: 以前只有点表头一条路, 而这张表默认就是
+            # 按活动量排的, 想改成"按专用显存看"非得摸鼠标。参照 nvtop 的
+            # s / r 两个键: s 循环换列, r 反转方向。
+            _SORT_CYCLE = ("auto", "name", "pid", "gpu", "igpu",
+                           "dgpu", "dmem", "smem", "pref")
+
+            def _not_typing(_event=None):
+                # 筛选框里按 s/r 是打字, 不是命令。回车同理 —— 输入框拿
+                # 着焦点时这些键一概不劫走。
+                return entry.focus_get() is not entry
+
+            def _sort_cycle(_event=None):
+                if not _not_typing():
+                    return
+                cur = self.sort_state.get("col", "auto")
+                try:
+                    nxt = _SORT_CYCLE[(_SORT_CYCLE.index(cur) + 1)
+                                      % len(_SORT_CYCLE)]
+                except ValueError:
+                    nxt = "auto"
+                self._toggle_sort(nxt)
+                _sort_btn_label()
+                refresh()
+                return "break"
+
+            def _sort_reverse(_event=None):
+                if not _not_typing():
+                    return
+                self.sort_state["desc"] = not self.sort_state["desc"]
+                _sort_btn_label()
+                refresh()
+                return "break"
+
+            tree.bind("<s>", _sort_cycle)
+            tree.bind("<r>", _sort_reverse)
+            root.bind("<s>", _sort_cycle)
+            root.bind("<r>", _sort_reverse)
+            # 快捷键不说出来就等于没有。底部状态行已经很长, 塞进去会被
+            # 窗口右沿切掉; 挂在"复原到自动"按钮上 —— 用户找排序入口时
+            # 鼠标本来就会划过它。
+            _bind_tip(sort_btn, "点击表头或按 s 循环切换排序列, r 反转方向; "
+                                "Esc 之后方向键回到表格")
+
             def refresh():
                 # 任何异常都不允许中断 after 链, 否则面板从此不再刷新;
                 # 但也不能一声不吭, 详见 _safe_refresh
-                self._safe_refresh(tree, tip, card_labels, hint, spark)
+                self._safe_refresh(tree, tip, card_labels, hint, spark,
+                                   count)
                 if self.panel_open and not self.stop:
                     root.after(1000, refresh)
 
@@ -1512,14 +1860,23 @@ class TrayApp:
         except Exception:
             pass
 
-    def _open_detail(self, tree, event):
-        item = tree.identify_row(event.y)
+    def _open_detail(self, tree, event=None):
+        """进详情: 鼠标双击给坐标, 键盘给当前选中行, 两条路同一去处。
+
+        以前只认 event: 于是"回车看详情"在键盘上没有任何入口,
+        而这个面板的正文就是一张表, 键盘用户只能看不能用。
+        """
+        item = None
+        if event is not None:
+            item = tree.identify_row(event.y)
+        else:
+            item = _sel_item(tree)
         if not item:
             return
         vals = tree.item(item, "values")
-        if not vals or not str(vals[1]).isdigit():
+        pid = _row_pid(vals)
+        if pid is None:
             return
-        pid = int(vals[1])
         self._ui_post(self._detail_build, pid, list(vals))
 
     def _detail_build(self, pid, vals):
@@ -1593,7 +1950,7 @@ class TrayApp:
                 ("GPU 首选项", self._pref_status(full)),
                 ("GPU% / 核显% / 独显%",
                  f"{vals[2]} / {vals[3]} / {vals[4]}"),
-                ("专用/共享内存", f"{de:.0f} MB / {sh:.0f} MB"),
+                ("专用/共享内存", f"{de:.0f} MiB / {sh:.0f} MiB"),
             ]
             if gone:
                 lines.insert(0, ("注意",
@@ -1649,6 +2006,10 @@ class TrayApp:
             tk.Button(btns, text="关闭", command=close).pack(side="left",
                                                              padx=6)
             root.protocol("WM_DELETE_WINDOW", close)
+            # Esc 关窗: 面板那边 Esc 已经是"收起键盘面板"的通用键, 详情窗
+            # 不认它的话, 键盘用户得把手挪回鼠标去点那个"关闭"按钮 ——
+            # 而这个窗存在的全部理由就是让键盘用户少碰鼠标。
+            root.bind("<Escape>", lambda _e=None: close())
             _darken_tree(root)
         except Exception:
             if counted:
@@ -1663,16 +2024,23 @@ class TrayApp:
         self.filter_text = text or ""
 
     def _matches_filter(self, name, pid):
+        """进程名子串 / PID 匹配, 大小写不敏感, 空词全显。
+
+        与 Web 面板同一个口径: 那边匹配 `td.n` 与 `td.pid` 两个单元格,
+        这里对应名字与 PID。整行 textContent 匹配的老写法会把百分比列
+        也算进去 —— 输入 "12" 留下独显% 12.3 的行, 还让人以为它真在 12%。
+        """
         needle = self.filter_text.strip().lower()
         if not needle:
             return True
         return needle in str(name).lower() or needle in str(pid)
 
-    def _refresh_tree(self, tree, tip, card_labels=None, hint=None):
+    def _refresh_tree(self, tree, tip, card_labels=None, hint=None,
+                       count=None):
         with self.lock:
             snap = self.snapshot
         if card_labels is not None:
-            for label, text, cls in panel_summary(snap or {}):
+            for label, text, cls, _tip in panel_summary(snap or {}):
                 widget = card_labels.get(label)
                 if widget is not None:
                     widget.config(text=text, fg=_heat_color(cls))
@@ -1687,8 +2055,8 @@ class TrayApp:
                 gpu_all = snap["gpu_all_by_pid"].get(pid, 0.0)
                 ig = snap["util_by_pid"].get(pid, 0.0)
                 dg = snap["dgpu_util_by_pid"].get(pid, 0.0)
-                de = snap["dedicated_by_pid"].get(pid, 0.0) / (1024 * 1024)
-                sh = snap["shared_by_pid"].get(pid, 0.0) / (1024 * 1024)
+                de = snap["dedicated_by_pid"].get(pid, 0.0) / MIB
+                sh = snap["shared_by_pid"].get(pid, 0.0) / MIB
                 if row_is_noise(gpu_all, de, sh):
                     continue
                 total += 1
@@ -1710,6 +2078,10 @@ class TrayApp:
                               f"{dg:.1f}%", f"{de:.0f}", f"{sh:.0f}", pref),
                              heat_class(gpu_all)))
         rows = self._sort_rows(rows)
+        # 每秒一次 delete + insert 会把选中态一起清掉。先把选中行的
+        # PID 记下来, 渲染完再还回去: 否则键盘上下键每秒被踢回起点。
+        sel = _sel_item(tree)
+        keep_pid = _row_pid(tree.item(sel, "values")) if sel else None
         tree.delete(*tree.get_children())
         hidden = max(0, len(rows) - 30)
         for idx, (_ig, row, heat) in enumerate(rows[:30]):
@@ -1717,6 +2089,7 @@ class TrayApp:
             # 条纹, 不会出现同一个热度一会儿有条纹一会儿没有。
             tags = (heat, _ROW_ALT_TAG) if idx % 2 else (heat,)
             tree.insert("", "end", values=row, tags=tags)
+        _reselect_pid(tree, keep_pid)
         if hint is not None:
             # 表格只放得下 30 行。静默截断会让人以为机器上只有这些进程
             # 在占显卡, 所以多出来多少行要说出来。
@@ -1726,7 +2099,7 @@ class TrayApp:
             hint.config(text=f"显示 {shown}/{total} 行"
                              + (f" (还有 {hidden} 行未显示)"
                                 if hidden else "")
-                             + (f"  (已隐藏 {noise} 个 0.0% / 0MB)"
+                             + (f"  (已隐藏 {noise} 个 0.0% / 0MiB)"
                                 if noise else "")
                              + ("   (按 Esc 关闭窗口)" if shown or total
                                 else ""))
@@ -1749,9 +2122,23 @@ class TrayApp:
             beat = ("监控已停止(见托盘目录 tray_error.log)"
                     if self.monitor_dead else "刷新: 1 秒")
             tip.config(text=f"核显: {ig_luids}    独显: {dg_luids}"
-                            f"    {beat}    右键进程可设为永不迁移")
+                            f"    {beat}    ↑↓ 选择  回车详情  "
+                            f"Del 永不迁移  / 筛选  右键同菜单")
+        # 会话计数单独一行, 不并进上面那行: 显卡名本来就长, 再摞三个计数
+        # 会超出窗口宽度, 被右沿切掉等于什么都没说。这一行不放在上面的
+        # if snap 里 —— 一份都还没采到时更要说明白是"还没开始", 而不是
+        # 把上一轮的字留着, 让人以为监控已经采了 0 轮。
+        if count is not None:
+            # 用 .get 而不是下标: 老快照(别的调用方自己攒的 dict)可能没有
+            # 这三个键, 下标会 KeyError, 而 _safe_refresh 一次异常就少刷一帧
+            count.config(text=(
+                f"本次启动: 采样 {snap.get('rounds') or 0} 轮 · 命中阈值"
+                f" {snap.get('hits') or 0} 次 · 已迁移"
+                f" {snap.get('migrations') or 0} 个" if snap
+                else "本次启动: 还没有采到数据"))
 
-    def _safe_refresh(self, tree, tip, card_labels, hint, spark):
+    def _safe_refresh(self, tree, tip, card_labels, hint, spark,
+                      count=None):
         """面板定时刷新: 异常只记账, 不抛给 after 链, 也不装作没事发生。
 
         老代码 except 后直接 pass: _refresh_tree / _draw_sparkline 每个
@@ -1761,7 +2148,7 @@ class TrayApp:
         刷新是每秒一轮, 每次都写会把 tray_debug.log 冲成刷屏。
         """
         try:
-            self._refresh_tree(tree, tip, card_labels, hint)
+            self._refresh_tree(tree, tip, card_labels, hint, count)
             with self.lock:
                 thr = (self.snapshot or {}).get("threshold") or 0
             self._draw_sparkline(spark, thr)
@@ -1849,3 +2236,4 @@ def run_tray(config_path=None):
         except OSError:
             pass
         raise
+
