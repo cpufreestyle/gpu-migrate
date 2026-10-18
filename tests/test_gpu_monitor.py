@@ -6417,6 +6417,63 @@ class BuildSpecIsPortable(unittest.TestCase):
             self.assertIn("gpu_monitor.py", text)
             self.assertIn("app.ico", text)
 
+class ReadmeBuildInstructionsMatchTheSpecs(unittest.TestCase):
+    u"""README 说的打包方式和 spec 里的实际配置必须一致。
+
+    README 让用户直接用 spec, 并列出 spec 已固化的几项参数。这条用例
+    核对那句话: 文档承诺的东西 spec 里真有, 否则用户照着做出来的包就是
+    坏的, 而坏法很隐蔽(漏 collect-all PIL 的 exe 能启动、一开面板才崩)。
+    """
+
+    def _root(self):
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _read(self, name):
+        with io.open(os.path.join(self._root(), name), encoding="utf-8") as f:
+            return f.read()
+
+    def test_both_specs_are_named_in_the_readme(self):
+        u"""README 得把两个 spec 都点出来, 包括一体版那个。"""
+        readme = self._read("README.md")
+        for name in ("GPUMigrate.spec", "GPUMigrate-onedir.spec"):
+            self.assertIn(name, readme,
+                          "README 没提 %s: 用户不知道有它" % name)
+
+    def test_the_readme_warns_about_python_dash_m(self):
+        u"""python -m PyInstaller 那句警告得在。
+
+        直接 pyinstaller 可能指向另一个环境 —— 这是构建失败最常见的原因,
+        README 原先写过, 改写时不能丢。
+        """
+        self.assertIn("python -m PyInstaller", self._read("README.md"))
+
+    def test_the_specs_collect_both_optional_deps(self):
+        u"""spec 必须收集 pystray 与 PIL。
+
+        README 说这两项已固化。漏 PIL 尤其阴: 打包能成功, 运行到开面板才崩。
+        """
+        for name in ("GPUMigrate.spec", "GPUMigrate-onedir.spec"):
+            text = self._read(name)
+            for pkg in ("pystray", "PIL"):
+                self.assertIn("collect_all(" + chr(39) + pkg + chr(39) + ")",
+                              text,
+                              "%s 没收集 %s" % (name, pkg))
+
+    def test_the_specs_bundle_the_icon(self):
+        u"""app.ico 必须打进包。
+
+        漏了它窗口图标会退化成去找 exe 同级的文件 —— 用户看到的是默认
+         Python 图标, 不会联想到是打包漏了东西。
+        """
+        for name in ("GPUMigrate.spec", "GPUMigrate-onedir.spec"):
+            self.assertIn("app.ico", self._read(name))
+
+    def test_the_specs_run_without_a_console_window(self):
+        u"""console=False: 这是个托盘程序, 不该弹黑框。"""
+        for name in ("GPUMigrate.spec", "GPUMigrate-onedir.spec"):
+            self.assertIn("console=False", self._read(name),
+                          "%s 会带一个控制台窗口" % name)
+
 class CrossSurfaceRowOrder(unittest.TestCase):
     """同一份快照, --list / Web 面板 / 托盘三面必须落在同一个行序上。
 

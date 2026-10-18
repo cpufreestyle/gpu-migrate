@@ -302,9 +302,28 @@ python gpu_monitor.py --unset-all
 - **命令行输出永远是 UTF-8**: `--list` / `--status` 等一切打印出去的字节统一 UTF-8，和日志、config.json、history.jsonl、report.csv 同套。控制台里靠 WriteConsoleW 显示，一旦重定向到文件或被别的程序捕捉，Python 会换成当前代码页(cp936): 进程名里进了 emoji 或生偏字就 UnicodeEncodeError，整张表会死在半道上。现在还多一层 errors=backslashreplace 兜底: 表达不了的字符只变成转义写法，不会让整行消失。
 - **显存阈值口径**：`vram_threshold_mb` 比的是核显上"专用 + 共享"的合计。
   核显的专用显存只是 BIOS 划的那一小块，只认它这条规则等于永远不触发。
-- **打包**：`python -m PyInstaller --noconsole --onefile --name GPUMigrate --paths . --collect-all pystray --collect-all PIL --add-data "app.ico;." gpu_monitor.py`
-  （注意用 `python -m PyInstaller`，直接 `pyinstaller` 可能指向另一个 Python 环境。
-  `--add-data` 把 `app.ico` 打进包，否则窗口图标会退化成去找 exe 同级的文件。）
+- **打包**：仓库里有两个 spec，直接用它们，别手敲命令：
+
+  ```
+  python -m PyInstaller GPUMigrate.spec           # 单文件
+  python -m PyInstaller GPUMigrate-onedir.spec    # 一体目录
+  ```
+
+  spec 里已经固化了 `--collect-all pystray` / `--collect-all PIL` /
+  `app.ico` / `--noconsole` 这些参数，漏一个的后果都很隐蔽：漏 PIL 的收集
+  打出来的 exe 能启动、一开面板就崩；漏 `app.ico` 窗口图标会退化成去找 exe
+  同级的文件。路径走 PyInstaller 注入的 `SPECPATH`，不写死本机目录，换台
+  机器 clone 下来直接能构建。
+
+  注意用 `python -m PyInstaller`：直接 `pyinstaller` 可能指向另一个 Python
+  环境（这条命令构建失败时，十有八九是这儿）。
+
+  手敲命令的等价写法（只在不方便用 spec 时才需要）：
+
+  ```
+  python -m PyInstaller --noconsole --onefile --name GPUMigrate --paths . \
+    --collect-all pystray --collect-all PIL --add-data "app.ico;." gpu_monitor.py
+  ```
 - **冻结后的路径**：`_DIR` = exe 所在目录，所以 `config.json` / `gpu_monitor.log` /
   `history.jsonl` / `panel_ui.json` / `tray_debug.log` / `tray_error.log` / `gpu_monitor_error.log` /
   `gpu_monitor_crash.log`（超 1MB 滚出 `.1`）/
