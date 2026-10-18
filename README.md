@@ -318,6 +318,11 @@ python gpu_monitor.py --unset-all
   注意用 `python -m PyInstaller`：直接 `pyinstaller` 可能指向另一个 Python
   环境（这条命令构建失败时，十有八九是这儿）。
 
+  改完 spec 想确认没改坏，跑 `tools/verify_build.py`：它会把两个 spec 各构建
+  一遍，并对打出来的 exe 跑一次 `--once`（采样一次就退出），检查有没有
+  `ModuleNotFoundError` / `DLL load failed` 这类只在运行时才暴露的打包问题。
+  真跑过一遍：onedir 构建 7.8 秒完成，exe 退出码 0，正常枚举出 3 块显卡。
+
   手敲命令的等价写法（只在不方便用 spec 时才需要）：
 
   ```

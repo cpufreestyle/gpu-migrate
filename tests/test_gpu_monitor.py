@@ -6561,6 +6561,59 @@ class BundledDepsMatchImports(unittest.TestCase):
             "README 多说了 %s, 漏说 %s(漏说的那些用户根本没装)"
             % (sorted(as_imports - imported), sorted(imported - as_imports)))
 
+class BuildVerifierScript(unittest.TestCase):
+    u"""tools/verify_build.py 得在, 且能真跑(至少 --help 级别的自检)。
+
+    spec 是构建配置, 配置最容易悄悄烂掉, 而烂掉的后果都在用户侧才显现。
+    所以有个脚本能把"构建 + 跑一次"固化成一条命令。这条用例只做轻量
+    自检: 脚本在、能 parse、里面提到了两个 spec。真构建太慢(约 8 秒一个,
+    还要装 PyInstaller), 不该塞进每次跑的测试套件。
+    """
+
+    def _root(self):
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def test_the_verifier_script_exists_and_parses(self):
+        import ast
+        path = os.path.join(self._root(), "tools", "verify_build.py")
+        self.assertTrue(os.path.exists(path),
+                        "缺少 tools/verify_build.py: 改完 spec 没有一键验证手段")
+        with io.open(path, encoding="utf-8") as f:
+            text = f.read()
+        ast.parse(text)      # 语法坏了 import 时才炸, 这里先炸
+
+    def test_the_verifier_covers_both_specs(self):
+        u"""两个 spec 都要被验到, 只验一个等于另一半没人管。"""
+        path = os.path.join(self._root(), "tools", "verify_build.py")
+        with io.open(path, encoding="utf-8") as f:
+            text = f.read()
+        for name in ("GPUMigrate.spec", "GPUMigrate-onedir.spec"):
+            self.assertIn(name, text,
+                          "verify_build.py 没验 %s" % name)
+
+    def test_the_verifier_insists_on_python_dash_m(self):
+        u"""脚本必须用 python -m PyInstaller, 不能直接 pyinstaller。
+
+        本机 pyinstaller 指向 Python312 的 Scripts, 而项目跑 3.14 —— 用错
+        解释器构建出来的包和源码不是一套, 且这种错当场看不出来。
+        """
+        path = os.path.join(self._root(), "tools", "verify_build.py")
+        with io.open(path, encoding="utf-8") as f:
+            text = f.read()
+        self.assertIn("-m", text)
+        self.assertIn("PyInstaller", text)
+        self.assertIn("sys.executable", text,
+                      "没用当前解释器: 得是 python -m PyInstaller, "
+                      "不是去 PATH 里找 pyinstaller")
+
+    def test_the_readme_points_at_the_verifier(self):
+        u"""README 该提一句有这个脚本, 否则没人知道。"""
+        path = os.path.join(self._root(), "README.md")
+        with io.open(path, encoding="utf-8") as f:
+            readme = f.read()
+        self.assertIn("verify_build", readme,
+                      "README 没提 tools/verify_build.py")
+
 class CrossSurfaceRowOrder(unittest.TestCase):
     """同一份快照, --list / Web 面板 / 托盘三面必须落在同一个行序上。
 
