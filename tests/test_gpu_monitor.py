@@ -6606,6 +6606,30 @@ class BuildVerifierScript(unittest.TestCase):
                       "没用当前解释器: 得是 python -m PyInstaller, "
                       "不是去 PATH 里找 pyinstaller")
 
+    def test_the_readme_claim_matches_what_the_verifier_does(self):
+        """README 说两个 spec 都真跑过, 验证器就得真的覆盖两个。
+
+        文档说超前话是这个仓库反复出现的问题(MB/MiB、暂停文案都是),
+        所以 README 里带实测结论的声明, 该有东西核对它站得住。这里核对
+        最基础的一条: 说了两个, 就得验两个。
+        """
+        path = os.path.join(self._root(), "tools/verify_build.py")
+        with io.open(path, encoding="utf-8") as f:
+            text = f.read()
+        with io.open(os.path.join(self._root(), "README.md"),
+                     encoding="utf-8") as f:
+            readme = f.read()
+        for name in ("GPUMigrate.spec", "GPUMigrate-onedir.spec"):
+            self.assertIn(name, readme)
+        self.assertIn("SPECS = (", text,
+                      "verify_build.py 没有 SPECS 清单")
+        i = text.index("SPECS = (")
+        j = text.index(")", i)
+        listed = text[i:j]
+        for name in ("GPUMigrate.spec", "GPUMigrate-onedir.spec"):
+            self.assertIn(name, listed,
+                          "README 说验两个, 但 SPECS 里没有 " + name)
+
     def test_the_readme_points_at_the_verifier(self):
         u"""README 该提一句有这个脚本, 否则没人知道。"""
         path = os.path.join(self._root(), "README.md")
