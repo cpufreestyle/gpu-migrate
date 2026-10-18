@@ -6474,6 +6474,93 @@ class ReadmeBuildInstructionsMatchTheSpecs(unittest.TestCase):
             self.assertIn("console=False", self._read(name),
                           "%s 会带一个控制台窗口" % name)
 
+class BundledDepsMatchImports(unittest.TestCase):
+    u"""spec 收集的第三方包必须正好是源码 import 的那些。
+
+    现在是齐的(PIL / pystray), 但没有东西保证它一直齐。哪天有人给
+    gpu_tray.py 加一句 import requests 而忘了改 spec, 打出来的包能构建、
+    能启动, 直到运行到那一行才 ModuleNotFoundError —— 而用户手上只有一个
+    exe, 没有任何线索指向漏收集。
+
+    这条用例把三边对齐: 源码 import 的第三方包、spec 里 collect_all 的、
+    README 里 pip install 的。PyPI 名与 import 名不一致的那几个(pillow ->
+    PIL)走一张映射表, 不算偏差。
+    """
+
+    # PyPI 发行名 -> import 名。只收真正不一致的, 其余默认同名。
+    PYPI_TO_IMPORT = {
+        "pillow": "PIL",
+        "pywin32": "win32api",
+        "beautifulsoup4": "bs4",
+        "scikit-learn": "sklearn",
+    }
+
+    def _root(self):
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _imported_third_party(self):
+        u"""源码里 import 的第三方顶层包(本仓库自己的模块排除)。"""
+        import ast
+        own = {"gpu_monitor", "gpu_tray"}
+        stdlib = set(getattr(sys, "stdlib_module_names", ()))
+        found = set()
+        for name in ("gpu_monitor.py", "gpu_tray.py"):
+            path = os.path.join(self._root(), name)
+            with io.open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        top = alias.name.split(".")[0]
+                        if top not in stdlib and top not in own:
+                            found.add(top)
+                elif (isinstance(node, ast.ImportFrom)
+                      and node.module and not node.level):
+                    top = node.module.split(".")[0]
+                    if top not in stdlib and top not in own:
+                        found.add(top)
+        return found
+
+    def _spec_collected(self):
+        import re
+        found = set()
+        for name in ("GPUMigrate.spec", "GPUMigrate-onedir.spec"):
+            path = os.path.join(self._root(), name)
+            with io.open(path, encoding="utf-8") as f:
+                text = f.read()
+            found |= set(re.findall(
+                r"collect_all\(['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?\)",
+                text))
+        return found
+
+    def test_the_spec_collects_exactly_what_the_code_imports(self):
+        u"""spec 收集的集合 == 源码 import 的集合。"""
+        imported = self._imported_third_party()
+        collected = self._spec_collected()
+        self.assertEqual(
+            collected, imported,
+            "spec 收集的和源码 import 的不一致。"
+            "多收集: %s; 漏收集: %s(漏的那些会让打出来的包运行到才崩)"
+            % (sorted(collected - imported), sorted(imported - collected)))
+
+    def test_the_readme_lists_the_same_deps(self):
+        u"""README 的 pip install 也要覆盖同一批(按 import 名比)。"""
+        import re
+        BT = chr(96)      # 反引号: README 里 pip install 那行是包在代码span里的
+        path = os.path.join(self._root(), "README.md")
+        with io.open(path, encoding="utf-8") as f:
+            readme = f.read()
+        m = re.search(r"pip install ([^" + BT + r"\n]+)", readme)
+        self.assertIsNotNone(m, "README 没有 pip install 那行")
+        listed = {w for w in m.group(1).split() if not w.startswith("-")}
+        as_imports = {self.PYPI_TO_IMPORT.get(w, w) for w in listed}
+        imported = self._imported_third_party()
+        self.assertEqual(
+            as_imports, imported,
+            "README 说的依赖和源码 import 的不一致: "
+            "README 多说了 %s, 漏说 %s(漏说的那些用户根本没装)"
+            % (sorted(as_imports - imported), sorted(imported - as_imports)))
+
 class CrossSurfaceRowOrder(unittest.TestCase):
     """同一份快照, --list / Web 面板 / 托盘三面必须落在同一个行序上。
 
