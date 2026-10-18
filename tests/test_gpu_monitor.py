@@ -6192,6 +6192,60 @@ class SparklineThresholdInEmptyState(unittest.TestCase):
         app._draw_sparkline(c, 0)
         self.assertEqual(c.lines, [], "阈值为 0 时不该有阈值线")
 
+class ScratchDirDoesNotShadowStdlib(unittest.TestCase):
+    u"""沙箱目录里的临时脚本不许用标准库模块名。
+
+    .tmptest/run_unittest.py 把 .tmptest 插到 sys.path 最前面(为了 stub 顶上
+    pystray / PIL)。于是那个目录里任何一个 .py 都能遮蔽同名标准库模块。
+
+    真的踩过: 我为定位一次失败写了 .tmptest/bisect.py, 之后标准库 random
+    执行 from bisect import ... 时导入了它, 它又 import ast, 递归到
+    MemoryError, 把后面几十条用例全带崩。而现象极具误导性 —— traceback
+    的行号对不上磁盘上的内容, 我先后怀疑过 .pyc 缓存、文件被替换、加载了
+    另一份文件。
+
+    这条用例就是把那个下午的教训钉住: 往 .tmptest 里丢文件之前, 名字得避开
+    标准库。
+    """
+
+    def _scratch_dir(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        return os.path.join(os.path.dirname(here), ".tmptest")
+
+    def test_no_scratch_file_shadows_a_stdlib_module(self):
+        scratch = self._scratch_dir()
+        if not os.path.isdir(scratch):
+            self.skipTest("没有 .tmptest 目录")
+        # 只扫本进程解释器认识的顶层模块名: 这样在没装某些包的机器上
+        # 也不会误报(那些名字不在 sys.stdlib_module_names 里)
+        stdlib = set(sys.stdlib_module_names)
+        clashes = sorted(
+            name for name in os.listdir(scratch)
+            if name.endswith(".py")
+            and name[:-3] in stdlib)
+        self.assertEqual(clashes, [],
+                         ".tmptest 里的这些文件会遮蔽同名标准库模块: %s。"
+                         "run_unittest.py 把 .tmptest 插在 sys.path 最前面,"
+                         "标准库 from X import ... 会导入它们而不是真模块"
+                         % clashes)
+
+    def test_the_stub_dir_is_not_shadowing_anything_we_care_about(self):
+        u"""反向保险: stub 目录本身也不该引入新的遮蔽。
+
+        stub 里放 pystray / PIL 是故意的(本环境读不到用户级 site-packages),
+        但它同样在 sys.path 最前面。这条只确认它没夹带标准库名。
+        """
+        scratch = self._scratch_dir()
+        stub = os.path.join(scratch, "stub")
+        if not os.path.isdir(stub):
+            self.skipTest("没有 .tmptest/stub 目录")
+        stdlib = set(sys.stdlib_module_names)
+        clashes = sorted(
+            name for name in os.listdir(stub)
+            if name.endswith(".py") and name[:-3] in stdlib)
+        self.assertEqual(clashes, [],
+                         "stub 目录遮蔽了标准库模块: %s" % clashes)
+
 class CrossSurfaceRowOrder(unittest.TestCase):
     """同一份快照, --list / Web 面板 / 托盘三面必须落在同一个行序上。
 
