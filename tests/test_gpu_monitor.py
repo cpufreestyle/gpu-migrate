@@ -6110,6 +6110,88 @@ class PanelJsHarnessSelfCheck(unittest.TestCase):
         self.assertIn("harness self-check passed", r.stdout,
                       r.stdout + r.stderr)
 
+class SparklineThresholdInEmptyState(unittest.TestCase):
+    u"""点数不够时, 阈值线也必须画出来。
+
+    老代码在 len(pts) < 2 时只画一句空态文案就 return, 阈值线整个不画。
+    而空态恰恰是最需要参考基准的时候: 用户看到"最近 30 分钟无采样数据",
+    想知道的是"阈值在哪、我离它多远", 却只有一句干巴巴的提示。
+
+    btop 在数据不足时同样保留参考线, 这里跟着学。
+    """
+
+    class _Canvas:
+        u"""记下调用了什么, 不真的画。"""
+
+        def __init__(self, width=860, height=46):
+            self._w, self._h = width, height
+            self.lines = []
+            self.texts = []
+
+        def delete(self, *_a):
+            pass
+
+        def winfo_width(self):
+            return self._w
+
+        def winfo_height(self):
+            return self._h
+
+        def create_line(self, *coords, **kw):
+            self.lines.append((coords, kw))
+
+        def create_polygon(self, *_a, **_kw):
+            pass
+
+        def create_text(self, *pos, **kw):
+            self.texts.append(kw.get("text", ""))
+
+    def _draw(self, history, threshold):
+        import gpu_tray
+        app = object.__new__(gpu_tray.TrayApp)
+        app.history = history
+        app._draw_sparkline(self._Canvas(), threshold)
+        return self._Canvas()
+
+    def test_the_threshold_line_survives_an_empty_history(self):
+        u"""一个点都没有(刚启动)时也画阈值线。"""
+        c = self._Canvas()
+        import gpu_tray
+        app = object.__new__(gpu_tray.TrayApp)
+        app.history = []
+        app._draw_sparkline(c, 40)
+        dashed = [ln for ln, kw in c.lines if kw.get("dash")]
+        self.assertEqual(len(dashed), 1,
+                         "空态下阈值线没画: 用户看不到自己离阈值多远")
+        self.assertTrue(any("迁移阈值 40%" in t for t in c.texts),
+                        f"空态下阈值标签没画: {c.texts}")
+
+    def test_the_threshold_line_survives_a_stale_window(self):
+        u"""有历史点但整个落在 30 分钟窗口外(休眠唤醒)时也画。"""
+        c = self._Canvas()
+        import gpu_tray
+        app = object.__new__(gpu_tray.TrayApp)
+        # spark_points 的窗口相对最新一点算(end - p[0] <= 1800),
+        # 不是相对当前时钟。所以要两点相隔超过 30 分钟才落进空态分支 ——
+        # 这正是休眠唤醒后的形状: 睡前采一次, 醒来又采一次。
+        now = gm.time.time()
+        app.history = [(now - 7200, 10.0), (now, 20.0)]
+        app._draw_sparkline(c, 40)
+        dashed = [ln for ln, kw in c.lines if kw.get("dash")]
+        self.assertEqual(len(dashed), 1,
+                         "窗口外空态下阈值线没画")
+        self.assertTrue(any("无采样数据" in t for t in c.texts),
+                        f"空态文案没出现: {c.texts}")
+
+    def test_zero_threshold_draws_no_line_in_empty_state(self):
+        u"""阈值为 0(该规则关闭)时不画线, 和有点数时一致。"""
+        c = self._Canvas()
+        import gpu_tray
+        app = object.__new__(gpu_tray.TrayApp)
+        app.history = []
+        app._draw_sparkline(c, 0)
+        self.assertEqual(c.lines, [], "阈值为 0 时不该有阈值线")
+
 class CrossSurfaceRowOrder(unittest.TestCase):
     """同一份快照, --list / Web 面板 / 托盘三面必须落在同一个行序上。
 
@@ -7447,8 +7529,16 @@ class SparklineThreshold(unittest.TestCase):
     def test_a_single_point_only_says_wait(self):
         canvas = self._Canvas()
         self._app([42])._draw_sparkline(canvas, 40)
-        self.assertEqual([c[0] for c in canvas.calls], ["clear", "text"])
-        self.assertIn("趋势", canvas.calls[-1][2]["text"])
+        # 一个点时仍然只出提示, 但阈值线要画: 空态才是最需要参考基准的
+        # 时候(用户想知道"阈值在哪、我离它多远")。参照 btop —— 它数据不足
+        # 时同样保留参考线。详见 SparklineThresholdInEmptyState。
+        self.assertEqual([c[0] for c in canvas.calls],
+                         ["clear", "text", "line", "text"])
+        # 提示句仍然在, 只是不再位于最后一次调用(阈值标签排在它后面)
+        texts = [c[2].get("text", "") for c in canvas.calls
+                 if c[0] == "text"]
+        self.assertTrue(any("趋势" in t for t in texts),
+                        f"一个点时仍要说明在等数据: {texts}")
 
 
 class SparklineGeometry(unittest.TestCase):

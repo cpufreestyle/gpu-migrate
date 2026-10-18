@@ -1829,12 +1829,26 @@ class TrayApp:
             pts = spark_points(self.history)
             w = int(canvas.winfo_width() or 860)
             h = int(canvas.winfo_height() or 46)
+            # 阈值线在空态时也要画。老代码在这里直接 return, 只留一句
+            # "无采样数据" —— 而空态恰恰是最需要参考基准的时候: 用户想
+            # 知道"阈值在哪、我离它多远", 却只有一句干巴巴的提示。
+            # btop 在数据不足时同样保留参考线, 这里跟着学。
             if len(pts) < 2:
                 canvas.create_text(
                     w / 2, h / 2, fill=_MUTED,
                     text="核显占用趋势 (每 10 秒一点)"
                     if len(self.history) < 2 else
                     "最近 30 分钟无采样数据 (暂停监控或休眠后会出现)")
+                if threshold:
+                    y = spark_y_of(threshold, h,
+                                   max(30.0, float(threshold) * 1.15))
+                    canvas.create_line(0, y, w, y,
+                                       fill=_HEAT_COLOR["hot"],
+                                       dash=(3, 3))
+                    canvas.create_text(5, y - 7, anchor="nw",
+                                       fill=_HEAT_COLOR["hot"],
+                                       font=_FONT_UI,
+                                       text=f"迁移阈值 {threshold:g}%")
                 return
             ymax = spark_ymax(pts, threshold)
             coords, x_last, x_first = spark_geometry(pts, w, h, ymax)
