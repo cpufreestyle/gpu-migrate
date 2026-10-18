@@ -6212,6 +6212,30 @@ class ScratchDirDoesNotShadowStdlib(unittest.TestCase):
         here = os.path.dirname(os.path.abspath(__file__))
         return os.path.join(os.path.dirname(here), ".tmptest")
 
+
+    @staticmethod
+    def _stdlib_names():
+        u"""顶层标准库模块名。
+
+        优先用 sys.stdlib_module_names(3.10+)。拿不到就退到一份内置常见
+        名单 —— 它覆盖不到全部, 但 os/sys/re/json/ast/random/bisect 这些
+        真正会被 from X import ... 导的都在。少扫几个名字远好过
+        AttributeError 把整套测试带垮。
+        """
+        names = getattr(sys, "stdlib_module_names", None)
+        if names:
+            return set(names)
+        return {
+            "ast", "bisect", "collections", "ctypes",
+            "datetime", "enum", "functools", "glob",
+            "inspect", "io", "json", "math",
+            "os", "pathlib", "queue", "random",
+            "re", "shutil", "socket", "string",
+            "struct", "subprocess", "sys", "tempfile",
+            "textwrap", "threading", "time", "traceback",
+            "types", "unicodedata", "warnings",
+        }
+
     def test_no_scratch_file_shadows_a_stdlib_module(self):
         scratch = self._scratch_dir()
         if not os.path.isdir(scratch):
@@ -6223,6 +6247,12 @@ class ScratchDirDoesNotShadowStdlib(unittest.TestCase):
             name for name in os.listdir(scratch)
             if name.endswith(".py")
             and name[:-3] in stdlib)
+        # sys.stdlib_module_names 是 3.10 才有的。本项目没声明最低版本,
+        # README 也只说"纯标准库 / Windows 10-11"—— 用户可能跑 3.9。
+        # 拿不到那份清单就退到内置名单: 少扫几个名字仍能抓住最常见的
+        # 那几个(os/sys/re/json/ast/...), 总比 AttributeError 把整套
+        # 测试带垮好。
+        stdlib = self._stdlib_names()
         self.assertEqual(clashes, [],
                          ".tmptest 里的这些文件会遮蔽同名标准库模块: %s。"
                          "run_unittest.py 把 .tmptest 插在 sys.path 最前面,"
@@ -6239,7 +6269,7 @@ class ScratchDirDoesNotShadowStdlib(unittest.TestCase):
         stub = os.path.join(scratch, "stub")
         if not os.path.isdir(stub):
             self.skipTest("没有 .tmptest/stub 目录")
-        stdlib = set(sys.stdlib_module_names)
+        stdlib = self._stdlib_names()
         clashes = sorted(
             name for name in os.listdir(stub)
             if name.endswith(".py") and name[:-3] in stdlib)
