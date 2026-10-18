@@ -776,6 +776,15 @@ def save_ignore_process(config_path, pname):
 
 # 这些常驻组件的高核显占用属于正常行为 (桌面合成/图标/输入法等),
 # 迁移它们有害无益; exclude_defaults=false 可关闭
+# AI/推理服务进程: 模型加载到显存需要数分钟, 且空闲时利用率很低。
+# 对它们做"省电切回"或"自动重启"会毁掉已加载的模型, 必须完全豁免。
+DEFAULT_AI_PROCESSES = [
+    "ollama.exe", "llama-server.exe", "llama-cli.exe", "llama-quantize.exe",
+    "koboldcpp.exe", "comfyui.exe", "lm studio.exe", "gpt4all.exe",
+    "jan.exe", "vllm.exe", "sglang.exe", "tabbyapi.exe", "textgen.exe",
+    "webui.exe", "sd-webui.exe", "stable-diffusion.exe", "gguf.exe",
+]
+
 DEFAULT_EXCLUDE_PROCESSES = [
     "dwm.exe", "explorer.exe", "taskmgr.exe", "searchhost.exe",
     "shellexperiencehost.exe", "startmenuexperiencehost.exe",
@@ -809,6 +818,8 @@ DEFAULT_CONFIG = {
     "normalize_total": False,    # true=所有进程总和强制<=100% (单进程读数会缩水);
                                  # false=任务管理器口径, 单进程读数最准确
     "game_processes": [],        # 游戏名单: 自动确保独显+免打扰+时长统计
+    "ai_processes": [],          # AI 名单补充: 这些进程永不省电切回/自动重启
+    "protect_vram_mb": 2048,     # 独显专用显存>=该值的进程按 AI 保护 (0 关闭)
     "power_aware": True,         # 电源感知: 用电池时自动切换省电策略
     "battery_threshold_percent": 40,   # 电池下的迁移阈值
     "nvml_temp": True,           # 独显温度监控 (NVML, NVIDIA 驱动自带)
