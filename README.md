@@ -8,6 +8,11 @@ Windows 图形首选项（“高性能”= 独显），程序**下次启动**即
 `python gpu_monitor.py --tray` 前要先 `pip install pystray pillow`；
 双击 `GPUMigrate.exe` 不需要（两者已打进包里）。
 
+ **Python 版本：3.8 及以上。** 代码不用 `match` 语句、PEP 604 注解、
+ `str.removeprefix` 之类的新语法与新 API（有测试逐文件扫 AST 确认）；
+ 唯一需要注意的版本差异在测试侧 —— `sys.stdlib_module_names` 是 3.10
+ 才有的属性，测试拿不到它会退到一份内置名单，不会因此崩掉。
+
 ## 重要说明：为什么不能“原地迁移”
 
 Windows 不支持把**正在运行**的进程迁移到另一块 GPU——GPU 首选项只在进程启动时生效。

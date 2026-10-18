@@ -6276,6 +6276,97 @@ class ScratchDirDoesNotShadowStdlib(unittest.TestCase):
         self.assertEqual(clashes, [],
                          "stub 目录遮蔽了标准库模块: %s" % clashes)
 
+class MinimumPythonVersion(unittest.TestCase):
+    u"""README 承诺支持 3.8+, 就不能用更新版本的语法或标准库 API。
+
+    语法层面其实炸得出来(match 语句在 3.9 上直接 SyntaxError), 所以真正
+    危险的是标准库 API: 它们不报错, 只是到那个版本才存在, 用户在 3.8 上
+    跑起来才发现少了功能。
+
+    上一轮就踩过一次: 我在测试里用了 sys.stdlib_module_names(3.10+),
+    而项目从没声明过最低版本。当时如果用户跑 3.8, 那条用例会
+    AttributeError 把整套测试带垮。
+
+    这条用例把 README 那句承诺变成可验证的: 扫三个源码文件的 AST, 
+    撞上下表里的语法或 API 就红。
+    """
+
+    # (名字, 最低版本, 说明)。只收真正会在运行时炸的, 不收 3.8 以前就有的。
+    NEW_API = (
+        ("removeprefix", 3.9, "str.removeprefix"),
+        ("removesuffix", 3.9, "str.removesuffix"),
+        ("pairwise", 3.10, "itertools.pairwise"),
+        ("batched", 3.12, "itertools.batched"),
+        ("chdir", 3.11, "contextlib.chdir"),
+        ("unparse", 3.9, "ast.unparse"),
+        ("randbytes", 3.9, "random.randbytes"),
+        ("isjunction", 3.12, "os.path.isjunction"),
+        ("lcm", 3.9, "math.lcm"),
+    )
+
+    NEW_NAMES = (
+        ("Self", 3.11, "typing.Self"),
+        ("StrEnum", 3.11, "enum.StrEnum"),
+        ("TaskGroup", 3.11, "asyncio.TaskGroup"),
+        ("tomllib", 3.11, "tomllib"),
+        ("zoneinfo", 3.9, "zoneinfo"),
+        ("graphlib", 3.9, "graphlib"),
+    )
+
+    def _sources(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return [os.path.join(root, n) for n in
+                ("gpu_monitor.py", "gpu_tray.py",
+                 os.path.join("tests", "test_gpu_monitor.py"))]
+
+    def test_no_post_38_syntax_is_used(self):
+        u"""不许用 match 语句(3.10)之类的新语法。"""
+        import ast
+        for path in self._sources():
+            with io.open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read())
+            for node in ast.walk(tree):
+                # Module 之类的容器节点没有 lineno, 而 assertNotIsInstance
+                # 的 msg 是惰性求值的 —— 只有真失败了才会去取 lineno。
+                # 但为了不在消息里冒出 None, 这里统一取不到就给 "?"。
+                if isinstance(node, ast.Match):
+                    self.fail(
+                        "%s 第 %s 行用了 match 语句(3.10+), "
+                        "而 README 承诺支持 3.8"
+                        % (os.path.basename(path),
+                           getattr(node, "lineno", "?")))
+
+    def test_no_post_38_stdlib_api_is_used(self):
+        u"""不许用下表中那些 3.9+ 才有的标准库 API。"""
+        import ast
+        bad = []
+        for path in self._sources():
+            with io.open(path, encoding="utf-8") as f:
+                tree = ast.parse(f.read())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute):
+                    for name, ver, label in self.NEW_API:
+                        if node.attr == name:
+                            bad.append("%s:%s %s(%.1f+)"
+                                       % (os.path.basename(path),
+                                          node.lineno, label, ver))
+                elif isinstance(node, ast.Name):
+                    for name, ver, label in self.NEW_NAMES:
+                        if node.id == name:
+                            bad.append("%s:%s %s(%.1f+)"
+                                       % (os.path.basename(path),
+                                          node.lineno, label, ver))
+        self.assertEqual(bad, [],
+                         "这些用法超出 README 承诺的 3.8: %s" % bad)
+
+    def test_the_readme_states_the_minimum_version(self):
+        u"""README 得把最低版本写出来, 否则承诺无处可查。"""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with io.open(os.path.join(root, "README.md"), encoding="utf-8") as f:
+            readme = f.read()
+        self.assertIn("3.8", readme,
+                      "README 没写最低 Python 版本, 上面两条就没了依据")
+
 class CrossSurfaceRowOrder(unittest.TestCase):
     """同一份快照, --list / Web 面板 / 托盘三面必须落在同一个行序上。
 
