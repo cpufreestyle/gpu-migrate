@@ -6020,7 +6020,7 @@ gm 自己的容错逻辑):
 ### 用户决策待办
 
 1. 现网 exe 仍是旧构建(10-04)。要同步需 build -> sync -> 重启托盘。
-2. 19 条新提交未 push, 与 origin/main 分叉。
+2. 20 条新提交未 push, 与 origin/main 分叉。
 
 ## 139. 续一百三十：趋势图底边贴住状态行，与 Web 面板的 10px 间距不一致（布局/可读性）
 
@@ -6172,3 +6172,44 @@ Canvas 的底边**直接贴住**底部那两行灰字("刷新节奏/快捷键" �
 "近30分钟 峰值xx% 当前xx%"那行字。托盘和 Web 两侧同样（Web 的
 `.corner` 是 `top:3px`）。修它要动 `spark_y_of` 这个共享公式，会同时
 改变阈值线位置，影响面超出"行距"范围，单独一轮做。
+
+## 142. 续一百三十三：趋势图两行小字被折线切成两半（布局/可读性）
+
+### 现象
+
+§141 记账的那个问题，这轮修掉。
+
+角标钉在 `(w-6, 6)`、`anchor="ne"`，而 `spark_y_of` 峰值时 `y` 正好也是
+6（公式 `height - 4 - (height - 10) * v / ymax`，顶部余量就 6px）。实测
+占用冲顶那天，**折线末段 11 个点全落在角标的 bbox 里** ——
+"近30分钟 峰值xx% 当前xx%"那行字被线穿过。Web 侧同样：`.corner` 是
+`top:3px`，而 `_SPARK_H` 下峰值 `y` 也是 3。
+
+### 为什么垫底，而不是把折线区域缩小
+
+放哪个角都躲不开：折线首点在左、末点在右，固定在一角总有一半序列
+撞上。把可绘高度从 36px 砍到 18px 去躲它又太贵 —— 那是拿起伏换不穿
+字。所以垫一块与画布同色的底：线从字底下过，字照样完整。
+
+### 改动
+
+- `gpu_tray.py` 新增 `TrayApp._canvas_label(canvas, x, y, anchor,
+  text, color)`：先画一块比文字 `bbox` 大 2px 的 `_PANEL_BG` 矩形，再
+  `tag_raise` 把文字抬回最上层。三处调用都走它：空态阈值标注、常态
+  阈值标注、角标。
+- `gpu_monitor.py`：`.sparkwrap .thr` / `.corner` 加
+  `background:#f3f3f3`，深色档同步 `#202020`（body 底色）。
+
+### 测试
+
+`SparkGeometryConstants` 新增两条：
+- `test_the_canvas_labels_sit_on_a_background_pad`：托盘三处必须走
+  `_canvas_label`、底垫必须用 `_PANEL_BG` 且 `tag_raise`。
+- `test_the_web_labels_sit_on_a_background_pad`：Web 两档四个规则都
+  必须带 `background`。
+
+实测六种场景（末点冲顶 / 全程 100% / 全程 0% / 无阈值 / 空态 /
+单点）：有阈值时 2 text + 2 rect，无阈值 1+1，空态 2 text + 1 rect
+（中间那句提示不挡折线，不垫）。
+
+全套 **642 条**（640 + 2 新），两个 runner 均全绿。
