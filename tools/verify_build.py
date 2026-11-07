@@ -9,6 +9,7 @@
 # 注意用 python -m PyInstaller 的同一个解释器: 直接 pyinstaller 可能指向
 # 另一个 Python 环境(本机就是 —— 它在 Python312 的 Scripts 下), 那构建出来
 # 的包和源码跑的解释器不是一套。
+import io
 import os
 import shutil
 import subprocess
@@ -19,21 +20,29 @@ SCRATCH = os.path.join(ROOT, '.tmptest', 'buildverify')
 SPECS = ('GPUMigrate.spec', 'GPUMigrate-onedir.spec')
 
 
-def run(cmd, timeout):
-    return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True,
-                          encoding='utf-8', errors='replace',
-                          timeout=timeout)
-
-
 def build(spec):
-    """构建一个 spec, 返回 (成功?, 日志尾部)。"""
+    """构建一个 spec, 返回 (成功?, 日志尾部)。
+
+    日志边跑边透传到文件, 同时屏幕上看得见进度。原先用
+    capture_output=True 全量吞掉, 构建那十几秒里外面一点动静都没有 ——
+    实测时就误判过一次卡死了, 而进程 CPU 时间明明在涨。失败时要查完整
+    日志, 所以不能只透传不落盘。
+    """
     dist = os.path.join(SCRATCH, 'dist')
     work = os.path.join(SCRATCH, 'work')
-    r = run([sys.executable, '-X', 'utf8', '-m', 'PyInstaller', spec,
+    log_path = os.path.join(SCRATCH, 'build-%s.log' % spec)
+    print('%-26s 正在构建(日志 %s)...' % (spec, log_path), flush=True)
+    with open(log_path, 'w', encoding='utf-8', errors='replace') as log:
+        r = subprocess.run(
+            [sys.executable, '-X', '-u', '-m', 'PyInstaller', spec,
              '--noconfirm', '--distpath', dist, '--workpath', work],
+            cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
             timeout=600)
-    tail = ((r.stdout or '') + (r.stderr or '')).strip().splitlines()[-6:]
-    return r.returncode == 0, chr(10).join(tail)
+    if r.returncode == 0:
+        return True, ''
+    with io.open(log_path, encoding='utf-8', errors='replace') as f:
+        lines = f.read().strip().splitlines()
+    return False, chr(10).join(lines[-8:])
 
 
 def smoke(exe_dir):
