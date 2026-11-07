@@ -3365,8 +3365,14 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
     这里按同一个办法收口: 窗高提到 440。
     """
 
-    def _build(self, geom, pad=2, texth=3):
+    def _build(self, geom, pitch, texth):
+        u"""按设置窗真实的那套参数重建一个同款窗。
+
+        pad 由 gpu_tray._row_pad 现算, 不在这里写死: 写死过一次,
+        源码改了测试还按老值建, 绿灯常亮什么也没守。
+        """
         import tkinter as _tk
+        import gpu_tray as gt
         root = _tk.Tk()
         root.geometry(geom)
         grid = _tk.Frame(root)
@@ -3375,52 +3381,60 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
                   "温度提醒 °C", "采样周期 秒", "Web 端口(0关)"]
         cbs = ["自动重启迁移的进程", "迁移前弹窗确认",
                "低负载自动切回核显", "启用内置排除名单"]
+        # 与 _settings_build 同一套: Label 行和勾选行各按自己的控件
+        # 高度算 pad, 名单 Text 行用裸 2(它比 pitch 还高, pad 是 0)
+        lbl_pad = gt._row_pad(gt._ctl_h(grid, _tk.Label, text="x",
+                                          anchor="w"))
+        cb_pad = gt._row_pad(gt._ctl_h(grid, _tk.Checkbutton, text="x"))
         r = 0
         for lb in labels:
             _tk.Label(grid, text=lb, anchor="w").grid(
-                row=r, column=0, sticky="w", pady=pad)
+                row=r, column=0, sticky="w", pady=lbl_pad)
             _tk.Entry(grid, width=10).grid(
-                row=r, column=1, sticky="w", pady=pad)
+                row=r, column=1, sticky="w", pady=lbl_pad)
             r += 1
         for i, t in enumerate(cbs):
             _tk.Checkbutton(grid, text=t, variable=_tk.BooleanVar()).grid(
-                row=r + i, column=0, columnspan=2, sticky="w", pady=pad)
+                row=r + i, column=0, columnspan=2, sticky="w", pady=cb_pad)
         r2 = r + 4
         _tk.Label(grid, text="游戏名单(每行一个)", anchor="w").grid(
-            row=r2, column=0, sticky="nw", pady=pad)
+            row=r2, column=0, sticky="nw", pady=2)
         _tk.Text(grid, width=30, height=texth).grid(
-            row=r2, column=1, sticky="w", pady=pad)
+            row=r2, column=1, sticky="w", pady=2)
         r3 = r2 + 5
         _tk.Label(grid, text="排除名单(每行一个)", anchor="w").grid(
-            row=r3, column=0, sticky="nw", pady=pad)
+            row=r3, column=0, sticky="nw", pady=2)
         _tk.Text(grid, width=30, height=texth).grid(
-            row=r3, column=1, sticky="w", pady=pad)
+            row=r3, column=1, sticky="w", pady=2)
         btn = _tk.Button(root, text="保存 (热重载立即生效)")
         btn.pack(pady=8)
         root.update()
         return root, grid, btn
 
     def _real_params(self):
-        u"""几何与间距参数全部从源码抓, 不许在这里写死。
+        u"""几何与间距参数全部从源码/模块抓, 不许在这里写死。
 
         写死过一次: 上一轮把 pady 从 1 改回 2, 测试替身还按
         pady=1 建窗, 于是测的是改之前的布局 —— 绿灯常亮,
         什么也没守。
         """
-        import gpu_tray
-        body = inspect.getsource(gpu_tray.TrayApp._settings_build)
+        import gpu_tray as gt
+        body = inspect.getsource(gt.TrayApp._settings_build)
         geom = re.search(r'root\.geometry\("(\d+x\d+)"\)', body)
         self.assertIsNotNone(geom, "设置窗没写 geometry, 量不了")
-        pad = re.search(r'sticky="w", pady=(\d+)\)', body)
-        self.assertIsNotNone(pad, "设置窗的行间距不是字面量, 量不了")
         th = re.search(r'tk\.Text\(grid, width=30, height=(\d+)\)', body)
         self.assertIsNotNone(th, "名单 Text 的高度不是字面量, 量不了")
-        return geom.group(1), int(pad.group(1)), int(th.group(1))
+        # 行距不再抓字面量 pady: 它现在是 _row_pad(...) 按控件高度
+        # 算的, 源码里没有数字可抓。抓常量本身, 替身用同一个函数
+        # 重算 —— 两边各算各的话守的是改之前的布局。
+        self.assertTrue(hasattr(gt, "_FORM_ROW_PITCH"),
+                        "设置窗行距没有命名常量了?")
+        return geom.group(1), gt._FORM_ROW_PITCH, int(th.group(1))
 
     def test_the_save_button_is_not_squeezed_flat(self):
         u"""满高度才算数: 18px 那种是被压过的, 不是正常按钮。"""
-        geom, pad, texth = self._real_params()
-        root, grid, btn = self._build(geom, pad=pad, texth=texth)
+        geom, pitch, texth = self._real_params()
+        root, grid, btn = self._build(geom, pitch=pitch, texth=texth)
         try:
             want = btn.winfo_reqheight()
             got = btn.winfo_height()
@@ -3443,7 +3457,7 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
         "光提窗高不管用、pady 和名单行数得一起收"这个结论。
         """
         for h in (420, 430, 440, 450, 460):
-            root, grid, btn = self._build(f"460x{h}", pad=2, texth=4)
+            root, grid, btn = self._build(f"460x{h}", pitch=2, texth=4)
             try:
                 self.assertLess(
                     btn.winfo_height(), btn.winfo_reqheight(),
@@ -8317,7 +8331,14 @@ class DetailPrefRefresh(unittest.TestCase):
         """
         import tkinter as _tk
         root = _tk.Tk()
-        root.geometry("520x300")   # 与详情窗同一个尺寸
+        # 尺寸从源码抓, 不写死: 写死过一次, 详情窗 300 -> 320 之后
+        # 这个替身还按 300 建, 量的是改之前的布局。
+        import re as _re
+        geom = _re.search(r'root\.geometry\("(\d+x\d+)"\)',
+                          inspect.getsource(
+                              self.tray.TrayApp._detail_build))
+        self.assertIsNotNone(geom, "详情窗没写 geometry, 量不了")
+        root.geometry(geom.group(1))
         try:
             frm = _tk.Frame(root)
             frm.pack(fill="both", expand=True, padx=14, pady=10)
@@ -10016,6 +10037,56 @@ class TrayPanelStatusFloor(unittest.TestCase):
             self.assertEqual(tree.bbox(tree.get_children()[0], "a")[1],
                              gt._TREE_HEAD_H,
                              "实测表头高与 _TREE_HEAD_H 不一致")
+        finally:
+            root.destroy()
+
+    def test_the_three_windows_share_one_row_pitch(self):
+        u"""主面板表格、设置窗、详情窗的行距必须是同一个数。
+
+        三个窗口原来是三套值: 主面板表格 28px、设置窗输入行 25px
+        (裸 pady=2 + Entry 21)、详情窗 27px(裸 pady=2 + Label 23)
+        —— 用户在三个窗之间来回切, 疏密感对不上, 而代码里没有任何
+        东西保证它们一致。_FORM_ROW_PITCH 就是那把统一的尺。
+        """
+        import tkinter as _tk
+        import gpu_tray as gt
+        root = _tk.Tk()
+        try:
+            gt._rebuild_fonts()
+            gt._apply_fluent_theme()
+            # 1. 常量本身: 必须是正奇数, 否则 (P-23) 与 (P-27) 里
+            #    有一个是奇数, _row_pad 只能四舍五入, 行距立刻不齐
+            pitch = gt._FORM_ROW_PITCH
+            self.assertGreater(pitch, 0, "_FORM_ROW_PITCH 要是正数")
+            self.assertEqual(pitch % 2, 1,
+                             "_FORM_ROW_PITCH %d 是偶数: Label 23 和 "
+                             "Checkbutton 27 补不出整数 pad, 行距会 "
+                             "四舍五入成两个值" % pitch)
+            # 2. _row_pad 对每种控件都给整数且上下相等
+            for name, h in (("Label", 23), ("Entry", 21),
+                            ("Checkbutton", 27)):
+                pad = gt._row_pad(h)
+                self.assertEqual(pad[0], pad[1],
+                                 "%s 行的 pad 上下不对称(%s): "
+                                 "相邻行的 pady 相加会在两个值之间跳"
+                                 % (name, pad))
+                self.assertEqual(pad[0] * 2 + h, pitch,
+                                 "%s 行(高 %d)配 pad %s 行距是 %d, "
+                                 "不是 _FORM_ROW_PITCH %d"
+                                 % (name, h, pad, pad[0] * 2 + h, pitch))
+            # 3. 控件比目标行距高时不许给出负数 pad
+            self.assertEqual(gt._row_pad(43), (0, 0),
+                             "比 _FORM_ROW_PITCH 高的控件(名单 Text) "
+                             "pad 必须是 0")
+            # 4. 主面板表格行高必须和它同一个密度(差 1px 是底噪:
+            #    表格行高由文字留白定(32 = 17 linespace + 上下各 7.5),
+            #    而 _FORM_ROW_PITCH 要迁就 Label 23 / Checkbutton 27
+            #    的整数 pad, 只能取奇数 31)
+            self.assertLessEqual(abs(gt._ROW_H - pitch), 1,
+                                 "主面板表格行高 %d 与 _FORM_ROW_PITCH "
+                                 "%d 差 %dpx: 三个窗口还是两种密度"
+                                 % (gt._ROW_H, pitch,
+                                    abs(gt._ROW_H - pitch)))
         finally:
             root.destroy()
 

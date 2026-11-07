@@ -288,6 +288,20 @@ _PANEL_PAD = 8
 # 状态行压扁。窗口位置不变(_onscreen_geometry 只提高度不动
 # 位置), 768 高屏幕上 y=55 时底部到 685, 距屏底还有 83px。
 _ROW_H = 32
+
+# 设置窗/详情窗里 grid 每一行的目标行距。原来这两处是裸的 pady=2:
+# 而控件自然高度各不一样(Label 23 / Entry 21 / Checkbutton 27 /
+# 名单 Text 43), 同一个 2 给出的行距是 25 / 27 / 31 / 47 四种 ——
+# 设置窗输入行 25px、勾选行 31px 差 6px, 详情窗又是 27px,
+# 加上主面板表格 32px, 四个数字四种密度。
+# 现在按目标行距反推每一行的 pad(见 _row_pad), 统一到 31。
+# 取奇数 31 而不是 32: Label 23 与 Checkbutton 27 都是奇数高,
+# (31-23) 和 (31-27) 才是偶数, 两种控件都补得出整数 pad;
+# 取 32 时有一个要四舍五入, 行距立刻裂成两个值。
+# 与主面板表格行高 _ROW_H=32 差 1px —— 那个数由文字留白定
+# (17px linespace + 上下各 7.5), 动它会挤文字, 所以这里迁就它。
+_FORM_ROW_PITCH = 31
+
 _BLOCK_GAP = 4
 # 汇总卡内部左右内边距, 和 Web 面板 .card{padding:9px 16px} 的左右 16px
 # 对齐。原来是 9: 上下那半边早就按 9px 对齐了(见下面 pady=(5, ...) 那两个),
@@ -459,6 +473,54 @@ def _heat_color(cls):
 
 _TIP_DELAY_MS = 500        # 停多久才弹: 一扫而过不该弹泡
 _TEXT_PX_FONT = [None]
+
+
+def _ctl_h(master, cls, **kw):
+    u"""控件在**当前字体/主题**下的自然高度。
+
+    _row_pad 要按控件高度反推行距, 而控件没建出来之前量不到 ——
+    winfo_reqheight 得有一个真窗口。这里在调用方给的 master 上建一个
+    量完就收掉, 不进事件循环也不显示。
+
+    master 必须由调用方传进来, 不能自己 tk.Tk(): 整个进程只允许有
+    一个 Tcl 解释器(见 _ui_main 与 TraySingleInterpreter), 每次量
+    高度都新建一个 root 会把那条契约打破, 还会真的多开解释器。
+
+    字体是运行时才知道的(_rebuild_fonts 按系统主题换), 所以不能
+    写成常量表: 硬编码 21/27 会在换主题后悄悄对不上。
+    """
+    w = cls(master, **kw)
+    w.grid()
+    master.update_idletasks()
+    h = int(w.winfo_reqheight())
+    w.destroy()
+    return h
+
+def _row_pad(widget_h):
+    u"""控件自然高度 -> 这一行上下各留多少, 行距才够 _FORM_ROW_PITCH。
+
+    pady 写成同一个数(以前是 2)在控件高度不一时给不出统一行距:
+    Label 23、Entry 21、Checkbutton 27 加同一个 2 之后, 量出来的
+    行距是 27 / 25 / 31 三种, 一列格子疏密不匀。
+
+    这里按控件自身高度反推: 上下各补 (_FORM_ROW_PITCH - 高) 的一半,
+    同一种控件拿到的 pad 相同, 行距因此一致。
+
+    注意 grid 里相邻两行的间距 = 上一行的 pady 下 + 下一行的 pady 上,
+    所以 pad 必须上下对称(相等): 给成 (5,4) 这种不对称值时, 交界
+    处的和会在两个数之间跳(实测输入行 -> 勾选行在 29 与 33 之间
+    交替)。跨控件的那一道交界仍然差 2px —— 23 与 27 差 4px,
+    这是整数像素下的最好结果; _FORM_ROW_PITCH 取奇数 31 正是为了
+    让 (31-23) 和 (31-27) 都是偶数, 两种控件都不用四舍五入。
+
+    控件本身就比目标行距高时(名单 Text 三行 43px)返回 0 ——
+    压不动, 也不该压。
+    """
+    slack = _FORM_ROW_PITCH - int(widget_h)
+    if slack <= 0:
+        return (0, 0)
+    half = slack // 2
+    return (half, half)
 
 
 def _fit_text(text, avail_px):
@@ -1164,26 +1226,38 @@ class TrayApp:
             counted = True
             self._ui_windows += 1
             root.title("GPU 监控设置")
-            # 420 装不下: 6 行输入 + 4 个勾选 + 两个 3 行名单
-            # = 356, 再算上 pady 8x2 与保存键 30 + pady 8x2 只有
-            # 358 可用 —— expand 的 grid 一超, pack 就把后声明的
-            # 保存键压成 1px 高(和主面板 470 那个坑同款)。实测:
-            #     420 -> 按钮 1px   430 -> 18px   440 -> 30px 满血
-            # 460 配 pady=2 / 名单 3 行: 行距 27px(Entry 21 + 上下各
-            # 3), 与主面板表格行 28px 同一个密度, 余量 18px。
-            root.geometry("460x460")
+            # 纵向预算(实测, 按 _FORM_ROW_PITCH=31 算):
+            #   6 行输入 x 31 + 4 个勾选 x 31 + 2 段名单 x 43
+            #   = 186 + 124 + 86 = 396
+            # 加 grid 的 pady 8x2 与保存键 30 + pady 8x2 = 460 可用,
+            # 所以 520 留得出余量。460 那个老尺寸装不下: expand 的
+            # grid 一超预算, pack 就把后声明的保存键压成 1px 高 ——
+            # 与主面板 470 那个坑同款。实测:
+            #     420 -> 按钮 1px   460 -> 30px 满血(行距 25px)
+            #     520 -> 按钮 30px 满血, 行距 31px 与主面板 32px 同密度
+            # SettingsWindowFitsItsOwnFrame 替身按同一套参数重建,
+            # 保存键不满血就当场红。
+            root.geometry("460x520")
             root.attributes("-topmost", True)
             cfg = load_config(self.config_path)
             rows = []
             grid = tk.Frame(root)
             grid.pack(fill="both", expand=True, padx=12, pady=8)
 
+            # 全窗共用一个行距补丁: 控件高不一时(Label 23 / Entry 21 /
+            # Checkbutton 27), 每行各算各的话相邻两行的 pady 相加仍然
+            # 对不齐 —— 量出来的行距会在 30/31/32 之间跳。按全窗最高
+            # 的控件(Label)算一份, 所有行共用。
+            _form_pad = _row_pad(_ctl_h(grid, tk.Label, text="x",
+                                        anchor="w"))
             def add_entry(label, key, width=10):
-                tk.Label(grid, text=label, anchor="w").grid(
-                    row=len(rows), column=0, sticky="w", pady=2)
+                lb = tk.Label(grid, text=label, anchor="w")
+                lb.grid(row=len(rows), column=0, sticky="w",
+                        pady=_form_pad)
                 var = tk.StringVar(value=str(cfg.get(key, "")))
                 e = tk.Entry(grid, textvariable=var, width=width)
-                e.grid(row=len(rows), column=1, sticky="w", pady=2)
+                e.grid(row=len(rows), column=1, sticky="w",
+                        pady=_form_pad)
                 # Enter 直接保存: 六个格子 Tab 走完再摸鼠标去点那个按钮,
                 # 键盘用户的手要在键盘和鼠标之间来回搬一趟。save 定义在
                 # 下面, lambda 调用时才查名, 赶得上(与面板 refresh 同款)。
@@ -1206,9 +1280,19 @@ class TrayApp:
             for i, (text, var) in enumerate((
                     ("自动重启迁移的进程", v_ar), ("迁移前弹窗确认", v_cm),
                     ("低负载自动切回核显", v_pa), ("启用内置排除名单", v_ed))):
-                tk.Checkbutton(grid, text=text, variable=var).grid(
-                    row=r + i, column=0, columnspan=2, sticky="w", pady=2)
+                cb = tk.Checkbutton(grid, text=text, variable=var)
+                cb.grid(row=r + i, column=0, columnspan=2, sticky="w",
+                        # 勾选行用自己的 pad: Checkbutton 27px 与 Label
+                        # 23px 差 4px, 共用一份 pad 的话这一行的行距
+                        # 会是 35px, 比输入行宽出 4px。
+                        pady=_row_pad(_ctl_h(grid, tk.Checkbutton,
+                                        text=text)))
 
+            # 名单段: Label 与 Text 同行, 而 Text 三行就有 43px ——
+            # 比 _FORM_ROW_PITCH 还高, _row_pad 会给 (0,0), 这一行
+            # 的行距就是 Text 自己的高度。这是有意的: 三行文本压到
+            # 32px 会读不成行, 而它上面那个 Label 只占 23px,
+            # 顶对齐(sticky="nw")跟着 Text 的顶边走, 不会歪。
             r2 = r + 4
             tk.Label(grid, text="游戏名单(每行一个)", anchor="w").grid(
                 row=r2, column=0, sticky="nw", pady=2)
@@ -2164,7 +2248,11 @@ class TrayApp:
             counted = True
             self._ui_windows += 1
             root.title(f"进程详情 - pid {pid}")
-            root.geometry("520x300")
+            # 8 行 x 31px(_FORM_ROW_PITCH) + padx 10x2 = 268, 而折行
+            # 的长路径会占两行 —— 320 留得出余量。原来是 300: 行距
+            # 27px 时刚好, 提到 31 之后 reqheight 310, 底边那行会被
+            # 裁掉一半。
+            root.geometry("520x320")
             root.attributes("-topmost", True)
             try:
                 root.iconbitmap(_APP_ICON)
@@ -2232,9 +2320,15 @@ class TrayApp:
                                    "该进程已不在本轮采样中(可能已退出或 pid 被复用), "
                                    "下面是点击那一行的读数"))
             pref_label = None
+            # 行距与设置窗同一把尺(_FORM_ROW_PITCH): 详情窗 8 行原来
+            # 也是裸 pady=2, Label 23px 加 2 是 27px 行距, 比设置窗
+            # 输入行的 25px 宽、比主面板表格的 32px 窄 —— 三个窗口
+            # 三种疏密。
+            det_pad = _row_pad(_ctl_h(frm, tk.Label, text="x",
+                                        anchor="ne"))
             for i, (k, v) in enumerate(lines):
                 tk.Label(frm, text=k + ":", anchor="ne", fg=_MUTED).grid(
-                    row=i, column=0, sticky="ne", pady=2)
+                    row=i, column=0, sticky="ne", pady=det_pad)
                 # wraplength 不能比右列真能用的宽度大: 520 宽窗减掉
                 # padx 14x2 与键名列 141 之后只剩 351, 写 380 的话
                 # Tk 直接把这一行画到窗户外(它只保证折到 wraplength,
@@ -2242,7 +2336,7 @@ class TrayApp:
                 lb = tk.Label(frm, text=v, anchor="w",
                               wraplength=_DETAIL_WRAP_PX,
                               justify="left")
-                lb.grid(row=i, column=1, sticky="w", pady=2)
+                lb.grid(row=i, column=1, sticky="w", pady=det_pad)
                 if k == "GPU 首选项":
                     pref_label = lb
             frm.columnconfigure(1, weight=1)
