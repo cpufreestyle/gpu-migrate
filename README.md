@@ -136,7 +136,7 @@ python gpu_monitor.py --unset-all
 | `notify_fullscreen_ignore` | true | 前台全屏(游戏/视频)时不弹通知, 收进通知中心 |
 | `power_aware` | true | 电源感知: 用电池时自动切省电策略(阈值降到 battery_threshold_percent) |
 | `battery_threshold_percent` | 40 | 电池供电时的迁移阈值 |
-| `nvml_temp` | true | 独显温度监控(NVML, NVIDIA 驱动自带) |
+| `nvml_temp` | true | 独显温度监控(NVML, NVIDIA 驱动自带; 源码态读温度跑在隔离子进程里) |
 | `temp_limit` | 85 | 独显温度超过该值弹提醒(摄氏度) |
 | `web_port` | 8787 | 本地 Web 面板端口, 0=关闭 (http://127.0.0.1:端口) |
 | `power_saver_notify` | false | 独显上持续低负载的程序提醒可切回核显省电 |
@@ -230,6 +230,18 @@ python gpu_monitor.py --unset-all
   页面在说谎（同面板那条“服务端送出去的 HTML 自己不能说着谎”）。从没读到过
   温度的机器（无独显 / 无驱动）不报故障，也不会每次启动留一行告警。高温提醒
   仍只认当轮真读数 `t`，不会拿暂留值去触发。
+- **读温度那句原生调用搬进了隔离子进程**: 本机 `gpu_monitor_crash.log` 里 165 段
+  access violation 的首帧全落在 `nvmlDeviceGetTemperature` 那一行上（见上一条对
+  faulthandler 的说明）—— C 级访问冲突能不能被 Python 接住取决于被调方内部有没有
+  SEH，不取决于 Python，所以这是真会发生的事，不是理论风险。现在源码态下每次读
+  温度都起一个干净的子进程（隐藏子命令 `--nvml-probe`，跑同一个源文件，
+  `CREATE_NO_WINDOW` 不闪控制台），父进程只认它的退出码和 stdout：子进程被内核干掉
+  时死的是它，监控循环和托盘照常活着，那一轮按普通读取失败处理（面板有上一段的暂留
+  逻辑兜着）。探针起不来 / 超时 / stdout 不是数字，一律当“没隔离”，退回进程内直读，
+  功能不丢也不外抛异常；探针自己走 `isolate=False`，不会子进程生孙进程。只在源码态
+  隔离：打包版 `sys.executable` 就是 exe，每次起子进程都要重新解压 onefile 镜像（实测
+  4 秒以上），而温度每 10s 读一次，隔离会把采样周期整个吃光，所以那种环境下老老实实
+  进程内直读。实测子进程读一次 ~0.3s，进程内直读 ~42ms。
 - **PDH 通配展开的缓冲区有了上界**：`expand_counter_paths` 的缓冲区是照 `PdhExpandWildCardPathW` 报回的字符数现分配的（`size.value + 1024` 余量，防两次调用之间实例数增长）。对这个数不设上界，等于让一个外部 API 的返回值决定本进程一次分配多少内存：报回荒谬值时 `create_unicode_buffer` 直接 `MemoryError`，采样线程硬死，连 `_dbg` 那种"留一行痕迹"的机会都没有。现在超过 1M 字符就 `OSError` 拒绝分配，且不重试（荒谬的长度重试五次还是荒谬）。本机实测一次展开 507 条 GPU Engine 实例路径 / 54,943 字符，上限是它的约 19 倍 —— 拦不到正常用量，只拦荒谬值。
 - **测试**：`python tests/test_gpu_monitor.py`（纯标准库 unittest，516 用例；
    跑测试不会碰仓库里的任何状态文件：  `TraySingleInterpreter` 只把 config.json 指去临时目录，`_UI_FILE` 还指着仓库里那份，而其中一条用例会真的走一遍 `on_close`。

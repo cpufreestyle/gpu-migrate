@@ -1087,8 +1087,8 @@ def nvml_load():
     return lib
 
 
-def nvml_gpu_temp(index=0):
-    """独显温度摄氏度, 失败返回 None。"""
+def _nvml_read_in_process(index):
+    """进程内直读 NVML。nvml_gpu_temp 的实现本体, 也是 --nvml-probe 的活。"""
     lib = nvml_load()
     if not lib:
         return None
@@ -1102,6 +1102,62 @@ def nvml_gpu_temp(index=0):
         return t.value
     except Exception:
         return None
+
+
+# NVML 隔离子进程的预算: 起进程 + nvmlInit + 读一次, 实测 ~130ms。
+# 超时就地退回进程内直读 —— 宁可慢一点, 也不让温度拖垮采样周期。
+_NVML_PROBE_TIMEOUT = 8.0
+
+
+def _nvml_probe_in_subprocess(index):
+    """在子进程里读一次温度; 读不到/起不来/子进程死了都返回 None。
+
+    本机 nvmlDeviceGetTemperature 真的会抖: gpu_monitor_crash.log 里 165 段
+    access violation 的首帧全落在这一行上(见 install_fault_dump)。C 级段错误
+    Python 层接不住, 进程被内核直接干掉 —— 而那正是监控线程自己。
+
+    把这一次原生调用搬到子进程, 抖的时候死的是子进程: 父进程拿到非零退出码
+    或读不到 stdout, 当作一次普通读取失败(面板有暂留逻辑兜着), 监控循环
+    和托盘照常活着。这是 §109/§111 记下的"子进程隔离采样"的最小落地版:
+    不搬整个采样(那要改进程模型), 只搬唯一有实证危险的那一个调用。
+
+    只在 sys.executable 是真解释器时才隔离。打包版(sys.executable 就是 exe)
+    每次起子进程都要重新解压 onefile 镜像, 实测 4 秒以上, 而温度每 10s 读
+    一次 —— 隔离会把采样周期整个吃光。那种环境下老老实实进程内直读。
+    """
+    if getattr(sys, "frozen", False):
+        return None
+    try:
+        r = subprocess.run(
+            [sys.executable, "-X", "utf8", __file__ if "__file__" in globals()
+             else sys.argv[0], "--nvml-probe", str(int(index))],
+            cwd=_DIR, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=_NVML_PROBE_TIMEOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        return None                      # 起不来就当没隔离, 别把异常外抛
+    if r.returncode != 0:
+        return None                      # 子进程被干掉/自己炸了: 隔离生效
+    out = (r.stdout or "").strip().splitlines()
+    if not out:
+        return None
+    try:
+        return int(out[-1])
+    except ValueError:
+        return None
+
+
+def nvml_gpu_temp(index=0, isolate=True):
+    """独显温度摄氏度, 失败返回 None。
+
+    isolate=True 时优先在子进程里读(见 _nvml_probe_in_subprocess), 拿不到
+    才退回进程内。--nvml-probe 自己必须关掉隔离, 否则子进程再生子进程。
+    """
+    if isolate:
+        v = _nvml_probe_in_subprocess(index)
+        if v is not None:
+            return v
+    return _nvml_read_in_process(index)
 
 
 class _POWER_STATUS(ctypes.Structure):
@@ -3183,7 +3239,10 @@ def install_fault_dump():
 
 def main():
     ensure_utf8_output()
-    install_fault_dump()
+    # 探针是秒退的短命进程, 且父进程可能正开着 crash log 的句柄: 让它装
+    # faulthandler 只会白开一个文件句柄, 满档时还要跟父进程抢一次滚动。
+    if "--nvml-probe" not in sys.argv:
+        install_fault_dump()
     # pythonw（开机自启/无窗口模式）下没有 stdout，print 会崩，重定向到空设备
     if sys.stdout is None:
         sys.stdout = open(os.devnull, "w")
@@ -3204,9 +3263,25 @@ def main():
     ap.add_argument("--unset-all", action="store_true",
                     help="清除全部独显设置（GpuPreference=2）")
     ap.add_argument("--config", default=os.path.join(_DIR, "config.json"))
+    # 隐藏子命令: 在干净的子进程里读一次 NVML 温度并打印。父进程拿它当隔离
+    # 探针(见 _nvml_probe_in_subprocess)。故意不进 --help 的说明文案: 它是
+    # 内部机制, 不是给用户敲的。放在 parse 之后、ensure_singleton 之前 ——
+    # 探针是短命进程, 不该跟常驻实例抢单例锁。
+    ap.add_argument("--nvml-probe", type=int, nargs="?", const=0,
+                    default=None, metavar="INDEX", help=argparse.SUPPRESS)
     if getattr(sys, "frozen", False) and len(sys.argv) == 1:
         sys.argv.append("--tray")  # 打包版双击直接进托盘模式
     args = ap.parse_args()
+
+    if args.nvml_probe is not None:
+        # isolate=False: 探针自己就是被隔离的那一层, 不许再生子进程
+        v = nvml_gpu_temp(args.nvml_probe, isolate=False)
+        # 读不到也要退出码 0 + 空输出: 父进程靠"有输出"判断成功, 靠非零
+        # 退出码判断"子进程死了"。两者分得开, 才不会把正常的读不到误判成
+        # 段错误, 进而触发一堆没必要的告警。
+        if v is not None:
+            print(v)
+        return
 
     if args.tray or args.ensure:
         if not ensure_singleton():

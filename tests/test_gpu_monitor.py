@@ -2068,6 +2068,116 @@ class SnapshotContract(LoopHarness):
         self.assertEqual(gm._LAST_SNAPSHOT.get("dgpu_temp"), 61.0)
 
 
+class NvmlProbeIsolation(unittest.TestCase):
+    u"""NVML 读取的子进程隔离: 探针炸了不许带走监控。
+
+    本机 gpu_monitor_crash.log 里 165 段 access violation 的首帧全落在
+    nvmlDeviceGetTemperature 那一行上(见 install_fault_dump)。C 级段错误
+    Python 层接不住, 进程被内核直接干掉 —— 而那正是监控线程自己。把这一
+    次原生调用搬到子进程, 抖的时候死的是子进程。
+
+    这里钉隔离本身的契约, 不钉温度暂留(那是 DgpuTempOutage 的事):
+    探针能读到就用它、探针崩/超时/起不来都当没隔离、任何失败都不许把
+    异常外抛、探针自己不许再生子进程。
+    """
+
+    def setUp(self):
+        import gpu_monitor as gm
+        self.gm = gm
+        self.saved_run = gm.subprocess.run
+        self.saved_read = gm._nvml_read_in_process
+        self.saved_probe = gm._nvml_probe_in_subprocess
+
+    def tearDown(self):
+        self.gm.subprocess.run = self.saved_run
+        self.gm._nvml_read_in_process = self.saved_read
+        # 探针分支也得还原: 有一条用例会整体替换它, 不还原就污染后面的用例
+        self.gm._nvml_probe_in_subprocess = self.saved_probe
+
+    class _Result(object):
+        def __init__(self, rc, out):
+            self.returncode = rc
+            self.stdout = out
+            self.stderr = ""
+
+    def _stub_run(self, result=None, exc=None):
+        def fake_run(cmd, **kw):
+            if exc is not None:
+                raise exc
+            return result
+        self.gm.subprocess.run = fake_run
+
+    def test_a_reading_from_the_probe_wins(self):
+        u"""探针读到了就用探针的数, 不再碰进程内那份。"""
+        self._stub_run(result=self._Result(0, "44\n"))
+        def boom(index=0):
+            raise AssertionError("探针成功时不该回退进程内直读")
+        self.gm._nvml_read_in_process = boom
+        self.assertEqual(self.gm.nvml_gpu_temp(0), 44)
+
+    def test_a_killed_probe_falls_back_instead_of_raising(self):
+        u"""探针被内核干掉(rc!=0): 回退进程内, 不把异常外抛。
+
+        这正是隔离要治的场景: 子进程死了, 父进程必须活着。
+        """
+        self._stub_run(result=self._Result(3, ""))
+        self.gm._nvml_read_in_process = lambda index=0: 61
+        self.assertEqual(self.gm.nvml_gpu_temp(0), 61)
+
+    def test_a_probe_timeout_does_not_take_the_monitor_down(self):
+        u"""探针起不来/超时: 隔离白做, 但监控循环不许被带走。"""
+        self._stub_run(exc=subprocess.TimeoutExpired(cmd="x", timeout=1))
+        self.gm._nvml_read_in_process = lambda index=0: 61
+        self.assertEqual(self.gm.nvml_gpu_temp(0), 61)
+
+    def test_a_probe_that_cannot_start_is_not_an_outage(self):
+        u"""sys.executable 不存在/被拦: 当没隔离, 不报故障。"""
+        self._stub_run(exc=OSError("access denied"))
+        self.gm._nvml_read_in_process = lambda index=0: None
+        self.assertIsNone(self.gm.nvml_gpu_temp(0))
+
+    def test_garbage_probe_output_is_not_a_temperature(self):
+        u"""探针 stdout 不是数字: 当没读到, 别把字符串塞进温度行。"""
+        self._stub_run(result=self._Result(0, "not-a-number"))
+        self.gm._nvml_read_in_process = lambda index=0: None
+        self.assertIsNone(self.gm.nvml_gpu_temp(0))
+
+    def test_the_probe_itself_does_not_spawn_a_probe(self):
+        u"""--nvml-probe 那一层必须 isolate=False, 否则子进程生孙进程。"""
+        seen = []
+
+        def fake_probe(index):
+            seen.append(index)
+            return 44
+
+        self.gm._nvml_probe_in_subprocess = fake_probe
+        # 直接走 isolate=False 那条: 探针分支不该被碰
+        self.assertEqual(self.gm.nvml_gpu_temp(2, isolate=False), None)
+        self.assertEqual(seen, [], "探针层又去起探针了")
+
+    def test_the_probe_runs_the_same_file_it_came_from(self):
+        u"""子进程得跑同一个源文件, 不然探针读的逻辑会和父进程漂移。"""
+        cmds = []
+
+        def fake_run(cmd, **kw):
+            cmds.append((cmd, kw))
+            return self._Result(0, "44")
+
+        self.gm.subprocess.run = fake_run
+        self.gm.nvml_gpu_temp(0)
+        cmd, kw = cmds[0]
+        joined = " ".join(str(c) for c in cmd)
+        self.assertIn("--nvml-probe", joined, "没走隐藏探针子命令")
+        self.assertIn("gpu_monitor.py", joined, "探针没跑同一个源文件")
+        self.assertEqual(kw.get("creationflags"),
+                         getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                         "无窗口模式下探针会闪一个控制台")
+
+    def test_the_probe_budget_is_generous_but_bounded(self):
+        u"""超时必须给够(起进程+nvmlInit+读一次实测 ~0.3s), 又不能无限等。"""
+        self.assertGreaterEqual(self.gm._NVML_PROBE_TIMEOUT, 2.0)
+        self.assertLessEqual(self.gm._NVML_PROBE_TIMEOUT, 30.0)
+
 class DgpuTempOutage(LoopHarness):
     """NVML 一次读不到温度时, 上一读数怎么办。
 
