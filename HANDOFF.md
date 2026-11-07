@@ -6020,7 +6020,7 @@ gm 自己的容错逻辑):
 ### 用户决策待办
 
 1. 现网 exe 仍是旧构建(10-04)。要同步需 build -> sync -> 重启托盘。
-2. 27 条新提交未 push, 与 origin/main 分叉。
+2. 28 条新提交未 push, 与 origin/main 分叉。
 
 ## 139. 续一百三十：趋势图底边贴住状态行，与 Web 面板的 10px 间距不一致（布局/可读性）
 
@@ -6579,3 +6579,56 @@ runner 均全绿。
 
 `WinError 1410` 本轮第四次撞到（discover runner），复跑一次即全绿；
 前三轮已用 `git stash` 回干净 HEAD 定位为 pystray 图标类注册的偶发冲突。
+
+## 150. 续一百四十一：区块左右内边距是三套值（8/6/0），表格比汇总卡宽出 2px（布局）
+
+### 现象
+
+本轮改审横向（此前只审过纵向）。量 pack 之后的 `winfo_x`：
+
+    改前:  cards x=8 w=1030   fbar x=8 w=1030
+           tree  x=6 w=1034   spark x=6 w=1034   bottom x=0 w=1046
+
+表格和趋势图是 `padx=6`，汇总卡和筛选栏是 `padx=8` —— 表格比卡片
+**左右各宽出 2px**，四个区块的左右边缘不在同一条竖线上。底部状态区
+又是 0（贴窗沿，靠里面两行 Label 各自 `padx=8` 补）。
+
+三套值全是早期提交带进来的（`git log -S` 追到 8693c2c / f443408），
+没有任何注释说明为什么该不一样。
+
+Web 面板那边不存在这个问题：`body{padding:16px 20px}` 是**所有区块
+共用的一个外层内边距**，左右边缘天然对齐。
+
+### 改动
+
+- 新增 `_PANEL_PAD = 8`（`gpu_tray.py:277`），注释说明它对应 Web 的
+  `body{padding:...20px}`、以及为什么这个内边距不构成宽度约束
+  （表格列宽合计 722px，而窗口可任意拖窄，表格自带横向滚动条）。
+- `cards` / `fbar` / `tree` / `spark_box` 的 `padx` 全部换成它；
+  底部两行 Label 的 `padx=8` 也换成它。
+- `bottom` 本身保持 `padx=0` 并补注释：里面两行 Label 已各带一份，
+  外层再来一次就成了 16px，比其他区块多缩进一半。
+- 筛选框与 hint 之间的 `entry.pack(padx=6)` **不动** —— 那是元素
+  间距，不是区块内边距。
+
+实测改后：
+
+    改后:  cards/fbar/tree/spark  x=8  right_edge=1038(四个全等)
+           底部 Label            x=8
+
+### 测试
+
+`TrayPanelStatusFloor` 新增两条：
+- `test_every_block_shares_one_left_and_right_edge`：真建 Tk 根、按
+  `_panel_build` 同样的 pack 方式搭四个区块，量 `winfo_x` 与右边缘，
+  各自必须只有一个值（不查源码，量真渲染）。
+- `test_the_panel_pad_is_one_number_used_everywhere`：常量必须存在，
+  `_panel_build` 里 `padx=_PANEL_PAD` 至少 5 处，并逐处点名
+  `tree.pack(...padx=_PANEL_PAD` 与 `spark_box.pack(...padx=_PANEL_PAD`
+  —— 点名是因为注释里也提到 `_PANEL_PAD`，光数次数会被注释凑够
+  （第一版就踩了这个：阈值写 6，被注释凑成 6，变异没被抓到）。
+
+变异验证：把 tree 那处改回裸 `padx=6`，点名断言当场报
+`tree.pack(fill="both", expand=True, padx=_PANEL_PAD not found`。
+
+全套 **652 条**（650 + 2 新），两个 runner 均全绿。

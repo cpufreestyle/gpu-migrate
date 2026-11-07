@@ -9844,6 +9844,67 @@ class TrayPanelStatusFloor(unittest.TestCase):
         self.assertIn("pady=_BLOCK_GAP", body,
                       "表格那处没用 _BLOCK_GAP")
 
+    def test_every_block_shares_one_left_and_right_edge(self):
+        u"""四个区块的左右边缘必须在同一条竖线上。
+
+        原来是 8/6/0 三套值: 汇总卡和筛选栏 padx=8, 表格和趋势图
+        padx=6 —— 表格比卡片左右各宽出 2px, 边缘对不齐, 而 Web 面板
+        那边 body{padding:16px 20px} 是所有区块共用一个外层内边距。
+        这条按真渲染量, 不查源码: 量的是 pack 之后的 winfo_x。
+        """
+        import tkinter as _tk
+        import gpu_tray as gt
+        root = _tk.Tk()
+        try:
+            root.geometry("1046x590")
+            pad = gt._PANEL_PAD
+            blocks = []
+            for h in (56, 28):
+                w = _tk.Frame(root, height=h)
+                w.pack(fill="x", padx=pad, pady=(0, gt._BLOCK_GAP))
+                blocks.append(w)
+            t = _tk.Frame(root)
+            t.pack(fill="both", expand=True, padx=pad,
+                   pady=gt._BLOCK_GAP)
+            blocks.append(t)
+            sp = _tk.Frame(root, height=gt._SPARK_H)
+            sp.pack_propagate(False)
+            sp.pack(fill="x", padx=pad, pady=(0, gt._SPARK_GAP))
+            blocks.append(sp)
+            root.update()
+            xs = {w.winfo_x() for w in blocks}
+            self.assertEqual(len(xs), 1,
+                             f"左边缘不齐: {sorted(xs)}")
+            rights = {w.winfo_x() + w.winfo_width() for w in blocks}
+            self.assertEqual(len(rights), 1,
+                             f"右边缘不齐: {sorted(rights)}")
+        finally:
+            root.destroy()
+
+    def test_the_panel_pad_is_one_number_used_everywhere(self):
+        u"""区块左右内边距也必须是命名常量, 且各处都用它。
+
+        和 _BLOCK_GAP 同一个理由: 散落的裸数字改一处不牵动别处。
+        底部状态区是例外(外层 0, 由里面两行 Label 各自带), 注释里
+        写明了原因。
+        """
+        import gpu_tray as gt
+        self.assertIn("_PANEL_PAD = ",
+                      io.open(gpu_tray.__file__, encoding="utf-8").read(),
+                      "面板左右内边距没有常量")
+        body = inspect.getsource(gt.TrayApp._panel_build)
+        self.assertGreaterEqual(body.count("padx=_PANEL_PAD"), 5,
+                         "区块内边距有五处, 现在只有 %d 处用了常量"
+                         % body.count("padx=_PANEL_PAD"))
+        # 注释里也提到 _PANEL_PAD, 上面那个 count 会被它凑数 —— 所以
+        # 再逐处点名列名: 表格那处历史上是裸 padx=6, 正是要钉死的。
+        self.assertIn("tree.pack(fill=\"both\", expand=True, "
+                      "padx=_PANEL_PAD", body,
+                      "表格没用 _PANEL_PAD: 它比汇总卡宽出 2px 的老毛病"
+                      "会回来")
+        self.assertIn("spark_box.pack(fill=\"x\", padx=_PANEL_PAD", body,
+                      "趋势图没用 _PANEL_PAD")
+
     def test_the_status_floor_is_taller_than_its_two_labels(self):
         u"""状态区高度要装得下两行 Label, 不然压扁的还是它自己。"""
         import gpu_tray as gt

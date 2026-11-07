@@ -269,6 +269,12 @@ _STATUS_LINE_GAP = 2
 # 行间 2px 与 Web 面板 #hidden / #counters 的 margin:2px 0 0 对齐。
 # 这个高度会被 Frame 锁死, 详见 _panel_build 里 spark_box / bottom 那段。
 _STATUS_H = 52
+# 面板左右内边距。Web 面板那边是 body{padding:16px 20px}, 所有区块共用
+# 同一个外层内边距, 左右边缘是对齐的; 托盘这边原来是 8/6/0 三套值, 表格
+# 比汇总卡左右各宽出 2px, 边缘对不齐。统一成一个数: 区块的左右边都在同一
+# 条竖线上, 和 Web 一个做法。(表格列宽合计 722px, 而窗口可以任意拖窄,
+# 表格自己有横向滚动条, 所以这个内边距不构成任何宽度约束。)
+_PANEL_PAD = 8
 # 面板四个区块之间的间距: 汇总卡 -> 筛选栏 -> 表格 -> 趋势图, 每处都是
 # 4px。Web 面板那边区块顺序不同(卡片 -> 趋势图 -> 筛选框 -> 表格), 没有
 # 一一对应的 margin 可对齐, 所以这里取一个自己的统一值: 三处同一个数,
@@ -1654,7 +1660,8 @@ class TrayApp:
                         "dgpu": 55, "dmem": 75, "smem": 75, "pref": 160}
             # 顶部汇总条: 口径与 Web 面板共用一份 (panel_summary)
             cards = tk.Frame(root, bg=_BG)
-            cards.pack(fill="x", padx=8, pady=(8, _BLOCK_GAP))
+            cards.pack(fill="x", padx=_PANEL_PAD,
+                        pady=(8, _BLOCK_GAP))
             card_labels = {}
             last = len(panel_summary(self.snapshot or {})) - 1
             tips = {}
@@ -1681,7 +1688,8 @@ class TrayApp:
 
             # 筛选框: 进程多的时候这一栏比表格本身更有用
             fbar = tk.Frame(root, bg=_BG)
-            fbar.pack(fill="x", padx=8, pady=(0, _BLOCK_GAP))
+            fbar.pack(fill="x", padx=_PANEL_PAD,
+                       pady=(0, _BLOCK_GAP))
             _filter_hint = tk.Label(fbar, text=_FILTER_HINT, bg=_BG,
                                     fg=_MUTED, font=_FONT_UI)
             _filter_hint.pack(side="left")
@@ -1763,7 +1771,7 @@ class TrayApp:
                     tree.tag_configure(cls, foreground=color)
             # 前景归热度 tag 管, 背景归隔行 tag 管, 两个 tag 各管一头
             tree.tag_configure(_ROW_ALT_TAG, background=_ROW_ALT_BG)
-            tree.pack(fill="both", expand=True, padx=6,
+            tree.pack(fill="both", expand=True, padx=_PANEL_PAD,
                       pady=_BLOCK_GAP)
 
             # Esc: 有筛选词先清空, 已经空了才关窗 (和常见工具的套路一致)
@@ -1800,7 +1808,8 @@ class TrayApp:
             # 下方留 10px, 与 Web 面板 .sparkwrap 的 margin:0 0 10px 同一个
             # 数。原来是 pady=(0,0): 趋势图底边直接贴住底部状态行, 折线和
             # 那两行灰字之间一点空隙都没有, 而 Web 面板那边是 10px。
-            spark_box.pack(fill="x", padx=6, pady=(0, _SPARK_GAP))
+            spark_box.pack(fill="x", padx=_PANEL_PAD,
+                            pady=(0, _SPARK_GAP))
             spark.pack(in_=spark_box, fill="x")
 
             # 和 Web 面板同一把尺: 弱化色在卡片底上必须过 AA。
@@ -1814,11 +1823,16 @@ class TrayApp:
             # + 底部 6px: 合计 52px, 这就是底部状态区的保底高度。
             bottom = tk.Frame(root, bg=_BG, height=_STATUS_H)
             bottom.pack_propagate(False)
+            # 底部状态区不带外层内边距: 它里面的两行 Label 各自有
+            # padx=_PANEL_PAD, 外层再来一次就成了 16px, 会比其他区块
+            # 多缩进一半。
             bottom.pack(fill="x", padx=0, pady=(0, 0))
             tip = tk.Label(bottom, text="", anchor="w", fg=_MUTED)
-            tip.pack(fill="x", padx=8, pady=(0, _STATUS_LINE_GAP))
+            tip.pack(fill="x", padx=_PANEL_PAD,
+                      pady=(0, _STATUS_LINE_GAP))
             count = tk.Label(bottom, text="", anchor="w", fg=_MUTED)
-            count.pack(fill="x", padx=8, pady=(0, 6))
+            count.pack(fill="x", padx=_PANEL_PAD,
+                       pady=(0, 6))
 
             # 右键菜单: 永不迁移
             menu = tk.Menu(root, tearoff=0)
