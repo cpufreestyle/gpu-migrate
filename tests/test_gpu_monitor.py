@@ -9782,7 +9782,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
     u"""趋势图和底部两行状态不许被 Treeview 挤成 1px。
 
     实测 1040x470 的默认窗口: 卡片 68 + 筛选栏 32 + 表格 370(12 行) +
-    趋势图 46 + 状态区 51 = 567, 缺口 97px。而 Treeview 是 fill=both +
+    趋势图 46 + 状态区 52 = 568, 缺口 98px。而 Treeview 是 fill=both +
     expand=True, pack 在总量超限时把后面几个部件按剩余空间压扁 ——
     趋势图 Canvas 实测只剩 1px 高, 底部那两行同样 1px。用户根本看不见
     "刷新节奏/快捷键"和"采样 N 轮", 而代码里 height=46 写得明明白白。
@@ -9790,9 +9790,6 @@ class TrayPanelStatusFloor(unittest.TestCase):
     表格少了可以滚动, 趋势图和状态行少了没有任何补救, 所以这道契约要
     有人盯: 纵向预算一不够就得当场红, 而不是等用户说"趋势图不见了"。
     """
-
-    _BLOCKS = (("cards", 68), ("fbar", 32), ("tree", 370),
-               ("spark", 46), ("status", 51))
 
     def _budget(self):
         """默认窗口高度下各区块请求高度之和。"""

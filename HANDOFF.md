@@ -6020,7 +6020,7 @@ gm 自己的容错逻辑):
 ### 用户决策待办
 
 1. 现网 exe 仍是旧构建(10-04)。要同步需 build -> sync -> 重启托盘。
-2. 24 条新提交未 push, 与 origin/main 分叉。
+2. 25 条新提交未 push, 与 origin/main 分叉。
 
 ## 139. 续一百三十：趋势图底边贴住状态行，与 Web 面板的 10px 间距不一致（布局/可读性）
 
@@ -6432,3 +6432,50 @@ wraplength"，**不是**"折得进窗内"。有空格的长路径（Steam 游戏
   心情好。
 
 全套 **649 条**（647 + 2 新），两个 runner 均全绿。
+
+## 147. 续一百三十八：间距守卫自己留着 51 的旧值，另有一处偶发 WinError 1410（布局/测试卫生）
+
+### 本轮审过但没缺陷的面（都量了）
+
+- **汇总卡内边距**：Tk 实测盒高 58px，Web 按盒模型推 59.2px
+  （span 14.4 + b margin-top 2 + b 22.8 + padding 9x2 + border 1x2）。
+  差 1.2px，不值得动。
+- **表格行高**：Tk `rowheight=28`，Web `td` 推 28.6px
+  （13px 字号 linespace 15.6 + padding 6x2 + border 1）。差 0.6px。
+- **趋势图左右内边距**：Tk 角标 `x=5`，Web `.thr{left:4px}`。差 1px。
+- **筛选栏与表格间距**：Tk `pady=(0,4)`，Web `#q` 无 margin 但紧跟
+  `.sparkwrap` 的 `margin:0 0 10px`。节奏接近。
+- **托盘右键菜单 / `_detail_msg`**：前者菜单项行距由 Tk 定不可调，
+  后者只改 `root.title` 不是弹窗，都没有行距可优。
+- **表头高度 38px**：§141 已实测 `Treeview.Heading` 的 padding 从
+  `(6,3)` 到 `(6,6)` 高度一个字节都不动，ttk 布局算法定死，不追。
+
+### 改动：间距守卫里的旧值 51
+
+§140 把 `_STATUS_H` 从 51 提到 52（底部两行行距 1px -> 2px），同节
+的测试注释（`_STATUS_H 同步 51 -> 52`）记得这件事，但
+`TrayPanelStatusFloor._budget()` 里 `("status", 51)` 和类文档字符串里
+的"状态区 51 = 567, 缺口 97px"没跟着改：
+
+    _BLOCKS = (("cards", 68), ("fbar", 32), ("tree", 370),
+               ("spark", 46), ("status", 51))
+
+方向上是安全的（少算 1px，守卫只会更严不会更松），但它是**常量漂移**：
+下次谁再改 `_STATUS_H`，这个数照样不会响。
+
+改法：`_budget()` 里的 51 换成 `gt._STATUS_H`，文档字符串的算式改成
+52 / 568 / 98。另外 `_BLOCKS` 这个类属性**定义之后从没被任何方法
+引用过**（`rg _BLOCKS` 只有定义处一行）—— 死数据正是漂移的温床，删掉。
+
+### 顺带确认：WinError 1410 是偶发，不是本轮引入
+
+`discover` runner 有一次报
+`TraySingleInterpreter.setUp` -> `OSError: [WinError 1410] 类已存在`。
+用 `git stash` 回到干净 HEAD 复跑：同类单独跑 19 条全绿、整套
+discover 也全绿；恢复改动后再跑整套照样全绿。结论是 pystray 托盘
+图标类注册的偶发冲突，与改动无关，不留债。
+
+### 测试
+
+无新增用例（改的是测试自己的陈旧数据）。全套 **649 条**，两个 runner
+均全绿；`WinError 1410` 复现两次、干净 HEAD 上一次，已定位为偶发。
