@@ -9515,12 +9515,13 @@ class TrayPanelStatusFloor(unittest.TestCase):
                 28 + 4,              # fbar
                 12 * 28 + 30,        # tree: 12 行 x 28 + 表头
                 gt._SPARK_H,
+                gt._SPARK_GAP,       # 趋势图与状态区之间的间距
                 gt._STATUS_H)
 
     def test_the_default_window_is_tall_enough_for_every_block(self):
         u"""保底高度装得下全部区块, 且留一点余量给窗口边框。"""
-        min_h, cards, fbar, tree, spark, status = self._budget()
-        need = cards + fbar + tree + spark + status
+        vals = self._budget()
+        min_h, need = vals[0], sum(vals[1:])
         self.assertGreaterEqual(min_h, need,
                                msg="默认窗口比全部区块矮 %dpx: pack 会压扁"
                                     "趋势图和底部状态行" % (need - min_h))
@@ -9547,7 +9548,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         u"""读到的窗口太矮要提到保底高度(老存档正是 1046x470)。"""
         import gpu_tray as gt
         got = gt._onscreen_geometry("1046x470+55+55", 1512, 949)
-        self.assertEqual(got, "1046x580+55+55",
+        self.assertEqual(got, "1046x590+55+55",
                          "老存档的矮窗口原样还回去, 趋势图就被压成 1px")
 
     def test_a_tall_window_keeps_the_height_the_user_chose(self):
@@ -9555,6 +9556,29 @@ class TrayPanelStatusFloor(unittest.TestCase):
         import gpu_tray as gt
         for text in ("1040x700+10+10", "1200x900+0+0"):
             self.assertEqual(gt._onscreen_geometry(text, 1512, 949), text)
+
+    def test_the_spark_gap_matches_the_web_panel(self):
+        u"""趋势图与下方区块的间距, 三面得是同一个数。
+
+        原来是 pady=(0,0): 趋势图底边直接贴住底部状态行, 折线和那两行灰字
+        之间一点空隙都没有, 而 Web 面板 .sparkwrap 是 margin:0 0 10px。
+        同一个"近 30 分钟", 托盘里糊在字上、浏览器里空着 10px。
+        间距不写进常量就没人守: 下次有人抄别处的 pady 又抄成 0 了。
+        """
+        import gpu_tray as gt
+        import gpu_monitor as gm
+        src = io.open(gpu_tray.__file__, encoding="utf-8").read()
+        self.assertIn("pady=(0, _SPARK_GAP)", src,
+                      "趋势图容器没用 _SPARK_GAP, 间距又退化成 0 了")
+        self.assertIn("_SPARK_GAP = 10", src,
+                      "_SPARK_GAP 不再是 10, 纵向预算和 Web 面板都对不上了")
+        # Web 面板 .sparkwrap 的 margin:0 0 10px, 抠出来和托盘比
+        hit = re.search(r"\.sparkwrap\{[^}]*margin:0 0 (\d+)px",
+                        gm._PANEL_STYLE)
+        self.assertIsNotNone(hit, "Web 面板 .sparkwrap 的 margin 不见了")
+        self.assertEqual(int(hit.group(1)), gt._SPARK_GAP,
+                         "托盘 %dpx / Web %spx: 同一个趋势图两种间距"
+                         % (gt._SPARK_GAP, hit.group(1)))
 
 class NormalizePerAdapter(unittest.TestCase):
     """normalize_total 按适配器归一: 独显忙不许把核显的读数压小。
@@ -10020,10 +10044,10 @@ class TrayPanelGeometryGuard(unittest.TestCase):
     def test_every_malformed_shape_falls_back_to_the_default(self):
         import gpu_tray as gt
         for junk in ("abc", "1040x", "x470", "1040 x 470", "-10x-10", "",
-                     "1040x580+1+2+3", "1040x580++100", "1020X360",
-                     "1040x580+", "   ", None, 5, [], {}):
+                     "1040x590+1+2+3", "1040x590++100", "1020X360",
+                     "1040x590+", "   ", None, 5, [], {}):
             got = gt._onscreen_geometry(junk, 1280, 720)
-            self.assertEqual(got, "1040x580",
+            self.assertEqual(got, "1040x590",
                              "%r 喂给 root.geometry() 会炸, 该退回默认" % (junk,))
 
     def test_a_geometry_saved_off_the_current_desktop_is_dropped(self):
@@ -10032,7 +10056,7 @@ class TrayPanelGeometryGuard(unittest.TestCase):
         for gone in ("1020x360+5000+5000", "1020x360-3000+0",
                      "1020x360+1200+40", "1020x360+0+900"):
             self.assertEqual(gt._onscreen_geometry(gone, 1280, 720),
-                             "1040x580",
+                             "1040x590",
                              "%s 整个在屏幕外, 开出来等于没有" % gone)
 
     def test_a_window_too_short_to_show_everything_is_raised(self):
@@ -10045,11 +10069,11 @@ class TrayPanelGeometryGuard(unittest.TestCase):
         """
         import gpu_tray as gt
         self.assertEqual(gt._onscreen_geometry("1046x470+55+55", 1512, 949),
-                         "1046x580+55+55",
+                         "1046x590+55+55",
                          "老存档的矮窗口原样还回去, 趋势图就被压成 1px")
         self.assertEqual(gt._onscreen_geometry("1040x300+0+0", 1512, 949),
-                         "1040x580+0+0")
-        self.assertGreaterEqual(gt._PANEL_MIN_H, 580, "保底高度不够装下全部区块")
+                         "1040x590+0+0")
+        self.assertGreaterEqual(gt._PANEL_MIN_H, 590, "保底高度不够装下全部区块")
 
     def test_a_tall_enough_window_keeps_the_height_the_user_chose(self):
         u"""够高的窗口不许被动手: 用户拉高了是为了看更多行。"""
@@ -10062,9 +10086,9 @@ class TrayPanelGeometryGuard(unittest.TestCase):
         """往左探出半截是用户自己摆的, 标题栏还看得见就不该动它。"""
         import gpu_tray as gt
         self.assertEqual(gt._onscreen_geometry("1020x360-50+100", 1280, 720),
-                         "1020x580-50+100")
+                         "1020x590-50+100")
         self.assertEqual(gt._onscreen_geometry("1020x360+100+650", 1280, 720),
-                         "1020x580+100+650")
+                         "1020x590+100+650")
 
     def test_a_window_that_cannot_report_its_screen_is_not_fatal(self):
         """拿不到桌面尺寸只是少一层保险, 不许让面板打不开。

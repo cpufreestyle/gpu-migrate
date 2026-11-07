@@ -255,6 +255,8 @@ _SPARK_FILL = _PALETTE["spark_fill"]
 # 趋势图高度。Web 面板那边 .sparkwrap 写死 46px, 两边不同高的话同一个
 # "近 30 分钟"在托盘和浏览器里是两个长相。
 _SPARK_H = 46
+# 趋势图与下方区块的间距, 和 Web 面板 .sparkwrap 的 margin:0 0 10px 对齐。
+_SPARK_GAP = 10
 # 底部状态区(刷新节奏/快捷键 + 会话累计)的保底高度: 两行 Label 各 22px
 # (字号 9 的 linespace 是 16px, 上下各留 3px) + 行间 1px + 底部 6px。
 # 这个高度会被 Frame 锁死, 详见 _panel_build 里 spark_box / bottom 那段。
@@ -754,9 +756,10 @@ def _load_ui_state():
         # 470 装不下: 卡片 68 + 筛选栏 32 + 表格 370(12 行) + 趋势图 46 +
         # 状态区 51 = 567, 缺口 97px。老默认值下 pack 把趋势图和底部两行
         # 压成 1px 高 —— 用户看不见, 而代码里 height=46 写得明明白白。
-        # 实测临界值 575: 到这个高度底部两个 Label 才各拿到 23/21px 完整
-        # 可见, 趋势图 46px, 表格 12 行一行不少。取 580 留 5px 余量。
-        ui["geometry"] = "1040x580"
+        # 实测临界值 585(趋势图底部还要留 10px 间距, 见 _SPARK_GAP):
+        # 到这个高度底部两个 Label 才各拿到 23/21px 完整可见, 趋势图
+        # 46px, 表格 12 行一行不少。取 590 留 5px 余量。
+        ui["geometry"] = "1040x590"
     widths = ui.get("widths")
     if isinstance(widths, dict):
         # 列宽只收得下正数: 字符串和 None 会让 tree.column 抛 TclError
@@ -808,12 +811,12 @@ def _parse_geometry(text):
 
 
 # 面板的保底高度: 卡片 68 + 筛选栏 32 + 表格 370(12 行) + 趋势图 46 +
-# 状态区 51 = 567, 再给窗口边框留 13px。低于这个高度趋势图和底部两行
-# 会被 pack 压扁(老默认 470 实测压成 1px, 用户根本看不见)。
-_PANEL_MIN_H = 580
+# 间距 10 + 状态区 51 = 577, 再给窗口边框留 13px。低于这个高度趋势图和
+# 底部两行会被 pack 压扁(老默认 470 实测压成 1px, 用户根本看不见)。
+_PANEL_MIN_H = 590
 
 
-def _onscreen_geometry(text, screen_w, screen_h, default="1040x580"):
+def _onscreen_geometry(text, screen_w, screen_h, default="1040x590"):
     """拿得出手的 geometry: 形状不对或整窗在屏幕外, 就还给默认值。
 
     Tcl 对"窗口开在看不见的地方"一声不吭: 面板上次拖到副屏, 副屏拔了
@@ -1670,7 +1673,10 @@ class TrayApp:
                               highlightthickness=0)
             spark_box = tk.Frame(root, bg=_PANEL_BG, height=_SPARK_H)
             spark_box.pack_propagate(False)
-            spark_box.pack(fill="x", padx=6, pady=(0, 0))
+            # 下方留 10px, 与 Web 面板 .sparkwrap 的 margin:0 0 10px 同一个
+            # 数。原来是 pady=(0,0): 趋势图底边直接贴住底部状态行, 折线和
+            # 那两行灰字之间一点空隙都没有, 而 Web 面板那边是 10px。
+            spark_box.pack(fill="x", padx=6, pady=(0, _SPARK_GAP))
             spark.pack(in_=spark_box, fill="x")
 
             # 和 Web 面板同一把尺: 弱化色在卡片底上必须过 AA。
