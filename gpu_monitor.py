@@ -2525,6 +2525,55 @@ def advance_power_saver(cfg, dgpu_util_by_pid, ps_streak, ps_notified,
         break  # 每轮最多推进一个进程的计数
 
 
+def _settle_daily(daily, game_secs, cfg):
+    """把某一天的数据结算进 report.csv 并发通知。返回新一天的 daily。
+
+    与跨日判断无关: 调用方决定"现在该结算哪一天"。跨日时结算的是
+    daily["date"] 那一天, 进程受控退出时结算的是今天 —— 两者共用这一段,
+    免得退出路径上再抄一遍通知文案与落盘格式(抄一份就会漂一份)。
+    """
+    games_min = sum(game_secs.values()) / 60.0
+    # 一位小数: 取整的话同一个峰值在通知里是 78%,
+    # 到 report.csv / 面板 / --list 里就成了 77.7%,
+    # 又一处"同一台机器两个读数"。
+    # 游戏时长到不到一分钟时说"约 0 分钟"是在报假数:
+    # 用户明明玩了半分钟, 却得到"没玩"的结论。
+    # 和趋势图角标那句"(近1分钟按秒说)"同一个道理:
+    # 数字得说人话。CSV 里仍然写四舍五入的分钟数, 机器读的不改。
+    if games_min >= 1:
+        games_text = f", 游戏约 {games_min:.0f} 分钟"
+    elif games_min > 0:
+        games_text = ", 游戏不到 1 分钟"
+    else:
+        games_text = ""
+    # 一整天一次峰值都没记下(peak_ts 为空)时, "核显峰值 0.0%()"
+    # 是把"没测"说成"测了是 0": 括号里空着, 数字还是假的。
+    # 刚装上、全天休眠、监控没跑, 三种日子得分清。
+    if daily["peak_ts"]:
+        peak_text = (f"核显峰值 {daily['peak']:.1f}%"
+                     f"({daily['peak_ts']})")
+    else:
+        peak_text = "未采到核显占用数据(监控可能未在运行)"
+    notify_cfg(cfg, "GPU 日报",
+               f"{daily['date']}: {peak_text}, "
+               f"迁移 {len(daily['migrated'])} 个程序"
+               + games_text)
+    try:
+        with open(os.path.join(_DIR, "report.csv"), "a",
+                  encoding="utf-8") as f:
+            f.write(f"{daily['date']},{daily['peak']:.1f},"
+                    f"{daily['peak_ts']},{len(daily['migrated'])},"
+                    f"{games_min:.0f}\n")
+    except OSError as e:
+        # 通知已经弹出"日报"了, 落盘却失败时不能一声不响: 用户照着
+        # 通知去翻 report.csv 找不到那一行, 会以为程序在编数字。
+        # 和 notify 里 show_toast.ps1 丢失同一个处理: 得有痕迹。
+        # 这里不能用 _LOGFILE 之外的路径, 日志自身也可能正被占着。
+        log(f"日报落盘失败 (report.csv): {e}", _LOGFILE)
+    return {"date": time.strftime("%Y-%m-%d"), "peak": 0.0,
+            "peak_ts": "", "migrated": []}
+
+
 def append_history(now_ts, total_util, daily, game_secs, cfg):
     """落盘一笔核显总占用, 顺带处理跨日日报与峰值。返回当日的 daily。
 
@@ -2543,45 +2592,7 @@ def append_history(now_ts, total_util, daily, game_secs, cfg):
         pass
     today = time.strftime("%Y-%m-%d")
     if today != daily["date"]:
-        games_min = sum(game_secs.values()) / 60.0
-        # 一位小数: 取整的话同一个峰值在通知里是 78%,
-        # 到 report.csv / 面板 / --list 里就成了 77.7%,
-        # 又一处"同一台机器两个读数"。
-        # 游戏时长到不到一分钟时说"约 0 分钟"是在报假数:
-        # 用户明明玩了半分钟, 却得到"没玩"的结论。
-        # 和趋势图角标那句"(近1分钟按秒说)"同一个道理:
-        # 数字得说人话。CSV 里仍然写四舍五入的分钟数, 机器读的不改。
-        if games_min >= 1:
-            games_text = f", 游戏约 {games_min:.0f} 分钟"
-        elif games_min > 0:
-            games_text = ", 游戏不到 1 分钟"
-        else:
-            games_text = ""
-        # 一整天一次峰值都没记下(peak_ts 为空)时, "核显峰值 0.0%()"
-        # 是把"没测"说成"测了是 0": 括号里空着, 数字还是假的。
-        # 刚装上、全天休眠、监控没跑, 三种日子得分清。
-        if daily["peak_ts"]:
-            peak_text = (f"核显峰值 {daily['peak']:.1f}%"
-                         f"({daily['peak_ts']})")
-        else:
-            peak_text = "未采到核显占用数据(监控可能未在运行)"
-        notify_cfg(cfg, "GPU 日报",
-                   f"{daily['date']}: {peak_text}, "
-                   f"迁移 {len(daily['migrated'])} 个程序"
-                   + games_text)
-        try:
-            with open(os.path.join(_DIR, "report.csv"), "a",
-                      encoding="utf-8") as f:
-                f.write(f"{daily['date']},{daily['peak']:.1f},"
-                        f"{daily['peak_ts']},{len(daily['migrated'])},"
-                        f"{games_min:.0f}\n")
-        except OSError as e:
-            # 通知已经弹出"日报"了, 落盘却失败时不能一声不响: 用户照着
-            # 通知去翻 report.csv 找不到那一行, 会以为程序在编数字。
-            # 和 notify 里 show_toast.ps1 丢失同一个处理: 得有痕迹。
-            # 这里不能用 _LOGFILE 之外的路径, 日志自身也可能正被占着。
-            log(f"日报落盘失败 (report.csv): {e}", _LOGFILE)
-        daily = {"date": today, "peak": 0.0, "peak_ts": "", "migrated": []}
+        daily = _settle_daily(daily, game_secs, cfg)
         game_secs.clear()
     if total_util > daily["peak"]:
         daily["peak"] = total_util
@@ -2704,6 +2715,13 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
             n_rounds += 1
             if hooks and hooks.get("before_cycle") \
                     and hooks["before_cycle"]() is False:
+                # 受控退出(托盘"退出"菜单)也要结算今天: 日报原先只在跨日时
+                # 写, 而本机的用法是每天开机启动、睡前休眠 —— 一个进程从来
+                # 没跨过午夜, daily 就随进程退出被丢掉。实测 report.csv 停在
+                # 10-05, 而 history.jsonl 里 10-19~11-07 连续 19 天、每天
+                # 1207~4052 个采样点, 一行日报都没有。
+                if cfg.get("history", True) and daily["peak_ts"]:
+                    daily = _settle_daily(daily, game_secs, cfg)
                 break
             # 配置热重载 (mtime 变化即重新加载)
             if config_path and os.path.exists(config_path):

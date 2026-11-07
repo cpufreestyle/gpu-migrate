@@ -1762,6 +1762,82 @@ class HistoryAndDailyReport(LoopHarness):
                          [json.dumps({"ts": 1000, "total": 5.0})])
 
 
+class DailyReportSurvivesShutdown(LoopHarness):
+    u"""日报不能只在跨日时结算: 进程退出那天的数据也得落盘。
+
+    现网实测: report.csv 最后一行停在 2026-10-05, 而 history.jsonl 里
+    2026-10-19~11-07 连续 19 天、每天 1207~4052 个采样点, 一行日报都没有。
+    根因是 daily["date"] 只在 cmd_monitor 启动时初始化成当天, 而这台机器
+    的用法是每天开机启动、睡前休眠 —— 一个进程从来没跨过午夜, daily 就随
+    进程退出被丢掉, 白天采到的峰值/迁移数全部作废。
+
+    这里钉两件事: 受控退出要结算当天; 没采到数据的一天不许结出一条假日报。
+    """
+
+    def _run_until_stop(self, samples, cycles, cfg_overrides=None):
+        u"""跑 cycles 轮后让 before_cycle 返回 False, 即受控退出。"""
+        return self.run_monitor(samples, cycles=cycles,
+                                cfg_overrides=cfg_overrides)
+
+    def test_a_stopped_monitor_settles_the_day_it_saw(self):
+        u"""退出时要写 report.csv, 哪怕今天还没过完。"""
+        self._run_until_stop([{100: 80.0}, {100: 60.0}], cycles=2,
+                            cfg_overrides={"history": True})
+        rows = self.read_csv()
+        self.assertTrue(rows, "受控退出后 report.csv 是空的: 当天的数据丢了")
+        self.assertEqual(rows[-1]["date"], time.strftime("%Y-%m-%d"),
+                         "结算的必须是当天, 不是别的日子")
+        self.assertAlmostEqual(rows[-1]["peak"], 80.0, places=1,
+                               msg="峰值得是当天真正采到的那个")
+
+    def test_a_day_with_no_samples_settles_nothing(self):
+        u"""一整天没采到数据时, 退出也不该结出一条假日报。
+
+        同 append_history 里那条: 把"没测"说成"测了是 0"是在报假数。
+        """
+        self._run_until_stop([{}, {}], cycles=2,
+                            cfg_overrides={"history": True})
+        self.assertEqual(self.read_csv(), [],
+                         "没有采样数据却写出了日报")
+
+    def test_settling_twice_does_not_duplicate_the_row(self):
+        u"""结算要重置 daily: 不然退出时每调一次就多写一行同一天的。"""
+        daily = {"date": "2000-01-01", "peak": 77.7, "peak_ts": "12:00",
+                 "migrated": ["a.exe"]}
+        fresh = gm._settle_daily(daily, defaultdict(float), {})
+        self.assertEqual(fresh["peak"], 0.0, "结算后峰值要清零")
+        self.assertEqual(fresh["peak_ts"], "", "结算后时间戳要清空")
+        self.assertEqual(fresh["migrated"], [], "结算后迁移名单要清空")
+        self.assertNotEqual(fresh["date"], "2000-01-01",
+                           "结算后要换到今天: 否则同一天会被再结算一次")
+        rows = self.read_csv()
+        self.assertEqual([r["date"] for r in rows].count("2000-01-01"), 1,
+                         "同一天被结算了多次")
+
+    def test_history_off_means_no_settlement_on_exit(self):
+        u"""history 关掉时退出也不该写日报: 那一档是整体关掉历史记录。"""
+        self._run_until_stop([{100: 80.0}], cycles=1,
+                            cfg_overrides={"history": False})
+        self.assertEqual(self.read_csv(), [],
+                         "history=False 却写出了日报")
+
+    def read_csv(self):
+        path = os.path.join(gm._DIR, "report.csv")
+        if not os.path.exists(path):
+            return []
+        out = []
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(",")
+                out.append({"date": parts[0],
+                            "peak": float(parts[1]) if parts[1] else 0.0,
+                            "peak_ts": parts[2],
+                            "migrated": parts[3], "games": parts[4]})
+        return out
+
 class ConfigHotReload(LoopHarness):
     """README 承诺"改 config.json 保存即生效": 逐个旋钮验证, 别只信注释。"""
 
