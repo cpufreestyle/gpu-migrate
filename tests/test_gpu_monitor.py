@@ -9811,7 +9811,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         return (gt._PANEL_MIN_H,
                 8 + 56 + gt._BLOCK_GAP,   # cards: pad + h + pad
                 28 + gt._BLOCK_GAP,       # fbar
-                12 * 28 + 30,        # tree: 12 行 x 28 + 表头
+                12 * gt._ROW_H + 30,   # tree: 12 行 x 行高 + 表头
                 gt._SPARK_H,
                 gt._SPARK_GAP,       # 趋势图与状态区之间的间距
                 gt._STATUS_H)
@@ -9945,6 +9945,44 @@ class TrayPanelStatusFloor(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_the_row_height_and_the_window_floor_move_together(self):
+        u"""行高变大必须同时抬高保底高度, 否则表格会把邻居挤扁。
+
+        rowheight 28 -> 32 时 12 行从 336 涨到 384(+48)。只改行高不改
+        _PANEL_MIN_H 的话, pack 在总量超限时压后声明的元素 —— 趋势图
+        和底部两行状态又会变成 1px, 正是 _PANEL_MIN_H 存在的理由。
+        这条把两者的等式钉死: 保底高度 >= 全部区块请求高之和。
+        """
+        import gpu_tray as gt
+        need = (8 + 56 + gt._BLOCK_GAP      # cards: pad + h + pad
+                + 28 + gt._BLOCK_GAP        # fbar
+                + 12 * gt._ROW_H + 30       # tree: 12 行 + 表头
+                + gt._SPARK_H
+                + gt._SPARK_GAP
+                + gt._STATUS_H)
+        self.assertGreaterEqual(
+            gt._PANEL_MIN_H, need,
+            "保底高度 %d 装不下全部区块(要 %d): 行高 %d 与 "
+            "_PANEL_MIN_H 脱节了, 趋势图/状态行会被压扁"
+            % (gt._PANEL_MIN_H, need, gt._ROW_H))
+
+    def test_the_row_height_leaves_room_for_the_text(self):
+        u"""行高必须比字号 9 的 linespace 高出留白, 不然文字贴着行边。"""
+        import tkinter as _tk
+        import tkinter.font as _tkfont
+        import gpu_tray as gt
+        root = _tk.Tk()
+        try:
+            f = _tkfont.nametofont("TkDefaultFont")
+            ls = f.metrics()["linespace"]
+            self.assertGreater(
+                gt._ROW_H - ls, 4,
+                "行高 %d 只比 linespace %d 高 %d: 文字上下留白不足 "
+                "4px, 行与行糊在一起"
+                % (gt._ROW_H, ls, gt._ROW_H - ls))
+        finally:
+            root.destroy()
+
     def test_the_status_floor_is_taller_than_its_two_labels(self):
         u"""状态区高度要装得下两行 Label, 不然压扁的还是它自己。"""
         import gpu_tray as gt
@@ -9967,7 +10005,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         u"""读到的窗口太矮要提到保底高度(老存档正是 1046x470)。"""
         import gpu_tray as gt
         got = gt._onscreen_geometry("1046x470+55+55", 1512, 949)
-        self.assertEqual(got, "1046x590+55+55",
+        self.assertEqual(got, "1046x630+55+55",
                          "老存档的矮窗口原样还回去, 趋势图就被压成 1px")
 
     def test_a_tall_window_keeps_the_height_the_user_chose(self):
@@ -10631,7 +10669,7 @@ class TrayPanelGeometryGuard(unittest.TestCase):
                      "1040x590+1+2+3", "1040x590++100", "1020X360",
                      "1040x590+", "   ", None, 5, [], {}):
             got = gt._onscreen_geometry(junk, 1280, 720)
-            self.assertEqual(got, "1040x590",
+            self.assertEqual(got, "1040x%d" % gt._PANEL_MIN_H,
                              "%r 喂给 root.geometry() 会炸, 该退回默认" % (junk,))
 
     def test_a_geometry_saved_off_the_current_desktop_is_dropped(self):
@@ -10640,7 +10678,7 @@ class TrayPanelGeometryGuard(unittest.TestCase):
         for gone in ("1020x360+5000+5000", "1020x360-3000+0",
                      "1020x360+1200+40", "1020x360+0+900"):
             self.assertEqual(gt._onscreen_geometry(gone, 1280, 720),
-                             "1040x590",
+                             "1040x%d" % gt._PANEL_MIN_H,
                              "%s 整个在屏幕外, 开出来等于没有" % gone)
 
     def test_a_window_too_short_to_show_everything_is_raised(self):
@@ -10653,11 +10691,12 @@ class TrayPanelGeometryGuard(unittest.TestCase):
         """
         import gpu_tray as gt
         self.assertEqual(gt._onscreen_geometry("1046x470+55+55", 1512, 949),
-                         "1046x590+55+55",
+                         "1046x630+55+55",
                          "老存档的矮窗口原样还回去, 趋势图就被压成 1px")
         self.assertEqual(gt._onscreen_geometry("1040x300+0+0", 1512, 949),
-                         "1040x590+0+0")
-        self.assertGreaterEqual(gt._PANEL_MIN_H, 590, "保底高度不够装下全部区块")
+                         "1040x%d+0+0" % gt._PANEL_MIN_H)
+        self.assertGreaterEqual(gt._PANEL_MIN_H, 590,
+                                 "保底高度不够装下全部区块")
 
     def test_a_tall_enough_window_keeps_the_height_the_user_chose(self):
         u"""够高的窗口不许被动手: 用户拉高了是为了看更多行。"""
@@ -10669,10 +10708,11 @@ class TrayPanelGeometryGuard(unittest.TestCase):
     def test_a_partially_offscreen_window_is_kept(self):
         """往左探出半截是用户自己摆的, 标题栏还看得见就不该动它。"""
         import gpu_tray as gt
+        floor = gt._PANEL_MIN_H
         self.assertEqual(gt._onscreen_geometry("1020x360-50+100", 1280, 720),
-                         "1020x590-50+100")
+                         "1020x%d-50+100" % floor)
         self.assertEqual(gt._onscreen_geometry("1020x360+100+650", 1280, 720),
-                         "1020x590+100+650")
+                         "1020x%d+100+650" % floor)
 
     def test_a_window_that_cannot_report_its_screen_is_not_fatal(self):
         """拿不到桌面尺寸只是少一层保险, 不许让面板打不开。

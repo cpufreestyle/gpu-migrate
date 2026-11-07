@@ -279,6 +279,15 @@ _PANEL_PAD = 8
 # 4px。Web 面板那边区块顺序不同(卡片 -> 趋势图 -> 筛选框 -> 表格), 没有
 # 一一对应的 margin 可对齐, 所以这里取一个自己的统一值: 三处同一个数,
 # 区块之间节奏才匀。改这个数会同时改动三处, 测试 _budget() 跟着走。
+
+# 表格行高。字号 9 的 linespace 是 17px, 28px 行高只给文字上下各
+# 5.5px 留白; Win11 Fluent 的表格行在这个字号下宽得多, 而托盘
+# 这张表是要盯着看的 —— 提到 32, 文字上下各 7.5px, 和任务管理器
+# 列表一个密度。代价是纵向预算: 12 行从 336 涨到 384(+48),
+# _PANEL_MIN_H 跟着提到 630, 否则 pack 会反过来把趋势图和底部
+# 状态行压扁。窗口位置不变(_onscreen_geometry 只提高度不动
+# 位置), 768 高屏幕上 y=55 时底部到 685, 距屏底还有 83px。
+_ROW_H = 32
 _BLOCK_GAP = 4
 # 汇总卡内部左右内边距, 和 Web 面板 .card{padding:9px 16px} 的左右 16px
 # 对齐。原来是 9: 上下那半边早就按 9px 对齐了(见下面 pady=(5, ...) 那两个),
@@ -689,8 +698,8 @@ def _apply_fluent_theme():
                     darkcolor=_PANEL_BG, insertcolor=_FG)
     # Win11 的行高点: 12px 数字留出上下呼吸, 也够着触摸目标的高度
     style.configure("Treeview", background=_PANEL_BG, foreground=_FG,
-                    fieldbackground=_PANEL_BG, borderwidth=0, rowheight=28,
-                    font=_FONT_UI)
+                    fieldbackground=_PANEL_BG, borderwidth=0,
+                    rowheight=_ROW_H, font=_FONT_UI)
     style.configure("Treeview.Heading", background=_PALETTE["head"],
                     foreground=_MUTED, relief="flat", padding=(6, 5),
                     font=_FONT_UI)
@@ -889,13 +898,17 @@ def _parse_geometry(text):
     return w, h, offsets[0] if offsets else 0, offsets[1] if len(offsets) > 1 else 0
 
 
-# 面板的保底高度: 卡片 68 + 筛选栏 32 + 表格 370(12 行) + 趋势图 46 +
-# 间距 10 + 状态区 51 = 577, 再给窗口边框留 13px。低于这个高度趋势图和
-# 底部两行会被 pack 压扁(老默认 470 实测压成 1px, 用户根本看不见)。
-_PANEL_MIN_H = 590
+# 面板的保底高度: 卡片 68 + 筛选栏 32 + 表格 422(12 行 x 32 + 表头 38)
+# + 趋势图 46 + 间距 10 + 状态区 52 = 630。低于这个高度趋势图和底部
+# 两行会被 pack 压扁(老默认 470 实测压成 1px, 用户根本看不见);
+# 行高 28 -> 32 之后 12 行从 336 涨到 384, 这个数必须跟着涨 ——
+# TrayPanelStatusFloor.test_the_row_height_and_the_window_floor_move_
+# together 把两者的等式钉死了。
+_PANEL_MIN_H = 630
 
 
-def _onscreen_geometry(text, screen_w, screen_h, default="1040x590"):
+def _onscreen_geometry(text, screen_w, screen_h,
+                       default="1040x%d" % _PANEL_MIN_H):
     """拿得出手的 geometry: 形状不对或整窗在屏幕外, 就还给默认值。
 
     Tcl 对"窗口开在看不见的地方"一声不吭: 面板上次拖到副屏, 副屏拔了

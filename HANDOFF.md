@@ -6020,7 +6020,7 @@ gm 自己的容错逻辑):
 ### 用户决策待办
 
 1. 现网 exe 仍是旧构建(10-04)。要同步需 build -> sync -> 重启托盘。
-2. 30 条新提交未 push, 与 origin/main 分叉。
+2. 31 条新提交未 push, 与 origin/main 分叉。
 
 ## 139. 续一百三十：趋势图底边贴住状态行，与 Web 面板的 10px 间距不一致（布局/可读性）
 
@@ -6746,3 +6746,58 @@ padding，不是外部偏移 —— 加上之后 Entry 底部从 25 变成 21，
 而我只看了测试结果。
 
 全套 **655 条**（654 + 1 新），两个 runner 均全绿。
+
+## 153. 续一百四十四：表格行高 28 -> 32，文字上下留白 5.5px 提到 7.5px（布局/可读性）
+
+### 现象
+
+本轮量表格行内留白。字号 9 的 linespace 实测 **17px**，而
+`rowheight=28`：
+
+    (28 - 17) / 2 = 5.5px  文字上下留白
+
+Win11 Fluent 的列表/表格行在这个字号下要高得多（任务管理器约 32px），
+而托盘这张表**是要盯着看的** —— 12 行挤在 5.5px 留白里，行与行几乎
+糊在一起。
+
+### 改动
+
+三处一起改，缺一不可：
+
+- 新增 `_ROW_H = 32`（`gpu_tray.py:288`），`Treeview` 的 `rowheight`
+  换成它。
+- `_PANEL_MIN_H` 590 -> 630。12 行从 336 涨到 384（+48），不抬高
+  保底高度的话 pack 会反过来把趋势图和底部状态行压扁 —— 那正是
+  `_PANEL_MIN_H` 存在的理由。
+- `_onscreen_geometry` 的 `default="1040x590"` 改成从 `_PANEL_MIN_H`
+  拼：这个默认值此前写死，`_PANEL_MIN_H` 涨了它不涨，退回默认布局时
+  开的还是旧高度的窗口。
+
+窗口位置不变（`_onscreen_geometry` 只提高度、不动位置）。768 高屏幕上
+y=55 时底部到 685，距屏底还有 83px，放得下。
+
+### 顺带修掉的漂移（第三处同类）
+
+`TrayPanelGeometryGuard` 里有五处 `1040x590` / `1020x590` 写死期望值，
+全是 `_PANEL_MIN_H` 的旧值。全部改成 `"1040x%d" % gt._PANEL_MIN_H`。
+`_budget()` 里的 `12 * 28` 换成 `12 * gt._ROW_H`。
+
+这已经是 §147（`status 51`）之后第三处同类漂移 —— 间距/尺寸常量改了，
+测试里的字面量不跟着变。
+
+### 测试
+
+`TrayPanelStatusFloor` 新增两条：
+
+- `test_the_row_height_and_the_window_floor_move_together`：把
+  `_PANEL_MIN_H >= 全部区块请求高之和` 这个等式钉死。行高以后再怎么改，
+  忘了抬保底高度当场红。
+- `test_the_row_height_leaves_room_for_the_text`：行高必须比 linespace
+  高出 4px 以上（真建 Tk 根量 `TkDefaultFont` 的 linespace）。
+
+变异验证：`_ROW_H` 32 -> 48，第一条报
+`保底高度 630 装不下全部区块(要 814): 行高 48 与 _PANEL_MIN_H 脱节了, 
+趋势图/状态行会被压扁`。
+
+全套 **657 条**（655 + 2 新），两个 runner 均全绿（discover 复跑两次，
+中途撞到一次偶发 error，再跑即绿）。
