@@ -5848,3 +5848,96 @@ panel_conn_check.js。三个文件各写了一套脚手架, 而那七个坑的�
 
 1. 现网 exe 仍是旧构建。要同步需 build → sync → 重启托盘(会打断当前实例)。
 2. 13 条新提交未 push, 与 origin/main 分叉。
+
+## 137. 续一百二十八：NVML 温度读取搬进隔离子进程（稳定性）
+
+### 起点
+
+§109/§111 两处记着同一个未解决的问题: 本机
+`gpu_monitor_crash.log` 里 165 段 `access violation` 的首帧**全**落在
+`gpu_monitor.py:1072` 的 `nvmlDeviceGetTemperature` 上, 而"子进程隔离采样"
+被列为"更大的架构改造, 留作后续"。
+
+### 为什么现在能动
+
+读了一遍 `install_fault_dump()` 的实测结论才发现前提比原文记的更硬:
+C 级访问冲突**能不能**被 Python 接住, 取决于被调方内部有没有 SEH, 不取决于
+Python。所以"监控线程自己中招"不是理论风险, 是真会发生的事 —— 那就值得治。
+
+但没有照原文说的"搬整个采样"。先做了代价评估:
+
+- 实测每轮采样的构成: `collect_gpu_sample(window=5)` 5111ms, 其中窗口本身
+  4930ms、PDH query 建立 12ms、首次 collect 62ms。**采样已经占满整个周期,
+  没有可优化空间**, 而"窗口=周期"是 §88 定下的防漏采设计, 不能动。
+- `aggregate_usage` 0.07ms、`pid_to_name` 1.5ms(缓存命中), 都不是瓶颈。
+- 682 个 util 路径里 550 个属于独显、130 个属于 virtual —— 但 virtual 早就被
+  `allowed_luids` 过滤掉了, 独显的数据面板/省电模式真要用, 砍不了。
+
+结论: 值得搬的只有**唯一有实证危险的那一个调用**。
+
+### 改动
+
+1. `nvml_gpu_temp` 拆成 `_nvml_read_in_process`(原实现本体) + 新的
+   `nvml_gpu_temp(index=0, isolate=True)`: isolate 时优先走子进程探针, 拿不到
+   才退回进程内。调用点一行没改。
+2. 新增隐藏子命令 `--nvml-probe INDEX`: 起一个干净子进程读一次温度并打印。
+   用 `argparse.SUPPRESS` 不进 `--help`; 放在 `parse_args` 之后、
+   `ensure_singleton` 之前 —— 探针是短命进程, 不该跟常驻实例抢单例锁。
+3. 探针跑**同一个源文件**(不是 `-c` 内联): 内联的话探针逻辑会和父进程漂移,
+   而这里读的逻辑必须是同一份。
+4. `CREATE_NO_WINDOW`: 无窗口模式下不能闪控制台。
+5. 探针跳过 `install_fault_dump()`: 秒退进程白开一个句柄, 满档时还要跟父进程
+   抢一次滚动。
+
+### 一个走不通的方案(记下来省得下次再试)
+
+本来想用 `sys.executable -c "..."` 起探针。实测**不行**: 打包版 exe 的
+argparse 会拦截 `-c`(`error: unrecognized arguments: -c ...`), exe 当不了
+通用解释器。所以必须走"给源文件加隐藏子命令"这条路。
+
+### 只在源码态隔离
+
+打包版 `sys.executable` 就是 exe, 每次起子进程都要重新解压 onefile 镜像 ——
+实测 `GPUMigrate.exe --once` 9.8s, 而温度每 10s 读一次。隔离会把采样周期
+整个吃光, 所以那种环境下 `_nvml_probe_in_subprocess` 直接返回 None, 老老实实
+进程内直读。
+
+### 实测
+
+| 路径 | 耗时 | 结果 |
+| --- | --- | --- |
+| `--nvml-probe 0` | 1.0s | 输出 `46`, rc=0 |
+| `nvml_gpu_temp(0)`(隔离) | 323/351/331ms | 45°C |
+| `nvml_gpu_temp(0, isolate=False)` | 42ms / 0ms(缓存) | 45°C |
+
+五种失败模式全部容错且父进程健在(在真实的 `subprocess.run` 上打桩, 不动
+gm 自己的容错逻辑):
+
+    timeout      -> 44    # 回退进程内
+    oserror      -> 44
+    killed       -> 44    # rc!=0: 子进程被干掉, 隔离生效
+    noreading    -> 44
+    garbage      -> 44
+
+探针全失败 + 进程内也读不到 → `None`, 不抛。
+探针模式 `_FAULT_FH = None`, 正常模式 `True`。
+
+### 测试
+
+新增 `NvmlProbeIsolation` 8 条: 探针成功不回退、rc!=0/超时/OSError/垃圾输出
+全部容错、探针自己 `isolate=False`(不生孙进程)、跑同一个源文件且带
+`CREATE_NO_WINDOW`、预算有界。
+
+过程中踩到一个自己造的坑: 有一条用例整体替换了
+`gm._nvml_probe_in_subprocess`, 而 `tearDown` 只还原了 `subprocess.run` 和
+`_nvml_read_in_process` —— 污染了同类的后一条用例。补上还原才好。这也说明
+`SuiteRunsInReverseOrder` 那条守顺序敏感性的用例不是摆设。
+
+全套 625 条(617 + 8), 两个 runner 均全绿。README 配置表加了一句"源码态读
+温度跑在隔离子进程里", 稳定性一节补了完整说明。
+
+### 用户决策待办
+
+1. 现网 exe 仍是旧构建。要同步需 build → sync → 重启托盘(会打断当前实例)。
+   注意现网那个 exe 是 10 月 4 日的, 连 §136 的 verify 改动都不含。
+2. 14 条新提交未 push, 与 origin/main 分叉。
