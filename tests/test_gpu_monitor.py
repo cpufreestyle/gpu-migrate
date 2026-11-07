@@ -5389,6 +5389,45 @@ class TrayPanelKeyboardNav(unittest.TestCase):
         self.assertTrue(any("按 s" in t for t in tips),
                         f"排序快捷键没被交代: {tips}")
 
+    def test_the_row_hint_gets_the_space_the_buttons_leave(self):
+        u"""筛选栏的 "显示 N/T 行" 要拿到按钮剩下的地盘, 按钮不许被压。
+
+        实测这行最长 417px, 而筛选栏右边压着"复原排序"(109px)和"置顶"
+        (53px)两个按钮。原来 hint 是 side=left 不带 fill/expand: 空间一
+        紧 pack 压后声明的元素, 于是窗口 900 宽时按钮先被切掉一半
+        (53px -> 29px), 而 417px 的提示行只拿到 278px —— "按 Esc 关闭
+        窗口"这半句直接看不见。
+
+        现在 hint 是 side=right 组的第一个 + expand=True: pack 压的是
+        expand 的这个 Label, 两个按钮的请求宽度始终被满足。
+        """
+        src = io.open(gpu_tray.__file__, encoding="utf-8").read()
+        # pack 顺序: 两个按钮在 hint 之前, hint 带 expand
+        self.assertLess(src.find("sort_btn.pack(side=\"right\""),
+                         src.find("hint.pack(side=\"right\", fill=\"x\", expand=True"),
+                        "hint 必须先于按钮 pack: 排在后面的才先被压")
+        self.assertIn("hint.pack(side=\"right\", fill=\"x\", expand=True",
+                      src,
+                      "hint 还在 left 组里: 空间一紧按钮先被切一半")
+
+    def test_the_row_hint_is_truncated_to_the_space_it_really_has(self):
+        u"""提示行按可用宽度截断, 而且可用宽度从父容器算。
+
+        问 hint.winfo_width() 是错的: 不带 expand 的 Label 在 side=left
+        下只拿文本请求宽度, 量出来的是"我现在多宽"而不是"我能有多宽" ——
+        于是永远按当前宽度截, 越截越短, 最后只剩一个省略号(实测)。
+        也不能问 _panel_build 里的那些局部变量: _refresh_tree 是独立
+        方法, 拿不到, 走 except 静默变 0, 于是永远不截。
+        """
+        src = io.open(gpu_tray.__file__, encoding="utf-8").read()
+        self.assertIn("hint.master.winfo_children()", src,
+                      "可用宽度没有从父容器算: 会越截越短或干脆不截")
+        self.assertIn("_fit_text(hint_text, hint_px)", src,
+                      "提示行没有走 _fit_text 截断")
+        self.assertIn("isinstance(hint_px, int) and hint_px > 0", src,
+                      "量不到宽度时没有降级: 替身控件的 winfo_width 回来")
+
+
     def test_the_status_line_never_gets_clipped_at_the_right_edge(self):
         u"""底部状态行放不下就截断, 不许被右沿切成半句话。
 

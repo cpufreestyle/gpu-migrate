@@ -435,6 +435,26 @@ _TIP_DELAY_MS = 500        # 停多久才弹: 一扫而过不该弹泡
 _TEXT_PX_FONT = [None]
 
 
+def _fit_text(text, avail_px):
+    u"""放不下就二分截断加省略号; 放得下原样返回。
+
+    底部状态行和筛选栏的 "显示 N/T 行" 都用它: 两处都是每秒刷一次的
+    长文本, 而 Tk 的 Label 不会自己截 —— side=left 下超宽被 pack 压缩
+    (右边的内容直接看不见), fill=x 下超宽被右沿切掉。二分而不是逐字符
+    退: 这两处每秒各跑一次, O(n^2) 的逐字量宽度是白烧 CPU。
+    """
+    if avail_px <= 0 or _text_px(text) <= avail_px:
+        return text
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _text_px(text[:mid] + u"…") <= avail_px:
+            lo = mid
+        else:
+            hi = mid - 1
+    return (text[:lo] + u"…") if lo else u"…"
+
+
 def _text_px(text):
     u"""字符串在面板正文字号下占多少像素。
 
@@ -1292,15 +1312,7 @@ class TrayApp:
             return core + keys
         if _text_px(core) <= avail:
             return core
-        # 二分: 找最长的 "前缀 + 省略号" 仍放得下的那个前缀
-        lo, hi = 0, len(core)
-        while lo < hi:
-            mid = (lo + hi + 1) // 2
-            if _text_px(core[:mid] + u"…") <= avail:
-                lo = mid
-            else:
-                hi = mid - 1
-        return (core[:lo] + u"…") if lo else u"…"
+        return _fit_text(core, avail)
 
     def _gpu_name(self, luid):
         with self.lock:
@@ -1657,17 +1669,27 @@ class TrayApp:
             # 筛选框: 进程多的时候这一栏比表格本身更有用
             fbar = tk.Frame(root, bg=_BG)
             fbar.pack(fill="x", padx=8, pady=(0, 4))
-            tk.Label(fbar, text=_FILTER_HINT, bg=_BG, fg=_MUTED,
-                     font=_FONT_UI).pack(side="left")
+            _filter_hint = tk.Label(fbar, text=_FILTER_HINT, bg=_BG,
+                                    fg=_MUTED, font=_FONT_UI)
+            _filter_hint.pack(side="left")
             fvar = tk.StringVar(value=self.filter_text)
             entry = tk.Entry(fbar, textvariable=fvar, width=24, relief="flat",
                              bg=_PANEL_BG, fg=_FG, insertbackground=_FG,
                              highlightthickness=1, highlightbackground=_LINE,
                              highlightcolor=_ACCENT, font=_FONT_NUM)
             entry.pack(side="left", padx=6)
+            # fill=x + expand=True: 不带这两个, Label 在 side=left 下
+            # 只拿文本请求宽度, 而筛选栏右边还压着两个按钮 —— 空间一紧
+            # pack 先压后声明的元素, 实测窗口 800 宽时这行 417px 的
+            # "显示 59/59 行 (还有 29 行未显示)..."只剩 352px, 722 宽时
+            # 只剩 274px, 右边的内容(包括"按 Esc 关闭窗口")直接看不见。
+            # 截断由 _refresh_tree 里做, 这里只负责把地盘要过来。
             hint = tk.Label(fbar, text="", anchor="w", bg=_BG, fg=_MUTED,
                             font=_FONT_UI)
-            hint.pack(side="left", padx=(6, 0))
+            # 只占位, 真正 pack 在下面两个按钮之后: side=right 组的最前面
+            # 加 expand=True。这样空间一紧, pack 压的是 expand 的这个
+            # Label, 两个按钮的请求宽度始终被满足 —— 放在 left 组里试过,
+            # 实测窗口 900 宽时 "置顶: 开" 先被切掉一半(53px -> 29px)。
             fvar.trace_add("write",
                            lambda *_a: self._set_filter(fvar.get()))
 
@@ -1701,6 +1723,9 @@ class TrayApp:
                                  cursor="hand2", command=_reset_sort)
             sort_btn.pack(side="right", padx=(6, 0))
             _sort_btn_label()
+            # 在两个按钮之后 pack: side=right 组的最前一个 + expand=True,
+            # 空间一紧先压它, 按钮的请求宽度始终被满足。
+            hint.pack(side="right", fill="x", expand=True, padx=(6, 0))
 
             tree = ttk.Treeview(root, columns=cols, show="headings", height=12)
             for cid, text in _COL_LABELS.items():
@@ -2272,13 +2297,41 @@ class TrayApp:
             # 汇总卡的 "GPU 进程" 是真 union 数, 这里是不含零占用的行数,
             # 两个数对不上也得说, 不然用户以为自己看漏了。
             noise = hidden_noise_count(snap) if snap else 0
-            hint.config(text=f"显示 {shown}/{total} 行"
-                             + (f" (还有 {hidden} 行未显示)"
-                                if hidden else "")
-                             + (f"  (已隐藏 {noise} 个 0.0% / 0MiB)"
-                                if noise else "")
-                             + ("   (按 Esc 关闭窗口)" if shown or total
-                                else ""))
+            # 这行最长能到 417px, 而筛选栏右边还压着"复原排序"和"置顶"
+            # 两个按钮: 窗口一拖窄, 右边的内容(包括"按 Esc 关闭窗口"这个
+            # #唯一的关窗提示)就被压没了。按 hint 自己的可用宽度截。
+            hint_text = (f"显示 {shown}/{total} 行"
+                         + (f" (还有 {hidden} 行未显示)"
+                            if hidden else "")
+                         + (f"  (已隐藏 {noise} 个 0.0% / 0MiB)"
+                            if noise else "")
+                         + ("   (按 Esc 关闭窗口)" if shown or total
+                            else ""))
+            # 可用宽度不能问 hint.winfo_width(): 不带 expand 的 Label 在
+            # side=left 下只拿文本请求宽度, 量出来的是"我现在多宽"而不是
+            # "我能有多宽" —— 于是永远按当前宽度截, 越截越短, 最后只剩
+            # 一个省略号(实测就是这样)。要问父容器还剩多少:
+            #   fbar 宽 - 左组固定元素 - 右组两个按钮的请求宽度
+            # hint 是 side=right 组第一个 + expand=True, 所以它拿的就是
+            # 剩下的全部空间: fbar 宽 - 左组固定元素 - 右组两个按钮。
+            # 注意这里量的是 reqwidth(请求宽度)而不是 winfo_width:
+            # 后者是"我现在多宽", 而 hint 的宽度正是我们要算的东西。
+            # 可用宽度从 hint 的父容器算: 这个方法是独立方法, 拿不到
+            # _panel_build 里的那些局部变量(试过, 走 except 静默变 0,
+            # 于是永远不截)。问 master 要:
+            #   fbar 宽 - 同行其他元素的请求宽度 - 各自的 padx
+            # 注意是 reqwidth(请求)不是 winfo_width(现值): 后者的 hint
+            # 那一项正是要算的东西, 拿它减自己会越截越短。
+            try:
+                siblings = [w for w in hint.master.winfo_children()
+                            if w is not hint]
+                hint_px = (hint.master.winfo_width()
+                           - sum(w.winfo_reqwidth() + 12 for w in siblings))
+            except Exception:
+                hint_px = 0
+            hint.config(text=_fit_text(hint_text, hint_px)
+                         if isinstance(hint_px, int) and hint_px > 0
+                         else hint_text)
         if not rows:
             # "筛选中没匹配上"不等于"没有进程占 GPU": 前者明明有进程在跑,
             # 只是被筛选词挡住了, 说成空闲会让人先怀疑筛选坏了。
