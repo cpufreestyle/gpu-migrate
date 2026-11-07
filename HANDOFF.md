@@ -6020,7 +6020,7 @@ gm 自己的容错逻辑):
 ### 用户决策待办
 
 1. 现网 exe 仍是旧构建(10-04)。要同步需 build -> sync -> 重启托盘。
-2. 29 条新提交未 push, 与 origin/main 分叉。
+2. 30 条新提交未 push, 与 origin/main 分叉。
 
 ## 139. 续一百三十：趋势图底边贴住状态行，与 Web 面板的 10px 间距不一致（布局/可读性）
 
@@ -6691,3 +6691,58 @@ Web 面板那边不存在这个问题：`body{padding:16px 20px}` 是**所有区
 要 139px`。
 
 全套 **654 条**（652 + 2 新），两个 runner 均全绿。
+
+## 152. 续一百四十三：筛选栏输入框比按钮矮 9px，三者底边不齐（布局）
+
+### 现象
+
+本轮审筛选栏（`fbar`）内部。Tk 的 `pack` 默认按**各自请求高度顶对齐**，
+而这一行三个控件请求的高度都不一样：
+
+    控件        请求高    实测 y/h        底边
+    按钮        30px      y=0  h=30      30
+    Label       23px      y=3  h=23      26
+    Entry       21px      y=4  h=21      25
+
+输入框比按钮矮 **9px**、底边差 **5px** —— 这一行看着是歪的：输入框
+明显比右边两个按钮短一截，且底部不落在同一条线上。
+
+### 改动
+
+`entry.pack(side="left", padx=6)` -> `..., fill="y")`。
+
+试过并否掉的办法：`pady=(0, 9)`。Tk 里 Entry 的 `pady` 是**内部**
+padding，不是外部偏移 —— 加上之后 Entry 底部从 25 变成 21，更糟。
+
+`fill="y"` 让 Entry 拉满这一行的 30px，三者底边齐（实测 entry
+`y=0/h=30`）。Tk 会把 Entry 的文字垂直居中在额外空间里，视觉正常
+—— Windows 的搜索框本来也就是 30px 上下。
+
+### 测试
+
+`TrayPanelStatusFloor` 新增
+`test_the_filter_row_controls_share_one_baseline`：
+
+1. 先查 `_panel_build` 源码里那行必须带 `fill="y"`（防回归，改回去
+   就红）。
+2. 再按同样的 pack 方式真渲染一遍，量 `entry` / `pin` / `srt` 三者的
+   `winfo_y() + winfo_height()`，必须只有一个值；且 entry 与 pin 的
+   `winfo_height()` 相等。
+
+变异验证：去掉 `fill="y"`，守卫报
+`筛选输入框没有 fill="y": 它比按钮矮 9px, 底边差 5px, 这一行是歪的`。
+
+### 过程中出的两次事故（都记下来）
+
+1. 删一个**未使用的**常量 `_CTRL_ROW_H` 时，补丁脚本的字符串匹配把
+   上一轮的 `_CARD_PAD_X` 注释块和定义一起删了 —— 两处引用还在，
+   跑起来就是 `NameError`。是 `TrayPanelStatusFloor` 当场红的
+   （`module 'gpu_tray' has no attribute '_CARD_PAD_X'`），不是靠眼看。
+2. 恢复时又插重了一份、且插错了位置（夹在 `_CARD_LABEL_GAP` 的注释和
+   定义之间）。最后 `git checkout gpu_tray.py` 整体还原，只重新打
+   `fill="y"` 这一处补丁，diff 才干净。
+
+教训：**删/改常量之后必须看 `git diff`**，这次两次都是 diff 一眼能看穿、
+而我只看了测试结果。
+
+全套 **655 条**（654 + 1 新），两个 runner 均全绿。

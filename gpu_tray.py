@@ -1704,7 +1704,12 @@ class TrayApp:
                              bg=_PANEL_BG, fg=_FG, insertbackground=_FG,
                              highlightthickness=1, highlightbackground=_LINE,
                              highlightcolor=_ACCENT, font=_FONT_NUM)
-            entry.pack(side="left", padx=6)
+            # fill="y": 不带它, Entry 按自己请求的 21px 顶对齐, 而右
+            # 边两个按钮是 30px —— 输入框比按钮矮 9px、底边差 5px,
+            # 这一行看着是歪的。实测 entry y=4/h=21 vs 按钮 y=0/h=30;
+            # 带上它 Entry 拉到 30px, 三者底边齐(Tk 会把 Entry 的文字
+            # 垂直居中在额外空间里, 视觉正常)。
+            entry.pack(side="left", padx=6, fill="y")
             # fill=x + expand=True: 不带这两个, Label 在 side=left 下
             # 只拿文本请求宽度, 而筛选栏右边还压着两个按钮 —— 空间一紧
             # pack 先压后声明的元素, 实测窗口 800 宽时这行 417px 的

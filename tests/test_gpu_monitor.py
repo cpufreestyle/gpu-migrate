@@ -9905,6 +9905,46 @@ class TrayPanelStatusFloor(unittest.TestCase):
         self.assertIn("spark_box.pack(fill=\"x\", padx=_PANEL_PAD", body,
                       "趋势图没用 _PANEL_PAD")
 
+    def test_the_filter_row_controls_share_one_baseline(self):
+        u"""筛选栏里输入框与两个按钮的底边必须对齐。
+
+        Tk 的 pack 默认按各自请求高度顶对齐: 按钮请求 30px、Entry
+        只请求 21px —— 不带 fill="y" 的话实测输入框 y=4/h=21(底 25),
+        按钮 y=0/h=30(底 30), 一行看着是歪的, 输入框比按钮矮一截。
+        这条按 _panel_build 同样的 pack 方式真渲染出来量。
+        """
+        import tkinter as _tk
+        import gpu_tray as gt
+        body = inspect.getsource(gt.TrayApp._panel_build)
+        fill_y = 'entry.pack(side="left", padx=6, fill="y")' in body
+        self.assertTrue(fill_y,
+                      "筛选输入框没有 fill=\"y\": 它比按钮矮 9px, "
+                      "底边差 5px, 这一行是歪的")
+        root = _tk.Tk()
+        try:
+            root.geometry("1046x590")
+            fbar = _tk.Frame(root)
+            fbar.pack(fill="x", padx=gt._PANEL_PAD, pady=(0, 4))
+            _tk.Label(fbar, text="筛选进程名或 PID").pack(side="left")
+            entry = _tk.Entry(fbar, width=24)
+            entry.pack(side="left", padx=6, fill="y")
+            hint = _tk.Label(fbar, text="", anchor="w")
+            hint.pack(side="right", fill="x", expand=True, padx=(6, 0))
+            pin = _tk.Button(fbar, text="置顶: 开")
+            pin.pack(side="right", padx=(6, 0))
+            srt = _tk.Button(fbar, text="复原排序")
+            srt.pack(side="right", padx=(6, 0))
+            root.update()
+            bottoms = {w.winfo_y() + w.winfo_height()
+                       for w in (entry, pin, srt)}
+            self.assertEqual(len(bottoms), 1,
+                             f"底边不齐: {sorted(bottoms)}")
+            self.assertEqual(entry.winfo_height(), pin.winfo_height(),
+                             "输入框与按钮不同高: %d vs %d"
+                             % (entry.winfo_height(), pin.winfo_height()))
+        finally:
+            root.destroy()
+
     def test_the_status_floor_is_taller_than_its_two_labels(self):
         u"""状态区高度要装得下两行 Label, 不然压扁的还是它自己。"""
         import gpu_tray as gt
