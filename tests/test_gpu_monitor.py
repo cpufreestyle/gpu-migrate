@@ -6085,11 +6085,13 @@ class SparkGeometryConstants(unittest.TestCase):
         return io.open(gpu_tray.__file__, encoding="utf-8").read()
 
     def test_the_canvas_height_matches_the_svg_height(self):
-        u"""托盘的 Canvas 高度就是 _SPARK_H, 不许另写一个 46。"""
+        u"""托盘的 Canvas 高度就是 _SPARK_H, 不许另写一个数。"""
         tray = self._tray_source()
-        self.assertIn("tk.Canvas(root, height=%d" % gm._SPARK_H, tray,
-                      "托盘 Canvas 高度和 _SPARK_H 不一致: 纵向会跟着缩放, "
+        self.assertIn("tk.Canvas(root, height=_SPARK_H", tray,
+                      "托盘 Canvas 没用 _SPARK_H 这个常量: 纵向会跟着缩放, "
                       "阈值线的位置就算错了")
+        self.assertNotIn("tk.Canvas(root, height=%d" % gm._SPARK_H, tray,
+                         "又写了一遍字面量: 改 _SPARK_H 时这一处不会跟着变")
 
     def test_the_css_height_matches_the_svg_height(self):
         u"""CSS 那两条 height 也必须是 _SPARK_H。"""
@@ -9476,11 +9478,83 @@ class TrayTextColorGuard(unittest.TestCase):
         self.assertEqual(bad, [], "这些写死的文字色在深色底上不达 AA")
 
     def test_the_panel_status_line_uses_the_shared_muted_color(self):
-        """底部状态行(核显/独显名 + 刷新节奏)是面板上唯一的说明行。"""
+        u"""底部状态行(核显/独显名 + 刷新节奏)是面板上唯一的说明行。
+
+        两行 Label 现在装在 bottom 这个"尺寸不传播"的 Frame 里(见
+        TrayPanelStatusFloor), 父控件从 root 换成了 bottom —— 但用的还是
+        共享的 _MUTED, 这条契约没变。
+        """
         src = self._code_only(self._tray_source())
-        self.assertIn('tip = tk.Label(root, text="", anchor="w", fg=_MUTED)',
+        self.assertIn('tip = tk.Label(bottom, text="", anchor="w", fg=_MUTED)',
+                      src)
+        self.assertIn('count = tk.Label(bottom, text="", anchor="w", fg=_MUTED)',
                       src)
 
+
+class TrayPanelStatusFloor(unittest.TestCase):
+    u"""趋势图和底部两行状态不许被 Treeview 挤成 1px。
+
+    实测 1040x470 的默认窗口: 卡片 68 + 筛选栏 32 + 表格 370(12 行) +
+    趋势图 46 + 状态区 51 = 567, 缺口 97px。而 Treeview 是 fill=both +
+    expand=True, pack 在总量超限时把后面几个部件按剩余空间压扁 ——
+    趋势图 Canvas 实测只剩 1px 高, 底部那两行同样 1px。用户根本看不见
+    "刷新节奏/快捷键"和"采样 N 轮", 而代码里 height=46 写得明明白白。
+
+    表格少了可以滚动, 趋势图和状态行少了没有任何补救, 所以这道契约要
+    有人盯: 纵向预算一不够就得当场红, 而不是等用户说"趋势图不见了"。
+    """
+
+    _BLOCKS = (("cards", 68), ("fbar", 32), ("tree", 370),
+               ("spark", 46), ("status", 51))
+
+    def _budget(self):
+        """默认窗口高度下各区块请求高度之和。"""
+        import gpu_tray as gt
+        return (gt._PANEL_MIN_H,
+                8 + 56 + 4,          # cards: pad + h + pad
+                28 + 4,              # fbar
+                12 * 28 + 30,        # tree: 12 行 x 28 + 表头
+                gt._SPARK_H,
+                gt._STATUS_H)
+
+    def test_the_default_window_is_tall_enough_for_every_block(self):
+        u"""保底高度装得下全部区块, 且留一点余量给窗口边框。"""
+        min_h, cards, fbar, tree, spark, status = self._budget()
+        need = cards + fbar + tree + spark + status
+        self.assertGreaterEqual(min_h, need,
+                               msg="默认窗口比全部区块矮 %dpx: pack 会压扁"
+                                    "趋势图和底部状态行" % (need - min_h))
+
+    def test_the_status_floor_is_taller_than_its_two_labels(self):
+        u"""状态区高度要装得下两行 Label, 不然压扁的还是它自己。"""
+        import gpu_tray as gt
+        # 两行各 22px(字号 9 的 linespace 16 + 上下各 3px) + 行间 1px
+        need = 22 + 1 + 22
+        self.assertGreaterEqual(gt._STATUS_H, need,
+                               msg="状态区 %dpx 装不下两行(%dpx): 会压扁"
+                                    % (gt._STATUS_H, need))
+
+    def test_the_spark_and_status_boxes_do_not_propagate_their_size(self):
+        u"""两个 Frame 必须 pack_propagate(False), 否则高度锁不死。"""
+        import gpu_tray as gt
+        src = io.open(gpu_tray.__file__, encoding="utf-8").read()
+        self.assertIn("spark_box.pack_propagate(False)", src,
+                      "趋势图容器会向外传播尺寸, 锁不死高度")
+        self.assertIn("bottom.pack_propagate(False)", src,
+                      "状态区会向外传播尺寸, 锁不死高度")
+
+    def test_a_short_window_is_raised_to_the_floor(self):
+        u"""读到的窗口太矮要提到保底高度(老存档正是 1046x470)。"""
+        import gpu_tray as gt
+        got = gt._onscreen_geometry("1046x470+55+55", 1512, 949)
+        self.assertEqual(got, "1046x580+55+55",
+                         "老存档的矮窗口原样还回去, 趋势图就被压成 1px")
+
+    def test_a_tall_window_keeps_the_height_the_user_chose(self):
+        u"""够高的窗口不许被动手: 拉高是为了看更多行。"""
+        import gpu_tray as gt
+        for text in ("1040x700+10+10", "1200x900+0+0"):
+            self.assertEqual(gt._onscreen_geometry(text, 1512, 949), text)
 
 class NormalizePerAdapter(unittest.TestCase):
     """normalize_total 按适配器归一: 独显忙不许把核显的读数压小。
@@ -9946,10 +10020,10 @@ class TrayPanelGeometryGuard(unittest.TestCase):
     def test_every_malformed_shape_falls_back_to_the_default(self):
         import gpu_tray as gt
         for junk in ("abc", "1040x", "x470", "1040 x 470", "-10x-10", "",
-                     "1040x470+1+2+3", "1040x470++100", "1020X360",
-                     "1040x470+", "   ", None, 5, [], {}):
+                     "1040x580+1+2+3", "1040x580++100", "1020X360",
+                     "1040x580+", "   ", None, 5, [], {}):
             got = gt._onscreen_geometry(junk, 1280, 720)
-            self.assertEqual(got, "1040x470",
+            self.assertEqual(got, "1040x580",
                              "%r 喂给 root.geometry() 会炸, 该退回默认" % (junk,))
 
     def test_a_geometry_saved_off_the_current_desktop_is_dropped(self):
@@ -9958,16 +10032,39 @@ class TrayPanelGeometryGuard(unittest.TestCase):
         for gone in ("1020x360+5000+5000", "1020x360-3000+0",
                      "1020x360+1200+40", "1020x360+0+900"):
             self.assertEqual(gt._onscreen_geometry(gone, 1280, 720),
-                             "1040x470",
+                             "1040x580",
                              "%s 整个在屏幕外, 开出来等于没有" % gone)
+
+    def test_a_window_too_short_to_show_everything_is_raised(self):
+        u"""矮窗口要提到保底高度, 否则趋势图和底部两行被压扁。
+
+        panel_ui.json 是人也能改的文件, 而老版本存下来的正是 1046x470 那种
+        装不下一屏内容的高度(实测缺口 97px, 趋势图 Canvas 只剩 1px)。
+        "用户故意把窗口拖矮"这个场景不存在: 拖矮时内容是被挤掉的,
+        没有人在追求那个结果。位置照旧算数, 只提高度。
+        """
+        import gpu_tray as gt
+        self.assertEqual(gt._onscreen_geometry("1046x470+55+55", 1512, 949),
+                         "1046x580+55+55",
+                         "老存档的矮窗口原样还回去, 趋势图就被压成 1px")
+        self.assertEqual(gt._onscreen_geometry("1040x300+0+0", 1512, 949),
+                         "1040x580+0+0")
+        self.assertGreaterEqual(gt._PANEL_MIN_H, 580, "保底高度不够装下全部区块")
+
+    def test_a_tall_enough_window_keeps_the_height_the_user_chose(self):
+        u"""够高的窗口不许被动手: 用户拉高了是为了看更多行。"""
+        import gpu_tray as gt
+        for text in ("1040x700+10+10", "1200x900+0+0"):
+            self.assertEqual(gt._onscreen_geometry(text, 1512, 949), text,
+                             "%s 够高了还被改, 用户拉的高度不算数" % text)
 
     def test_a_partially_offscreen_window_is_kept(self):
         """往左探出半截是用户自己摆的, 标题栏还看得见就不该动它。"""
         import gpu_tray as gt
         self.assertEqual(gt._onscreen_geometry("1020x360-50+100", 1280, 720),
-                         "1020x360-50+100")
+                         "1020x580-50+100")
         self.assertEqual(gt._onscreen_geometry("1020x360+100+650", 1280, 720),
-                         "1020x360+100+650")
+                         "1020x580+100+650")
 
     def test_a_window_that_cannot_report_its_screen_is_not_fatal(self):
         """拿不到桌面尺寸只是少一层保险, 不许让面板打不开。

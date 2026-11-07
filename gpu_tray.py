@@ -252,6 +252,13 @@ _HEAT_COLOR = {"hot": _PALETTE["hot"], "warm": _PALETTE["warm"],
 _ROW_ALT_BG = _PALETTE["alt"]
 # 趋势图折线下面的填充: 浅色下几乎融进卡片, 只作"有面积"的暗示
 _SPARK_FILL = _PALETTE["spark_fill"]
+# 趋势图高度。Web 面板那边 .sparkwrap 写死 46px, 两边不同高的话同一个
+# "近 30 分钟"在托盘和浏览器里是两个长相。
+_SPARK_H = 46
+# 底部状态区(刷新节奏/快捷键 + 会话累计)的保底高度: 两行 Label 各 22px
+# (字号 9 的 linespace 是 16px, 上下各留 3px) + 行间 1px + 底部 6px。
+# 这个高度会被 Frame 锁死, 详见 _panel_build 里 spark_box / bottom 那段。
+_STATUS_H = 51
 _ROW_ALT_TAG = "rowalt"
 # Win11 的 UI 字体是 Segoe UI Variable Text; 老系统只有 Segoe UI。都缺
 # (精简安装 / 远程桌面会话)退 Tahoma —— 比 Tk 默认那身更像原生控件。
@@ -744,7 +751,12 @@ def _load_ui_state():
         _dbg(f"panel_ui.json 顶层不是对象({type(ui).__name__}), 按默认布局打开")
         return {}
     if not isinstance(ui.get("geometry"), str):
-        ui["geometry"] = "1040x470"
+        # 470 装不下: 卡片 68 + 筛选栏 32 + 表格 370(12 行) + 趋势图 46 +
+        # 状态区 51 = 567, 缺口 97px。老默认值下 pack 把趋势图和底部两行
+        # 压成 1px 高 —— 用户看不见, 而代码里 height=46 写得明明白白。
+        # 实测临界值 575: 到这个高度底部两个 Label 才各拿到 23/21px 完整
+        # 可见, 趋势图 46px, 表格 12 行一行不少。取 580 留 5px 余量。
+        ui["geometry"] = "1040x580"
     widths = ui.get("widths")
     if isinstance(widths, dict):
         # 列宽只收得下正数: 字符串和 None 会让 tree.column 抛 TclError
@@ -795,13 +807,25 @@ def _parse_geometry(text):
     return w, h, offsets[0] if offsets else 0, offsets[1] if len(offsets) > 1 else 0
 
 
-def _onscreen_geometry(text, screen_w, screen_h, default="1040x470"):
+# 面板的保底高度: 卡片 68 + 筛选栏 32 + 表格 370(12 行) + 趋势图 46 +
+# 状态区 51 = 567, 再给窗口边框留 13px。低于这个高度趋势图和底部两行
+# 会被 pack 压扁(老默认 470 实测压成 1px, 用户根本看不见)。
+_PANEL_MIN_H = 580
+
+
+def _onscreen_geometry(text, screen_w, screen_h, default="1040x580"):
     """拿得出手的 geometry: 形状不对或整窗在屏幕外, 就还给默认值。
 
     Tcl 对"窗口开在看不见的地方"一声不吭: 面板上次拖到副屏, 副屏拔了
     之后 geometry 还是 +1920+300 那一串, 窗口每次都开在屏幕外 —— 用户
     看到的还是"点了菜单什么都没发生"。所以位置要按当前虚拟屏收一遍:
     标题栏至少得留 120x30 在屏内, 否则当越界。
+
+    窗口**矮**也要收: panel_ui.json 是人也能改的文件, 而老版本存下来的
+    是 1046x470 那种装不下一屏内容的高度。直接把矮窗口原样还回去, 趋势图
+    和底部两行状态就被压扁 —— 所以低于 _PANEL_MIN_H 的一律提到保底高度。
+    "用户故意把窗口拖矮了"这个场景不存在: 拖矮的过程中内容是被挤掉的,
+    没有人在追求那个结果, 而下次打开时他看到的还是挤成一团的面板。
     """
     parsed = _parse_geometry(text)
     if parsed is None:
@@ -809,6 +833,9 @@ def _onscreen_geometry(text, screen_w, screen_h, default="1040x470"):
     w, h, x, y = parsed
     if x + 120 < 0 or x > screen_w - 120 or y + 30 < 0 or y > screen_h - 30:
         return default
+    # 保底高度: 矮窗口提到 _PANEL_MIN_H, 位置不动(用户摆的地方算数)
+    if h < _PANEL_MIN_H:
+        h = _PANEL_MIN_H
     return "%dx%d%+d%+d" % (w, h, x, y)
 
 
@@ -1631,20 +1658,36 @@ class TrayApp:
             root.bind("<Escape>", _on_escape)
             root.bind("<Control-f>", lambda _e: entry.focus_set())
 
-            spark = tk.Canvas(root, height=46, bg=_PANEL_BG,
+            # 趋势图与底部两行状态各自装进"尺寸不向外传播"的 Frame 里。
+            # 以前它们直接 pack 在 root 上, 而 Treeview 是 fill=both +
+            # expand=True: 纵向预算一旦不够(470px 的默认窗口实测缺口 89px),
+            # pack 就把这两个部件按剩余空间压扁 —— 趋势图 Canvas 实测只有
+            # 1px 高, 底部那两行"刷新节奏/快捷键"和"采样 N 轮"同样 1px,
+            # 用户根本看不见, 而代码里 height=46 写得明明白白。
+            # 表格少了可以滚动, 趋势图和状态行少了没有任何补救, 所以这里
+            # 让它们保底: Frame 高度锁死, 不许被邻居挤掉。
+            spark = tk.Canvas(root, height=_SPARK_H, bg=_PANEL_BG,
                               highlightthickness=0)
-            spark.pack(fill="x", padx=6, pady=(0, 0))
+            spark_box = tk.Frame(root, bg=_PANEL_BG, height=_SPARK_H)
+            spark_box.pack_propagate(False)
+            spark_box.pack(fill="x", padx=6, pady=(0, 0))
+            spark.pack(in_=spark_box, fill="x")
 
             # 和 Web 面板同一把尺: 弱化色在卡片底上必须过 AA。
             # 这行(核显/独显名 + 刷新节奏 + 键盘/右键入口)是面板底部唯一
             # 的状态说明, 读不出来等于没有。快捷键不说出来就等于没有 ——
             # 键盘用户看不见菜单, 只有这一行告诉他们回车能干什么。
-            tip = tk.Label(root, text="", anchor="w", fg=_MUTED)
-            tip.pack(fill="x", padx=8, pady=(0, 1))
             # 会话累计: 采了多少轮、抓到多少超标、迁走几个。btop / bottom
             # 把这类数摆在台面上 —— 只报"刷新: 1 秒"的话, 监控是不是真在
             # 干活只能靠猜, 而"0 轮"和"3000 轮 0 命中"是两个完全不同的状态。
-            count = tk.Label(root, text="", anchor="w", fg=_MUTED)
+            # 两行各 22px(字号 9 的 linespace 是 16, 上下留 3px)+ 行间 1px
+            # + 底部 6px: 合计 51px, 这就是底部状态区的保底高度。
+            bottom = tk.Frame(root, bg=_BG, height=_STATUS_H)
+            bottom.pack_propagate(False)
+            bottom.pack(fill="x", padx=0, pady=(0, 0))
+            tip = tk.Label(bottom, text="", anchor="w", fg=_MUTED)
+            tip.pack(fill="x", padx=8, pady=(0, 1))
+            count = tk.Label(bottom, text="", anchor="w", fg=_MUTED)
             count.pack(fill="x", padx=8, pady=(0, 6))
 
             # 右键菜单: 永不迁移
