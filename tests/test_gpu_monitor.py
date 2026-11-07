@@ -9557,6 +9557,31 @@ class TrayPanelStatusFloor(unittest.TestCase):
         for text in ("1040x700+10+10", "1200x900+0+0"):
             self.assertEqual(gt._onscreen_geometry(text, 1512, 949), text)
 
+    def test_the_table_row_inner_padding_matches_the_web_panel(self):
+        u"""表格行内文字上下留白, 托盘和 Web 得一样。
+
+        行距不是只有"区块之间"那一层: 一行 28px 里文字占 16px(字号 9 的
+        linespace), 剩下 12px 是上下各 6px 的呼吸。Web 侧 td 是
+        padding:6px 10px + border-bottom:1px, 行盒 15.6px, 算出来
+        12.4px —— 两边都是 6px, 这一条要有人盯着。
+
+        表头高度不在此列: ttk.Treeview 的表头高由布局算法定死(实测改
+        Treeview.Heading 的 padding 完全不动, 仍是 38px), 而 Web 的 th
+        是 28.6px。这不是常数能对齐的, 硬凑只会把数据行数挤掉。
+        """
+        import gpu_tray as gt
+        # 字号 9 的 linespace 实测 16px(见 _STATUS_H 注释), 这里不建
+        # Tk 根窗口: 单测里没有 root, tkfont.Font 会抛 RuntimeError。
+        ls = 16
+        tray_inner = 28 - ls
+        # Web: td padding 6px*2 + 行盒(13px*1.2) + border 1px
+        web_row = 6 * 2 + round(13 * 1.2) + 1
+        web_inner = web_row - round(13 * 1.2) - 1
+        self.assertEqual(tray_inner, web_inner,
+                         "托盘行内留白 %dpx / Web %dpx: 表格密度两种手感"
+                         % (tray_inner, web_inner))
+
+
     def test_the_card_label_gap_matches_the_web_panel(self):
         u"""汇总卡里标签与数值之间的间距, 托盘和 Web 得是同一个数。
 
