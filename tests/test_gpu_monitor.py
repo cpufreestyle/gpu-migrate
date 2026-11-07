@@ -9985,6 +9985,97 @@ class TrayPanelStatusFloor(unittest.TestCase):
                          % (gt._CARD_LABEL_GAP, hit.group(1)))
 
 
+    def test_the_card_side_padding_matches_the_web_panel(self):
+        u"""汇总卡内部左右内边距, 托盘和 Web 得是同一个数。
+
+        托盘原来是 9px: 上下那半边早就按 9px 对齐了(Web
+        .card{padding:9px 16px} 的上 9), 只有左右还是 9, 而浏览器里
+        文字离卡的左右边缘是 16px —— 托盘这边标签贴着卡边, 显得挤。
+        """
+        import gpu_tray as gt
+        import gpu_monitor as gm
+        src = io.open(gpu_tray.__file__, encoding="utf-8").read()
+        self.assertIn("_CARD_PAD_X = ", src,
+                      "卡片左右内边距没有常量, 又回到裸数字了")
+        self.assertEqual(src.count("padx=_CARD_PAD_X"), 2,
+                         "卡片里标签与数值各一处, 现在 %d 处"
+                         % src.count("padx=_CARD_PAD_X"))
+        # Web 侧 .card{padding:9px 16px}, 抠出左右那个数来比
+        hit = re.search(r"\.card\{[^}]*padding:9px (\d+)px",
+                        gm._PANEL_STYLE)
+        self.assertIsNotNone(hit, "Web 面板 .card 的 padding 不见了")
+        self.assertEqual(int(hit.group(1)), gt._CARD_PAD_X,
+                         "托盘 %dpx / Web %spx: 卡片左右留白两种密度"
+                         % (gt._CARD_PAD_X, hit.group(1)))
+
+    def test_the_card_text_still_fits_at_the_narrowest_window(self):
+        u"""内边距加到 16 之后, 最窄的窗口里文字不许溢出卡片。
+
+        这条是真渲染: 六张卡等分一行, 窗口拖窄时每张一起缩短。按
+        _panel_build 同样的 pack 方式搭出来量, 不查源码。
+        """
+        import tkinter as _tk
+        import gpu_tray as gt
+        import gpu_monitor as gm
+        # 标签("GPU 进程")和数值("120 MiB")都可能是最宽的那个, 两边
+        # 都得量。只拿 panel_summary({}) 的值去量, 会全是最多 34px 的
+        # "0.0%" —— 那是空快照, 量不出真实场景下的溢出。
+        summary = gm.panel_summary({})
+        labels = [lab for lab, _t, _c, _tip in summary]
+        import tkinter as _tk
+        import gpu_tray as gt
+        import gpu_monitor as gm
+        # 按真实数据逐卡填自己的标签和数值: 第一版拿最宽的那个值塞进
+        # 每一张卡, 结果最后一张被挤成 1px —— 替身比真布局还挤, 量出来
+        # 的数没有意义。真实布局里每张卡的值都不一样宽。
+        summary = gm.panel_summary({})
+        # 再叠一个满载快照: 空快照的值全是 "0.0%" 这种, 最宽才 34px,
+        # 量不出 "120 MiB" / "62.7%" 在场时的情形。
+        busy = gm.panel_summary({
+            "util_by_pid": {1: 62.7}, "dgpu_util_by_pid": {1: 45.2},
+            "dedicated_by_pid": {1: 120 * 1024 * 1024},
+            "shared_by_pid": {1: 40 * 1024 * 1024},
+            "gpu_all_by_pid": {1: 62.7}, "threshold": 40})
+        root = _tk.Tk()
+        try:
+            for width in (1046, 900, 722, 650):
+                for w in root.winfo_children():
+                    w.destroy()
+                root.geometry(f"{width}x200")
+                cards = _tk.Frame(root)
+                cards.pack(fill="x", padx=gt._PANEL_PAD, pady=(8, 4))
+                for rows in (summary, busy):
+                    cards.destroy()
+                    cards = _tk.Frame(root)
+                    cards.pack(fill="x", padx=gt._PANEL_PAD,
+                               pady=(8, 4))
+                    last = len(rows) - 1
+                    for i, (lab, val, _c, _tip) in enumerate(rows):
+                        cell = _tk.Frame(cards)
+                        cell.pack(side="left", fill="x", expand=True,
+                                  padx=(0, 0 if i == last else 8))
+                        inner = _tk.Label(cell, text=lab)
+                        inner.pack(anchor="w", padx=gt._CARD_PAD_X,
+                                   pady=(5, gt._CARD_LABEL_GAP))
+                        _tk.Label(cell, text=val).pack(
+                            anchor="w", padx=gt._CARD_PAD_X,
+                            pady=(0, 5 - gt._CARD_LABEL_GAP))
+                root.update()
+                for cell in cards.winfo_children():
+                    # Label 的 winfo_reqwidth 不含它自己的 padx, 所以
+                    # 不能直接和卡片比 —— 两边内边距要自己加上去。
+                    for lb in cell.winfo_children():
+                        need = lb.winfo_reqwidth() + 2 * gt._CARD_PAD_X
+                        self.assertLessEqual(
+                            need, cell.winfo_width(),
+                            "窗口 %dpx 下卡片只有 %dpx, 文字 %r "
+                            "加两边内边距要 %dpx: 内边距 %d 太大"
+                            % (width, cell.winfo_width(),
+                               lb.cget("text"), need,
+                               gt._CARD_PAD_X))
+        finally:
+            root.destroy()
+
     def test_the_status_line_gap_matches_the_web_panel(self):
         u"""底部两行灰字的行间距, 托盘和 Web 得是同一个数。
 

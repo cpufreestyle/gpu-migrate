@@ -280,6 +280,12 @@ _PANEL_PAD = 8
 # 一一对应的 margin 可对齐, 所以这里取一个自己的统一值: 三处同一个数,
 # 区块之间节奏才匀。改这个数会同时改动三处, 测试 _budget() 跟着走。
 _BLOCK_GAP = 4
+# 汇总卡内部左右内边距, 和 Web 面板 .card{padding:9px 16px} 的左右 16px
+# 对齐。原来是 9: 上下那半边早就按 9px 对齐了(见下面 pady=(5, ...) 那两个),
+# 只有左右还是 9, 而浏览器里文字离卡的左右边缘是 16px —— 托盘这边标签贴
+# 着卡边, 显得挤。卡片横向余量足: 六张卡等分, 最窄 650px 窗口下每张仍有
+# 99px, 减去 2x16 还剩 67px, 而最宽的标签("GPU 进程")只要 53px。
+_CARD_PAD_X = 16
 _ROW_ALT_TAG = "rowalt"
 # Win11 的 UI 字体是 Segoe UI Variable Text; 老系统只有 Segoe UI。都缺
 # (精简安装 / 远程桌面会话)退 Tahoma —— 比 Tk 默认那身更像原生控件。
@@ -1675,13 +1681,13 @@ class TrayApp:
                 cell.pack(side="left", fill="x", expand=True,
                           padx=(0, 0 if i == last else 8))
                 tk.Label(cell, text=label, bg=_PANEL_BG, fg=_MUTED,
-                         font=_FONT_UI).pack(anchor="w", padx=9,
+                         font=_FONT_UI).pack(anchor="w", padx=_CARD_PAD_X,
                                             pady=(5, _CARD_LABEL_GAP))
                 val = tk.Label(cell, text=text, bg=_PANEL_BG,
                                fg=_heat_color(cls),
                                font=_FONT_UI_BOLD)
-                val.pack(anchor="w", padx=9,
-                            pady=(0, 5 - _CARD_LABEL_GAP))
+                val.pack(anchor="w", padx=_CARD_PAD_X,
+                          pady=(0, 5 - _CARD_LABEL_GAP))
                 card_labels[label] = val
                 tips[label] = tip
                 _bind_tip(val, tip)
