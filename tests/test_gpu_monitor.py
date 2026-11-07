@@ -6115,6 +6115,46 @@ class SparkGeometryConstants(unittest.TestCase):
                          "窗口和点数上限对不上: 要么白存一批窗口外的点, "
                          "要么窗口内还有没画出来的")
 
+    def test_the_canvas_labels_sit_on_a_background_pad(self):
+        u"""趋势图两行小字必须垫底, 不然折线冲顶时把它们切成两半。
+
+        角标钉在 (w-6, 6) anchor=ne, 而 spark_y_of 峰值时 y 正好也是
+        6(公式 height-4-(height-10)*v/ymax, 顶部余量就 6px)。实测占用
+        冲顶那天, 折线末段 11 个点全落在角标的 bbox 里 —— 字被线穿过。
+        Web 侧同样: .corner 是 top:3px, 而 _SPARK_H 下峰值 y 也是 3。
+
+        放哪个角都躲不开: 折线首点在左、末点在右, 固定在一角总有一半
+        序列撞上; 把可绘高度砍一半去躲它又太贵(36px -> 18px, 拿起伏换
+        不穿字)。所以垫一块与画布同色的底: 线从字底下过, 字照样完整。
+        """
+        tray = self._tray_source()
+        self.assertIn("_canvas_label(canvas, 5, y - 7", tray,
+                      "阈值标注没用 _canvas_label: 又回到裸 create_text")
+        self.assertIn("_canvas_label(canvas, w - 6, 6", tray,
+                      "角标没用 _canvas_label: 折线冲顶时会穿过它")
+        # 底垫必须先画, 再把字抬到最上层
+        self.assertIn("fill=_PANEL_BG, outline=\"\"", tray,
+                      "底垫没有用画布底色: 挡不住折线, 还多一块补丁")
+        self.assertIn("canvas.tag_raise(item)", tray,
+                      "字没有抬回最上层: 会被自己那块底垫盖住")
+
+    def test_the_web_labels_sit_on_a_background_pad(self):
+        u"""Web 侧那两行小字同样要垫底, 与托盘同一个道理。"""
+        for sel in (".sparkwrap .thr{", ".sparkwrap .corner{"):
+            m = re.search(re.escape(sel) + r"[^}]*\}", gm._PANEL_STYLE)
+            self.assertIsNotNone(m, "Web 面板 %s 不见了" % sel)
+            self.assertIn("background:#f3f3f3", m.group(0),
+                          "%s 没垫底: 折线冲顶时会穿过这行字" % sel.strip("{"))
+        # 深色档同理, 底色换成深色 body
+        dark = gm._PANEL_STYLE[gm._PANEL_STYLE.find("@media"):]
+        for sel in (".sparkwrap .thr{", ".sparkwrap .corner{"):
+            m = re.search(re.escape(sel) + r"[^}]*\}", dark)
+            self.assertIsNotNone(m, "深色档 %s 不见了" % sel)
+            self.assertIn("background:#202020", m.group(0),
+                          "深色档 %s 没垫底" % sel.strip("{"))
+
+
+
 
 class PanelScriptJsBehaviour(unittest.TestCase):
     u"""面板 JS 的行为测试: 真跑一遍, 不是查字符串在不在。

@@ -1878,6 +1878,37 @@ class TrayApp:
             except Exception:
                 pass
 
+    @staticmethod
+    def _canvas_label(canvas, x, y, anchor, text, color):
+        u"""在 Canvas 上写一行带底垫的小字, 折线从底下穿过也读得出来。
+
+        create_text 的锚点四周留不下间隙, 而角标钉在 (w-6, 6)、
+        spark_y_of 峰值时的 y 也正好是 6(顶部余量就 6px): 占用冲到顶
+        的那天, 折线末段会直接穿过"近30分钟 峰值xx%"那行字 —— 实测
+        末段 11 个点全落在角标的 bbox 里, 字被线切成两半。
+        Web 侧同样: .corner 是 top:3px, 也撞。
+
+        角标放哪个角都躲不开: 折线首点在左、末点在右, 固定在一角总有
+        一半序列会撞上; 把折线可绘高度砍一半去躲它又太贵(拿起伏换
+        不穿字)。所以给文字垫一块与画布同色的底: 线从字底下过, 字
+        照样是完整的。底色必须先画 —— Canvas 按创建顺序叠。
+        """
+        item = canvas.create_text(x, y, anchor=anchor, fill=color,
+                                   font=_FONT_UI, text=text)
+        try:
+            box = canvas.bbox(item)
+        except Exception:
+            return item
+        if not box:
+            return item
+        # 底垫比文字大 2px, 免得字的边缘正贴着折线
+        canvas.create_rectangle(box[0] - 2, box[1] - 1,
+                                 box[2] + 2, box[3] + 1,
+                                 fill=_PANEL_BG, outline="")
+        # 矩形盖住了刚才那行字, 重新画一遍让它回到最上层
+        canvas.tag_raise(item)
+        return item
+
     def _draw_sparkline(self, canvas, threshold=0):
         """画趋势线 + 阈值线。没这条线, 就看不出什么时候会被判成高占用。"""
         try:
@@ -1904,10 +1935,9 @@ class TrayApp:
                     canvas.create_line(0, y, w, y,
                                        fill=_HEAT_COLOR["hot"],
                                        dash=(3, 3))
-                    canvas.create_text(5, y - 7, anchor="nw",
-                                       fill=_HEAT_COLOR["hot"],
-                                       font=_FONT_UI,
-                                       text=f"迁移阈值 {threshold:g}%")
+                    self._canvas_label(canvas, 5, y - 7, "nw",
+                                        f"迁移阈值 {threshold:g}%",
+                                        _HEAT_COLOR["hot"])
                 return
             ymax = spark_ymax(pts, threshold)
             coords, x_last, x_first = spark_geometry(pts, w, h, ymax)
@@ -1923,13 +1953,11 @@ class TrayApp:
             canvas.create_line(coords, fill=_HEAT_COLOR["cool"], width=2,
                                smooth=True)
             if threshold:
-                canvas.create_text(5, y - 7, anchor="nw",
-                                   fill=_HEAT_COLOR["hot"],
-                                   font=_FONT_UI,
-                                   text=f"迁移阈值 {threshold:g}%")
-            canvas.create_text(w - 6, 6, anchor="ne", fill=_MUTED,
-                               font=_FONT_UI,
-                               text=spark_corner_text(pts))
+                self._canvas_label(canvas, 5, y - 7, "nw",
+                                   f"迁移阈值 {threshold:g}%",
+                                   _HEAT_COLOR["hot"])
+            self._canvas_label(canvas, w - 6, 6, "ne",
+                               spark_corner_text(pts), _MUTED)
         except Exception:
             pass
 

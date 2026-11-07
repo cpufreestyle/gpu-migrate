@@ -1682,8 +1682,16 @@ _PANEL_STYLE = (
     ".spark .fill{fill:#dff5df;stroke:none}"
     ".sparkwrap span{position:absolute;font-size:12px;line-height:1;"
     "white-space:nowrap;pointer-events:none}"
-    ".sparkwrap .thr{left:4px;color:#b02a1a}"
-    ".sparkwrap .corner{right:4px;top:3px;color:#666666}"
+    # 两行小字都垫一块与 body 同色的底: 角标钉在 top:3px, 而
+    # spark_y_of 峰值时 y 正好也是 3(顶部余量 3px), 占用冲顶那天
+    # 折线末段会直接穿过"近30分钟 峰值xx%"那行字。托盘侧同一处
+    # 也撞, 两边都垫底 —— 见 gpu_tray.TrayApp._canvas_label。
+    # 不写底色的话折线把字切成两半, 而它是唯一说明"这图有多宽"
+    # 的文字。放哪个角都躲不开: 折线首点在左末点在右, 固定在一角
+    # 总有一半序列撞上; 把可绘高度砍一半去躲它又太贵。
+    ".sparkwrap .thr{left:4px;color:#b02a1a;background:#f3f3f3}"
+    ".sparkwrap .corner{right:4px;top:3px;color:#666666;"
+    "background:#f3f3f3}"
 
     # 深色档: 只要浏览器/系统报"深色偏好"就整体换成一组等价的 Fluent 值。
     # WebPanelLegibility 只扫这一段之前的内容(浅色基线), 深色值另有
@@ -1709,8 +1717,8 @@ _PANEL_STYLE = (
     ".spark .thr{stroke:#ff99a4}"
     ".spark .line{stroke:#6ccb5b}"
     ".spark .fill{fill:#1c3a28}"
-    ".sparkwrap .thr{color:#ff99a4}"
-    ".sparkwrap .corner{color:#9a9a9a}"
+    ".sparkwrap .thr{color:#ff99a4;background:#202020}"
+    ".sparkwrap .corner{color:#9a9a9a;background:#202020}"
     "}"
 )
 
