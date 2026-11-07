@@ -9809,8 +9809,8 @@ class TrayPanelStatusFloor(unittest.TestCase):
         """默认窗口高度下各区块请求高度之和。"""
         import gpu_tray as gt
         return (gt._PANEL_MIN_H,
-                8 + 56 + 4,          # cards: pad + h + pad
-                28 + 4,              # fbar
+                8 + 56 + gt._BLOCK_GAP,   # cards: pad + h + pad
+                28 + gt._BLOCK_GAP,       # fbar
                 12 * 28 + 30,        # tree: 12 行 x 28 + 表头
                 gt._SPARK_H,
                 gt._SPARK_GAP,       # 趋势图与状态区之间的间距
@@ -9823,6 +9823,26 @@ class TrayPanelStatusFloor(unittest.TestCase):
         self.assertGreaterEqual(min_h, need,
                                msg="默认窗口比全部区块矮 %dpx: pack 会压扁"
                                     "趋势图和底部状态行" % (need - min_h))
+
+    def test_the_block_gap_is_one_number_used_in_all_three_places(self):
+        u"""区块间距必须是命名常量, 而且三处都真的用它。
+
+        这三个 4px 原来是散在 _panel_build 里的裸数字: 改一处不牵动
+        另外两处, 区块之间的节奏就这么悄悄歪掉。_budget() 里也跟着
+        写死过同一个数 —— §147 修的就是这类漂移。
+        """
+        import gpu_tray as gt
+        src = io.open(gpu_tray.__file__, encoding="utf-8").read()
+        self.assertIn("_BLOCK_GAP = ", src,
+                      "区块间距没有常量, 又回到裸数字了")
+        body = inspect.getsource(gt.TrayApp._panel_build)
+        self.assertEqual(body.count("_BLOCK_GAP"), 3,
+                         "区块间距有三处, 必须都用 _BLOCK_GAP: "
+                         "现在只有 %d 处" % body.count("_BLOCK_GAP"))
+        for line in ("pady=(8, _BLOCK_GAP)", "pady=(0, _BLOCK_GAP)"):
+            self.assertIn(line, body, "少了这处: " + line)
+        self.assertIn("pady=_BLOCK_GAP", body,
+                      "表格那处没用 _BLOCK_GAP")
 
     def test_the_status_floor_is_taller_than_its_two_labels(self):
         u"""状态区高度要装得下两行 Label, 不然压扁的还是它自己。"""

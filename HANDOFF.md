@@ -6020,7 +6020,7 @@ gm 自己的容错逻辑):
 ### 用户决策待办
 
 1. 现网 exe 仍是旧构建(10-04)。要同步需 build -> sync -> 重启托盘。
-2. 26 条新提交未 push, 与 origin/main 分叉。
+2. 27 条新提交未 push, 与 origin/main 分叉。
 
 ## 139. 续一百三十：趋势图底边贴住状态行，与 Web 面板的 10px 间距不一致（布局/可读性）
 
@@ -6531,3 +6531,51 @@ runner 均全绿。
 `WinError 1410` 本轮又撞到一次（discover runner），已连续两轮用
 `git stash` 回干净 HEAD 复跑定位为 pystray 图标类注册的偶发冲突，
 与改动无关；复跑一次即全绿。
+
+## 149. 续一百四十：区块间距提取为 _BLOCK_GAP，三处裸 4px 收成一个数（布局/可维护性）
+
+### 本轮量过、确认不需要改的
+
+- **详情窗行距**：9 行键值对，行距实测 **27px**（Label 23 + 上下各 2），
+  与上轮调到的设置窗 27px 一致，与主面板表格行 28px 差 1px。无需动。
+- **主面板区块间距**：`cards->fbar` 4 / `fbar->tree` 8(含 pady 4+4) /
+  `tree->spark` 4 / `spark->bottom` 10(`_SPARK_GAP`)。
+- **把区块间距从 4 提到 6/8**：算过，不行。590 高度下固定部分 208，
+  表格 12 行要 374，余量只有 8px。提到 6 吃掉 6px 只剩 2px，`_PANEL_MIN_H`
+  的守卫会当场红。收益小风险大，不做。
+- **Web `.cards{margin:10px 0 12px}` 的 12px 下边距**：Web 那边区块顺序是
+  卡片 -> 趋势图 -> 筛选框 -> 表格，与托盘的 卡片 -> 筛选栏 -> 表格 ->
+  趋势图不同，没有一一对应的 margin 可对齐，硬套数字没有意义。
+
+### 改动：区块间距常量化
+
+`_panel_build` 里三处区块间距是散落的裸 `4`：
+
+    cards.pack(fill="x", padx=8, pady=(8, 4))
+    fbar.pack(fill="x", padx=8, pady=(0, 4))
+    tree.pack(fill="both", expand=True, padx=6, pady=4)
+
+而间距这件事在这个文件里本来就有既定做法：`_SPARK_GAP` / `_CARD_LABEL_GAP`
+/ `_STATUS_LINE_GAP` 每个都是命名常量 + 注释说明"与 Web 面板哪个值对齐"。
+这三处是漏网的。后果是改一处不牵动另外两处，区块节奏悄悄歪掉；
+`_budget()` 测试里也跟着写死了同一个数（§147 刚修过 `status 51` 那类）。
+
+- 新增 `_BLOCK_GAP = 4`（`gpu_tray.py:276`），注释说明为什么是统一值
+  而不是对齐 Web。
+- 三处 pack 全部改用 `_BLOCK_GAP`。
+- `_budget()` 里 `8 + 56 + 4` / `28 + 4` 改成 `gt._BLOCK_GAP`。
+
+### 测试
+
+`TrayPanelStatusFloor` 新增
+`test_the_block_gap_is_one_number_used_in_all_three_places`：常量必须
+存在，且 `_panel_build` 源码里 `_BLOCK_GAP` 正好出现 3 次、三处 pack
+写法逐一在列。
+
+变异验证：把 tree 那处改回裸 `pady=4`，守卫当场报
+`AssertionError: 2 != 3 : 区块间距有三处, 必须都用 _BLOCK_GAP`。
+
+全套 **650 条**（649 + 1 新），两个 runner 均全绿。
+
+`WinError 1410` 本轮第四次撞到（discover runner），复跑一次即全绿；
+前三轮已用 `git stash` 回干净 HEAD 定位为 pystray 图标类注册的偶发冲突。

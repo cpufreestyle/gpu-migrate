@@ -269,6 +269,11 @@ _STATUS_LINE_GAP = 2
 # 行间 2px 与 Web 面板 #hidden / #counters 的 margin:2px 0 0 对齐。
 # 这个高度会被 Frame 锁死, 详见 _panel_build 里 spark_box / bottom 那段。
 _STATUS_H = 52
+# 面板四个区块之间的间距: 汇总卡 -> 筛选栏 -> 表格 -> 趋势图, 每处都是
+# 4px。Web 面板那边区块顺序不同(卡片 -> 趋势图 -> 筛选框 -> 表格), 没有
+# 一一对应的 margin 可对齐, 所以这里取一个自己的统一值: 三处同一个数,
+# 区块之间节奏才匀。改这个数会同时改动三处, 测试 _budget() 跟着走。
+_BLOCK_GAP = 4
 _ROW_ALT_TAG = "rowalt"
 # Win11 的 UI 字体是 Segoe UI Variable Text; 老系统只有 Segoe UI。都缺
 # (精简安装 / 远程桌面会话)退 Tahoma —— 比 Tk 默认那身更像原生控件。
@@ -1649,7 +1654,7 @@ class TrayApp:
                         "dgpu": 55, "dmem": 75, "smem": 75, "pref": 160}
             # 顶部汇总条: 口径与 Web 面板共用一份 (panel_summary)
             cards = tk.Frame(root, bg=_BG)
-            cards.pack(fill="x", padx=8, pady=(8, 4))
+            cards.pack(fill="x", padx=8, pady=(8, _BLOCK_GAP))
             card_labels = {}
             last = len(panel_summary(self.snapshot or {})) - 1
             tips = {}
@@ -1676,7 +1681,7 @@ class TrayApp:
 
             # 筛选框: 进程多的时候这一栏比表格本身更有用
             fbar = tk.Frame(root, bg=_BG)
-            fbar.pack(fill="x", padx=8, pady=(0, 4))
+            fbar.pack(fill="x", padx=8, pady=(0, _BLOCK_GAP))
             _filter_hint = tk.Label(fbar, text=_FILTER_HINT, bg=_BG,
                                     fg=_MUTED, font=_FONT_UI)
             _filter_hint.pack(side="left")
@@ -1758,7 +1763,8 @@ class TrayApp:
                     tree.tag_configure(cls, foreground=color)
             # 前景归热度 tag 管, 背景归隔行 tag 管, 两个 tag 各管一头
             tree.tag_configure(_ROW_ALT_TAG, background=_ROW_ALT_BG)
-            tree.pack(fill="both", expand=True, padx=6, pady=4)
+            tree.pack(fill="both", expand=True, padx=6,
+                      pady=_BLOCK_GAP)
 
             # Esc: 有筛选词先清空, 已经空了才关窗 (和常见工具的套路一致)
             def _on_escape(_event=None):
