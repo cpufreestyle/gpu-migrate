@@ -3354,6 +3354,89 @@ class TrayConfigWrite(unittest.TestCase):
         self.assertEqual(gm.SETTINGS_LABELS["threshold_percent"], "迁移阈值 %")
 
 
+class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
+    u"""设置窗的保存键不许被 pack 压成 1px。
+
+    460x420 那个老尺寸装不下自己的内容: 6 行输入 + 4 个勾选 +
+    两个 4 行名单 = 406, 而 pady 8x2 与保存键之外只剩 358。
+    expand 的 grid 一超预算, pack 就压后声明的元素 —— 保存键
+    实测只剩 1px 高, 用户看得见标题、看不见也点不到"保存"。
+    主面板在 470 那档上踩过同一个坑(见 _default_ui 的注释),
+    这里按同一个办法收口: 窗高提到 440。
+    """
+
+    def _build(self, geom, pad=1, texth=3):
+        import tkinter as _tk
+        root = _tk.Tk()
+        root.geometry(geom)
+        grid = _tk.Frame(root)
+        grid.pack(fill="both", expand=True, padx=12, pady=8)
+        labels = ["迁移阈值 %", "显存阈值 MiB", "电池阈值 %",
+                  "温度提醒 °C", "采样周期 秒", "Web 端口(0关)"]
+        cbs = ["自动重启迁移的进程", "迁移前弹窗确认",
+               "低负载自动切回核显", "启用内置排除名单"]
+        r = 0
+        for lb in labels:
+            _tk.Label(grid, text=lb, anchor="w").grid(
+                row=r, column=0, sticky="w", pady=pad)
+            _tk.Entry(grid, width=10).grid(
+                row=r, column=1, sticky="w", pady=pad)
+            r += 1
+        for i, t in enumerate(cbs):
+            _tk.Checkbutton(grid, text=t, variable=_tk.BooleanVar()).grid(
+                row=r + i, column=0, columnspan=2, sticky="w", pady=pad)
+        r2 = r + 4
+        _tk.Label(grid, text="游戏名单(每行一个)", anchor="w").grid(
+            row=r2, column=0, sticky="nw", pady=pad)
+        _tk.Text(grid, width=30, height=texth).grid(
+            row=r2, column=1, sticky="w", pady=pad)
+        r3 = r2 + 5
+        _tk.Label(grid, text="排除名单(每行一个)", anchor="w").grid(
+            row=r3, column=0, sticky="nw", pady=pad)
+        _tk.Text(grid, width=30, height=texth).grid(
+            row=r3, column=1, sticky="w", pady=pad)
+        btn = _tk.Button(root, text="保存 (热重载立即生效)")
+        btn.pack(pady=8)
+        root.update()
+        return root, grid, btn
+
+    def test_the_save_button_is_not_squeezed_flat(self):
+        u"""满高度才算数: 18px 那种是被压过的, 不是正常按钮。"""
+        import gpu_tray
+        body = inspect.getsource(gpu_tray.TrayApp._settings_build)
+        geom = re.search(r'root\.geometry\("(\d+x\d+)"\)', body)
+        self.assertIsNotNone(geom, "设置窗没写 geometry, 量不了")
+        root, grid, btn = self._build(geom.group(1))
+        try:
+            want = btn.winfo_reqheight()
+            got = btn.winfo_height()
+            self.assertEqual(
+                got, want,
+                f"保存键只要 {got}px(要 {want}px): 设置窗高度 "
+                f"{geom.group(1)} 装不下内容, pack 把它压平了")
+            self.assertLess(
+                grid.winfo_reqheight(),
+                int(geom.group(1).split("x")[1]) - 32 - want - 16,
+                "grid 请求高超过窗子给它的预算, 按钮迟早被压")
+        finally:
+            root.destroy()
+
+    def test_the_old_geometry_squeezed_the_button_flat(self):
+        u"""反面对照: 老参数(pady=2 + 名单 4 行)在任何相近窗高下
+        都把保存键压成 1~2px。
+
+        没有这条, 上面那条可能只是因为 Tk 这次心情好; 也用来钉住
+        "光提窗高不管用、pady 和名单行数得一起收"这个结论。
+        """
+        for h in (420, 430, 440, 450, 460):
+            root, grid, btn = self._build(f"460x{h}", pad=2, texth=4)
+            try:
+                self.assertLess(
+                    btn.winfo_height(), btn.winfo_reqheight(),
+                    f"老参数在 460x{h} 下按钮居然满高? 那这个坑是假的")
+            finally:
+                root.destroy()
+
 class TrayLifecycleLog(unittest.TestCase):
     """托盘退出必须留一行日志。
 

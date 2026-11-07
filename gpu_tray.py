@@ -1112,7 +1112,13 @@ class TrayApp:
             counted = True
             self._ui_windows += 1
             root.title("GPU 监控设置")
-            root.geometry("460x420")
+            # 420 装不下: 6 行输入 + 4 个勾选 + 两个 3 行名单
+            # = 356, 再算上 pady 8x2 与保存键 30 + pady 8x2 只有
+            # 358 可用 —— expand 的 grid 一超, pack 就把后声明的
+            # 保存键压成 1px 高(和主面板 470 那个坑同款)。实测:
+            #     420 -> 按钮 1px   430 -> 18px   440 -> 30px 满血
+            # 440 配 pady=1 / 名单 3 行有 22px 余量。
+            root.geometry("460x440")
             root.attributes("-topmost", True)
             cfg = load_config(self.config_path)
             rows = []
@@ -1121,10 +1127,10 @@ class TrayApp:
 
             def add_entry(label, key, width=10):
                 tk.Label(grid, text=label, anchor="w").grid(
-                    row=len(rows), column=0, sticky="w", pady=2)
+                    row=len(rows), column=0, sticky="w", pady=1)
                 var = tk.StringVar(value=str(cfg.get(key, "")))
                 e = tk.Entry(grid, textvariable=var, width=width)
-                e.grid(row=len(rows), column=1, sticky="w", pady=2)
+                e.grid(row=len(rows), column=1, sticky="w", pady=1)
                 # Enter 直接保存: 六个格子 Tab 走完再摸鼠标去点那个按钮,
                 # 键盘用户的手要在键盘和鼠标之间来回搬一趟。save 定义在
                 # 下面, lambda 调用时才查名, 赶得上(与面板 refresh 同款)。
@@ -1148,19 +1154,19 @@ class TrayApp:
                     ("自动重启迁移的进程", v_ar), ("迁移前弹窗确认", v_cm),
                     ("低负载自动切回核显", v_pa), ("启用内置排除名单", v_ed))):
                 tk.Checkbutton(grid, text=text, variable=var).grid(
-                    row=r + i, column=0, columnspan=2, sticky="w", pady=2)
+                    row=r + i, column=0, columnspan=2, sticky="w", pady=1)
 
             r2 = r + 4
             tk.Label(grid, text="游戏名单(每行一个)", anchor="w").grid(
-                row=r2, column=0, sticky="nw", pady=2)
-            t_games = tk.Text(grid, width=30, height=4)
-            t_games.grid(row=r2, column=1, sticky="w", pady=2)
+                row=r2, column=0, sticky="nw", pady=1)
+            t_games = tk.Text(grid, width=30, height=3)
+            t_games.grid(row=r2, column=1, sticky="w", pady=1)
             t_games.insert("1.0", "\n".join(cfg.get("game_processes", [])))
             r2 += 5
             tk.Label(grid, text="排除名单(每行一个)", anchor="w").grid(
-                row=r2, column=0, sticky="nw", pady=2)
-            t_excl = tk.Text(grid, width=30, height=4)
-            t_excl.grid(row=r2, column=1, sticky="w", pady=2)
+                row=r2, column=0, sticky="nw", pady=1)
+            t_excl = tk.Text(grid, width=30, height=3)
+            t_excl.grid(row=r2, column=1, sticky="w", pady=1)
             t_excl.insert("1.0", "\n".join(cfg.get("exclude_processes", [])))
 
             def save():
