@@ -701,7 +701,8 @@ def _apply_fluent_theme():
                     fieldbackground=_PANEL_BG, borderwidth=0,
                     rowheight=_ROW_H, font=_FONT_UI)
     style.configure("Treeview.Heading", background=_PALETTE["head"],
-                    foreground=_MUTED, relief="flat", padding=(6, 5),
+                    foreground=_MUTED, relief="flat",
+                    padding=(_HEAD_PAD_X, _HEAD_PAD_Y),
                     font=_FONT_UI)
     style.map("Treeview.Heading",
               background=[("active", _PALETTE["hover"])])
@@ -898,13 +899,34 @@ def _parse_geometry(text):
     return w, h, offsets[0] if offsets else 0, offsets[1] if len(offsets) > 1 else 0
 
 
-# 面板的保底高度: 卡片 68 + 筛选栏 32 + 表格 422(12 行 x 32 + 表头 38)
-# + 趋势图 46 + 间距 10 + 状态区 52 = 630。低于这个高度趋势图和底部
-# 两行会被 pack 压扁(老默认 470 实测压成 1px, 用户根本看不见);
-# 行高 28 -> 32 之后 12 行从 336 涨到 384, 这个数必须跟着涨 ——
-# TrayPanelStatusFloor.test_the_row_height_and_the_window_floor_move_
-# together 把两者的等式钉死了。
-_PANEL_MIN_H = 630
+# 表头高度。ttk.Treeview 的表头由 Treeview.Heading 的 padding 纵向值
+# 线性决定: 实测 22 + 2 * padding_y, padding=(6,5) 时是 32px。
+# (§141 记的“表头定死 38px、padding 改动无效”是错的: 那次量的
+#  是 clam 主题没生效时的默认值。改 padding 表头高度会跟着变。)
+# Web 的 th 是 28.6px, 差 3.4px —— ttk 布局的底噪, 不追。
+_TREE_HEAD_H = 32
+# 表头的 padding(横向, 纵向)。纵向这个数就是表头高度的一半来源:
+# 实测表头高 = 22 + 2 * _HEAD_PAD_Y, 所以改它等于改 _TREE_HEAD_H,
+# 而 _PANEL_MIN_H 的账面上按 _TREE_HEAD_H 算 —— 三个数要么一起改,
+# 要么有人盯着测试 test_the_window_floor_covers_the_table_header。
+_HEAD_PAD_X = 6
+_HEAD_PAD_Y = 5
+
+# 面板的保底高度, 按各区块的**实测**请求高度加出来:
+#   卡片 68 (pad 8 + 内容 56 + 间距 4)
+#   筛选栏 32 (28 + 间距 4)
+#   表格 422 (12 行 x 32 + 表头 _TREE_HEAD_H + ttk 多留的 2px)
+#   趋势图 46 + 间距 10
+#   状态区 52
+# 账面上是 630, 但**实测 toplevel 要 634** —— ttk.Treeview 在 12 行全
+# 展开时的请求高是 418 而不是 416(12x32+32), 多出 2px。630 这个数就是
+# 少了这 2px: 底部状态区实测被 pack 压成 48px(需求 52), 第二行“会话
+# 累计”的下半截被切掉。提到 634 之后实测 52px 正好装下。
+# 低于这个高度趋势图和底部两行会被 pack 压扁(老默认 470 实测压成
+# 1px, 用户根本看不见); 行高 28 -> 32 之后 12 行从 336 涨到 384,
+# 这个数必须跟着涨 —— TrayPanelStatusFloor.
+# test_the_row_height_and_the_window_floor_move_together 钉死等式。
+_PANEL_MIN_H = 634
 
 
 def _onscreen_geometry(text, screen_w, screen_h,

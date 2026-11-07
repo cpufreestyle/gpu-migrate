@@ -9811,7 +9811,11 @@ class TrayPanelStatusFloor(unittest.TestCase):
         return (gt._PANEL_MIN_H,
                 8 + 56 + gt._BLOCK_GAP,   # cards: pad + h + pad
                 28 + gt._BLOCK_GAP,       # fbar
-                12 * gt._ROW_H + 30,   # tree: 12 行 x 行高 + 表头
+                # tree: 12 行 x 行高 + 表头 + ttk 多留的 2px。表头从
+                # _TREE_HEAD_H 取, 别再写死数字: 它由 _HEAD_PAD_Y
+                # 线性决定(22 + 2*_HEAD_PAD_Y), 而 _PANEL_MIN_H 的
+                # 账面上按同一个数算。
+                12 * gt._ROW_H + gt._TREE_HEAD_H + 2,
                 gt._SPARK_H,
                 gt._SPARK_GAP,       # 趋势图与状态区之间的间距
                 gt._STATUS_H)
@@ -9956,7 +9960,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         import gpu_tray as gt
         need = (8 + 56 + gt._BLOCK_GAP      # cards: pad + h + pad
                 + 28 + gt._BLOCK_GAP        # fbar
-                + 12 * gt._ROW_H + 30       # tree: 12 行 + 表头
+                + 12 * gt._ROW_H + gt._TREE_HEAD_H + 2   # tree: 12 行 + 表头
                 + gt._SPARK_H
                 + gt._SPARK_GAP
                 + gt._STATUS_H)
@@ -9983,6 +9987,38 @@ class TrayPanelStatusFloor(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_the_window_floor_covers_the_table_header(self):
+        u"""保底高度的账面上必须真的装下表头, 且表头与 padding 挂钩。"""
+        import tkinter as _tk
+        from tkinter import ttk as _ttk
+        import gpu_tray as gt
+        root = _tk.Tk()
+        try:
+            gt._rebuild_fonts()
+            gt._apply_fluent_theme()
+            style = _ttk.Style()
+            # 表头高 = 22 + 2 * padding_y, 这是 ttk 的线性关系(实测)
+            self.assertEqual(
+                gt._TREE_HEAD_H, 22 + 2 * gt._HEAD_PAD_Y,
+                "_TREE_HEAD_H %d 与 _HEAD_PAD_Y %d 对不上: "
+                "表头实际是 %dpx, 保底高度的账面上少算/多算了"
+                % (gt._TREE_HEAD_H, gt._HEAD_PAD_Y,
+                   22 + 2 * gt._HEAD_PAD_Y))
+            # 主题生效后量一遍真值: 常量写错的话这里当场红
+            style.configure("Treeview.Heading",
+                            padding=(gt._HEAD_PAD_X, gt._HEAD_PAD_Y))
+            tree = _ttk.Treeview(root, show="headings",
+                                 columns=("a",), style="Treeview")
+            tree.heading("a", text="A")
+            tree.insert("", "end", values=("x",))
+            tree.pack()
+            root.update()
+            self.assertEqual(tree.bbox(tree.get_children()[0], "a")[1],
+                             gt._TREE_HEAD_H,
+                             "实测表头高与 _TREE_HEAD_H 不一致")
+        finally:
+            root.destroy()
+
     def test_the_status_floor_is_taller_than_its_two_labels(self):
         u"""状态区高度要装得下两行 Label, 不然压扁的还是它自己。"""
         import gpu_tray as gt
@@ -10005,7 +10041,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         u"""读到的窗口太矮要提到保底高度(老存档正是 1046x470)。"""
         import gpu_tray as gt
         got = gt._onscreen_geometry("1046x470+55+55", 1512, 949)
-        self.assertEqual(got, "1046x630+55+55",
+        self.assertEqual(got, "1046x634+55+55",
                          "老存档的矮窗口原样还回去, 趋势图就被压成 1px")
 
     def test_a_tall_window_keeps_the_height_the_user_chose(self):
@@ -10022,9 +10058,11 @@ class TrayPanelStatusFloor(unittest.TestCase):
         padding:6px 10px + border-bottom:1px, 行盒 15.6px, 算出来
         12.4px —— 两边都是 6px, 这一条要有人盯着。
 
-        表头高度不在此列: ttk.Treeview 的表头高由布局算法定死(实测改
-        Treeview.Heading 的 padding 完全不动, 仍是 38px), 而 Web 的 th
-        是 28.6px。这不是常数能对齐的, 硬凑只会把数据行数挤掉。
+        表头高度不在此列: 表头由 Treeview.Heading 的 padding 纵向值
+        线性决定(实测 22 + 2*padding_y, padding=(6,5) 时是 32px),
+        而 Web 的 th 是 28.6px。这不是常数能对齐的, 硬凑只会把数据
+        行数挤掉 —— §141 记的“表头定死 38px、padding 改动无效”
+        是错的, 那次量的不是 clam 主题生效后的值。
         """
         import gpu_tray as gt
         # 字号 9 的 linespace 实测 16px(见 _STATUS_H 注释), 这里不建
@@ -10691,7 +10729,7 @@ class TrayPanelGeometryGuard(unittest.TestCase):
         """
         import gpu_tray as gt
         self.assertEqual(gt._onscreen_geometry("1046x470+55+55", 1512, 949),
-                         "1046x630+55+55",
+                         "1046x634+55+55",
                          "老存档的矮窗口原样还回去, 趋势图就被压成 1px")
         self.assertEqual(gt._onscreen_geometry("1040x300+0+0", 1512, 949),
                          "1040x%d+0+0" % gt._PANEL_MIN_H)

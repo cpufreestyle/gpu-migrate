@@ -6801,3 +6801,82 @@ y=55 时底部到 685，距屏底还有 83px，放得下。
 
 全套 **657 条**（655 + 2 新），两个 runner 均全绿（discover 复跑两次，
 中途撞到一次偶发 error，再跑即绿）。
+
+## 154. 续一百四十五：保底高度 630 少算 4px，底部状态区被 pack 压成 48px（布局）
+
+### 现象
+
+接着 §153 往下量。建出**真实面板**（不是手搭的替身：`TrayApp` 要
+`stop` / `panel_open` / `lock` / `_pref_cache` / `_name_cache` 这些
+属性都补齐才建得起来，`_panel_build` 里总 except 会把缺属性的窗口
+静默 destroy 掉），逐块量高度：
+
+    min_h=630  卡片 56  筛选栏 28  表格 418  趋势图 46  状态区 **48**
+    min_h=634  卡片 56  筛选栏 28  表格 418  趋势图 46  状态区 **52**
+
+底部那个 `Frame(height=_STATUS_H)` 实测 **48px，而需求是 52px** ——
+第二行"会话累计"的下半截被切掉。`_STATUS_H` 注释里写的 52px 一个
+字节都没兑现。
+
+### 为什么是缺陷
+
+`_PANEL_MIN_H` 存在的全部理由就是"低于这个高度 pack 会压扁趋势图
+和底部两行"（`TrayPanelStatusFloor` 的契约）。它自己的账面上却
+少算了 4px，把**唯一不允许被压扁的那个区块**压掉了。
+
+### 那 4px 从哪来
+
+两处，各 2px，方向都是"账面比实测小"：
+
+1. **表头不是 30px，是 32px**。`_budget()` 和
+   `test_the_row_height_and_the_window_floor_move_together` 里都写着
+   `12 * _ROW_H + 30`，而 `_PANEL_MIN_H` 的注释写的是"表头 38"。
+   实测（clam 主题生效后）：表头高 = `22 + 2 * padding_y`，
+   `padding=(6,5)` 时是 **32px**。
+2. **ttk.Treeview 在 12 行全展开时请求 418px**，不是账面算的
+   `12*32 + 32 = 416`，多出 2px。
+
+### 顺带纠正两条错记录
+
+**§141 / §147 记的"表头定死 38px、padding 改动无效"是错的。**
+实测改 `Treeview.Heading` 的 padding，表头高度**会**变：
+
+    padding_y: 0 -> 22, 1 -> 24, 3 -> 28, 5 -> 32, 8 -> 38
+
+38px 正是 `padding_y=8` 的值 —— 当初量的那次 clam 主题没生效，
+拿到的是 ttk 默认值。本轮已把 §141/§147 与测试 docstring 里这句
+错的记录改成实测真相。
+
+### 改动
+
+- `_PANEL_MIN_H` 630 -> **634**。实测 634 时状态区正好 52px，
+  700/900/660 等更高的窗口不动。
+- 新增 `_TREE_HEAD_H = 32`（表头高）和 `_HEAD_PAD_X` / `_HEAD_PAD_Y`
+  （heading 的 padding，原来是 `_apply_fluent_theme` 里的裸 `(6, 5)`）。
+  `Treeview.Heading` 改引用这两个常量。
+- `_budget()` 与 `test_the_row_height_and_the_window_floor_move_
+  together` 里的 `12 * _ROW_H + 30` 换成
+  `12 * _ROW_H + gt._TREE_HEAD_H + 2`，账面与实测对齐。
+
+### 测试
+
+新增 `test_the_window_floor_covers_the_table_header`：真建 Tk 根、
+真刷主题，量一遍表头实际高度，同时钉死 `_TREE_HEAD_H == 22 + 2*
+_HEAD_PAD_Y`。改 padding 忘了改 `_TREE_HEAD_H`、或者改了表头常量
+忘了抬 `_PANEL_MIN_H`，两条路都当场红。
+
+变异验证（两条都确认会红）：
+
+- `_HEAD_PAD_Y` 5 -> 8：`AssertionError: 32 != 38 : _TREE_HEAD_H 32
+  与 _HEAD_PAD_Y 8 对不上: 表头实际是 38px`。
+- `_PANEL_MIN_H` 634 -> 630（本轮的原始缺陷）：`1046x634+55+55`
+  期望不符，`test_a_short_window_is_raised_to_the_floor` 报红。
+
+全套 **658 条**（657 + 1 新），两个 runner 均全绿。
+
+### 用户决策待办
+
+1. 现网 exe 仍是旧构建(10-04)，且**默认窗口高度从 630 涨到 634**、
+   表格行高 28 -> 32，不同步的话用户看不到这些优化。要同步需
+   build -> sync -> 重启托盘（会打断实例）。
+2. 32 条新提交未 push, 与 origin/main 分叉。
