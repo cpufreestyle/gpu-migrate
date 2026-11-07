@@ -257,10 +257,18 @@ _SPARK_FILL = _PALETTE["spark_fill"]
 _SPARK_H = 46
 # 趋势图与下方区块的间距, 和 Web 面板 .sparkwrap 的 margin:0 0 10px 对齐。
 _SPARK_GAP = 10
+# 汇总卡里标签与数值之间的间距, 和 Web 面板 .card b{margin-top:2px} 对齐。
+# 原来是 0: 标签底边直接贴上数值顶边, 而浏览器里那两个数之间空着 2px。
+_CARD_LABEL_GAP = 2
+# 底部状态区两行 Label 之间的间距, 和 Web 面板 #hidden / #counters 的
+# margin:2px 0 0 对齐。原来是 1px: 两行灰字几乎贴在一起, 而浏览器
+# 里空着 2px。
+_STATUS_LINE_GAP = 2
 # 底部状态区(刷新节奏/快捷键 + 会话累计)的保底高度: 两行 Label 各 22px
-# (字号 9 的 linespace 是 16px, 上下各留 3px) + 行间 1px + 底部 6px。
+# (字号 9 的 linespace 是 16px, 上下各留 3px) + 行间 2px + 底部 6px。
+# 行间 2px 与 Web 面板 #hidden / #counters 的 margin:2px 0 0 对齐。
 # 这个高度会被 Frame 锁死, 详见 _panel_build 里 spark_box / bottom 那段。
-_STATUS_H = 51
+_STATUS_H = 52
 _ROW_ALT_TAG = "rowalt"
 # Win11 的 UI 字体是 Segoe UI Variable Text; 老系统只有 Segoe UI。都缺
 # (精简安装 / 远程桌面会话)退 Tahoma —— 比 Tk 默认那身更像原生控件。
@@ -1560,11 +1568,13 @@ class TrayApp:
                 cell.pack(side="left", fill="x", expand=True,
                           padx=(0, 0 if i == last else 8))
                 tk.Label(cell, text=label, bg=_PANEL_BG, fg=_MUTED,
-                         font=_FONT_UI).pack(anchor="w", padx=9, pady=(5, 0))
+                         font=_FONT_UI).pack(anchor="w", padx=9,
+                                            pady=(5, _CARD_LABEL_GAP))
                 val = tk.Label(cell, text=text, bg=_PANEL_BG,
                                fg=_heat_color(cls),
                                font=_FONT_UI_BOLD)
-                val.pack(anchor="w", padx=9, pady=(0, 5))
+                val.pack(anchor="w", padx=9,
+                            pady=(0, 5 - _CARD_LABEL_GAP))
                 card_labels[label] = val
                 tips[label] = tip
                 _bind_tip(val, tip)
@@ -1686,13 +1696,13 @@ class TrayApp:
             # 会话累计: 采了多少轮、抓到多少超标、迁走几个。btop / bottom
             # 把这类数摆在台面上 —— 只报"刷新: 1 秒"的话, 监控是不是真在
             # 干活只能靠猜, 而"0 轮"和"3000 轮 0 命中"是两个完全不同的状态。
-            # 两行各 22px(字号 9 的 linespace 是 16, 上下留 3px)+ 行间 1px
-            # + 底部 6px: 合计 51px, 这就是底部状态区的保底高度。
+            # 两行各 22px(字号 9 的 linespace 是 16, 上下留 3px)+ 行间 2px
+            # + 底部 6px: 合计 52px, 这就是底部状态区的保底高度。
             bottom = tk.Frame(root, bg=_BG, height=_STATUS_H)
             bottom.pack_propagate(False)
             bottom.pack(fill="x", padx=0, pady=(0, 0))
             tip = tk.Label(bottom, text="", anchor="w", fg=_MUTED)
-            tip.pack(fill="x", padx=8, pady=(0, 1))
+            tip.pack(fill="x", padx=8, pady=(0, _STATUS_LINE_GAP))
             count = tk.Label(bottom, text="", anchor="w", fg=_MUTED)
             count.pack(fill="x", padx=8, pady=(0, 6))
 

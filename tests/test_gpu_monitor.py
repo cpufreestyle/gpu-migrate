@@ -9557,6 +9557,55 @@ class TrayPanelStatusFloor(unittest.TestCase):
         for text in ("1040x700+10+10", "1200x900+0+0"):
             self.assertEqual(gt._onscreen_geometry(text, 1512, 949), text)
 
+    def test_the_card_label_gap_matches_the_web_panel(self):
+        u"""汇总卡里标签与数值之间的间距, 托盘和 Web 得是同一个数。
+
+        托盘原来是 pady=(5,0)/(0,5): 标签底边直接贴上数值顶边, 间隙
+        0px, 而 Web 面板 .card b 写着 margin-top:2px —— 六张卡每张都少
+        这两像素, 攒成一张卡就是标签糊在数字上。卡片总高没变(顶部 5 +
+        底部 3 合计还是 8), 纵向预算不动。
+        """
+        import gpu_tray as gt
+        import gpu_monitor as gm
+        src = io.open(gpu_tray.__file__, encoding="utf-8").read()
+        self.assertIn("_CARD_LABEL_GAP = 2", src,
+                      "卡片标签间距不再是对齐 Web 的那个数了")
+        self.assertIn("pady=(5, _CARD_LABEL_GAP)", src,
+                      "卡片标签没用 _CARD_LABEL_GAP: 间距又退化成 0")
+        # Web 侧 .card b{margin-top:2px}, 抠出来和托盘比
+        hit = re.search(r"\.card b\{[^}]*margin-top:(\d+)px",
+                        gm._PANEL_STYLE)
+        self.assertIsNotNone(hit, "Web 面板 .card b 的 margin-top 不见了")
+        self.assertEqual(int(hit.group(1)), gt._CARD_LABEL_GAP,
+                         "托盘 %dpx / Web %spx: 汇总卡两种行距"
+                         % (gt._CARD_LABEL_GAP, hit.group(1)))
+
+
+    def test_the_status_line_gap_matches_the_web_panel(self):
+        u"""底部两行灰字的行间距, 托盘和 Web 得是同一个数。
+
+        托盘原来是 pady=(0,1): 两行状态文字之间只空 1px, 几乎贴在一起,
+        而 Web 面板 #hidden / #counters 写的是 margin:2px 0 0。
+        改间距会多吃 1px, _STATUS_H 同步 51 -> 52, 不然第二行 Label
+        会被压掉 1px。
+        """
+        import gpu_tray as gt
+        import gpu_monitor as gm
+        src = io.open(gpu_tray.__file__, encoding="utf-8").read()
+        self.assertIn("_STATUS_LINE_GAP = 2", src,
+                      "底部行间距不再是对齐 Web 的那个数了")
+        self.assertIn("pady=(0, _STATUS_LINE_GAP)", src,
+                      "第一行没用 _STATUS_LINE_GAP: 行距又退化成 1px")
+        # Web 侧 #hidden{...margin:2px 0 0} 与 #counters{...margin:2px 0 0}
+        for sel in ("#hidden{", "#counters{"):
+            hit = re.search(re.escape(sel) + r"[^}]*margin:(\d+)px 0 0",
+                            gm._PANEL_STYLE)
+            self.assertIsNotNone(hit, "Web 面板 %s 的 margin 不见了" % sel)
+            self.assertEqual(int(hit.group(1)), gt._STATUS_LINE_GAP,
+                             "%s 的 margin 与托盘 %dpx 对不上"
+                             % (sel, gt._STATUS_LINE_GAP))
+
+
     def test_the_spark_gap_matches_the_web_panel(self):
         u"""趋势图与下方区块的间距, 三面得是同一个数。
 
