@@ -432,6 +432,36 @@ def _heat_color(cls):
 
 
 _TIP_DELAY_MS = 500        # 停多久才弹: 一扫而过不该弹泡
+_TEXT_PX_FONT = [None]
+
+
+def _text_px(text):
+    u"""字符串在面板正文字号下占多少像素。
+
+    底部状态行要知道自己放不放得下, 而 Tk 的 Label 只会闷头画到被
+    裁为止 —— 问不出"你需要多宽"以外的信息。拿 Font.measure 量一遍
+    比事后再看截没截靠谱。
+
+    Font 对象缓存起来: 这一行每秒刷一次, 而 ttk 的字体在主题切换时
+    会整个换掉(_rebuild_fonts 里 theme_use), 所以缓存的是"当前字体
+    对应的那个 Font", 换主题时靠 _FONT_UI 这个 spec 变了来自动作废。
+    量不了(没有 Tk 实例: 导入期 / 单测替身环境)时返回 0, 让调用方走
+    "不截断"那条路 —— 宁可少截一次, 也不能抛出来把刷新链打断。
+    """
+    global _TEXT_PX_FONT
+    font = _TEXT_PX_FONT[0]
+    if font is None:
+        try:
+            font = tkfont.Font(font=_FONT_UI)
+        except Exception:
+            return 0
+        _TEXT_PX_FONT[0] = font
+    try:
+        return font.measure(text)
+    except Exception:
+        return 0
+
+
 _TIP_WRAP_PX = 320          # 弹泡内容折行宽度, 比面板还宽就没意义了
 
 
@@ -592,6 +622,9 @@ def _rebuild_fonts():
         have = {f.lower() for f in tkfont.families()}
     except Exception:
         return
+    # 字体换了, _text_px 缓存的那个 Font 也跟着作废: 不然底部状态行
+    # 拿旧字体的度量去截新字体的文本, 截多截少都是错的。
+    _TEXT_PX_FONT[0] = None
     fam = next((c for c in ("Segoe UI Variable Text", "Segoe UI", "Tahoma")
                 if c.lower() in have), None)
     if fam and fam != _FONT_UI[0]:
@@ -1226,6 +1259,48 @@ class TrayApp:
         if icon_num != getattr(self, "_icon_num_shown", None):
             self._icon_num_shown = icon_num
             self.icon.icon = _make_icon_image(icon_num)
+
+    @staticmethod
+    def _status_line(core, keys, widget):
+        u"""底部状态行: 放不下就二级截断, 不许被右沿切成半句话。
+
+        这一行同时扛着显卡名、刷新节奏和一串快捷键, 而 Label 是
+        fill=x 的: 没有 anchor 之外的任何截断机制, 超宽就是直接从
+        右边切掉。实测两块真卡的名字加满快捷键要 728px, 而表格 8 列
+        默认宽合计 722px —— 窗口一拖窄, "Del 永不迁移 / 筛选 右键同
+        菜单"这半句就没了, 而那正是告诉键盘/右键用户入口在哪的文字。
+
+        二级截断的顺序按信息价值排: 先整段丢掉快捷键(显卡名和刷新
+        节奏说明"这是什么"), 还不够才二分砍核心串并补省略号。二分
+        而不是逐字符退: 这一行每秒刷一次, O(n^2) 的逐字量宽度在长
+        名字上会白烧 CPU。
+        """
+        # winfo_width() 在替身控件上回来的是 MagicMock 而不是 int:
+        # 拿它减 16 得到一个 MagicMock, 再拿 MagicMock 和 0 比较当场
+        # TypeError。所以先问是不是 int, 不是就当成量不到 —— 量不到时
+        # 原样返回, 至少快捷键那半句还在(老行为)。
+        try:
+            width = widget.winfo_width()
+        except Exception:
+            width = 0
+        if not isinstance(width, int) or isinstance(width, bool):
+            return core + keys
+        avail = width - 16          # padx=8 两侧
+        if avail <= 0:
+            return core + keys
+        if _text_px(core + keys) <= avail:
+            return core + keys
+        if _text_px(core) <= avail:
+            return core
+        # 二分: 找最长的 "前缀 + 省略号" 仍放得下的那个前缀
+        lo, hi = 0, len(core)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if _text_px(core[:mid] + u"…") <= avail:
+                lo = mid
+            else:
+                hi = mid - 1
+        return (core[:lo] + u"…") if lo else u"…"
 
     def _gpu_name(self, luid):
         with self.lock:
@@ -2222,9 +2297,10 @@ class TrayApp:
             # 不会再动: 那时候写"刷新: 1 秒"是在承诺一件不会再发生的事
             beat = ("监控已停止(见托盘目录 tray_error.log)"
                     if self.monitor_dead else "刷新: 1 秒")
-            tip.config(text=f"核显: {ig_luids}    独显: {dg_luids}"
-                            f"    {beat}    ↑↓ 选择  回车详情  "
-                            f"Del 永不迁移  / 筛选  右键同菜单")
+            tip.config(text=self._status_line(
+                f"核显: {ig_luids}    独显: {dg_luids}    {beat}",
+                "    ↑↓ 选择  回车详情  Del 永不迁移  / 筛选  右键同菜单",
+                tip))
         # 会话计数单独一行, 不并进上面那行: 显卡名本来就长, 再摞三个计数
         # 会超出窗口宽度, 被右沿切掉等于什么都没说。这一行不放在上面的
         # if snap 里 —— 一份都还没采到时更要说明白是"还没开始", 而不是

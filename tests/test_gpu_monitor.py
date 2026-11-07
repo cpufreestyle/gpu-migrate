@@ -5389,6 +5389,96 @@ class TrayPanelKeyboardNav(unittest.TestCase):
         self.assertTrue(any("按 s" in t for t in tips),
                         f"排序快捷键没被交代: {tips}")
 
+    def test_the_status_line_never_gets_clipped_at_the_right_edge(self):
+        u"""底部状态行放不下就截断, 不许被右沿切成半句话。
+
+        这一行同时扛着显卡名、刷新节奏和一串快捷键, 而 Label 是
+        fill=x 的: 除了 anchor 之外没有任何截断机制, 超宽就是从右边
+        直接切掉。实测两块真卡的名字加满快捷键要 728px, 而表格 8 列
+        默认宽合计 722px —— 窗口一拖窄, "Del 永不迁移 / 筛选 右键同
+        菜单"这半句就没了, 而那正是告诉键盘/右键用户入口在哪的文字。
+
+        量不到宽度(替身控件的 winfo_width() 回来的是 MagicMock 而不是
+        int)时原样返回: 老行为至少快捷键还在, 总比当场 TypeError 把
+        每秒一次的刷新链打断好。
+        """
+        # _text_px 要量字体宽度, 没有 Tk 根窗口时它返回 0 —— 那样这条
+        # 测试量出来的"放得下的宽度"全是 16, 断言就空了。 setUp 把
+        # gpu_tray.tk 换成了替身, 所以这里自己建一个真 root, 并且
+        # tearDown 里已经会还原模块属性, 不用担心污染。
+        import tkinter as _tk
+        root = _tk.Tk()
+        try:
+            gpu_tray._rebuild_fonts()
+        except Exception:
+            pass
+        try:
+            app = self.app
+            core = "核显: Intel(R) Arc(TM) B580 Graphics    独显: RTX 4070"
+            keys = "    ↑↓ 选择  回车详情  Del 永不迁移  / 筛选  右键同菜单"
+
+            class _W(object):
+                def __init__(self, w):
+                    self._w = w
+                def winfo_width(self):
+                    return self._w
+
+            # 量不到宽度: 原样返回, 快捷键那半句必须还在
+            got = app._status_line(core, keys, _W(None))
+            self.assertEqual(got, core + keys,
+                             "量不到宽度时把快捷键吞了")
+            self.assertIn("回车", got)
+
+            # 量得到且放得下: 一个字符都不许动
+            wide = gpu_tray._text_px(core + keys) + 16 + 40
+            self.assertEqual(app._status_line(core, keys, _W(wide)),
+                             core + keys, "放得下还被截断了")
+
+            # 放不下但核心串还放得下: 整段丢快捷键, 不留省略号
+            mid = (gpu_tray._text_px(core) + 16
+                   + gpu_tray._text_px(core + keys) + 16) // 2
+            self.assertEqual(app._status_line(core, keys, _W(mid)), core,
+                             "核心串放得下时不该动它")
+
+            # 核心串也放不下: 截断加省略号, 且必须真的放得下
+            core_px = gpu_tray._text_px(core) + 16
+            for narrow in (400, 300, 200, 150, 80):
+                out = app._status_line(core, keys, _W(narrow))
+                self.assertLessEqual(gpu_tray._text_px(out) + 16, narrow,
+                                     "%dpx 放不下 %r" % (narrow, out))
+                if narrow >= core_px:
+                    # 核心串还放得下: 原样给, 不该出现省略号
+                    self.assertEqual(out, core,
+                                    "%dpx 放得下核心串却动了它" % narrow)
+                else:
+                    self.assertTrue(out.endswith("…"),
+                                    "截断了却没标省略号: %r" % out)
+        finally:
+            root.destroy()
+
+
+    def test_the_status_line_survives_a_control_with_no_width(self):
+        u"""宽度不是 int 的控件不许把刷新链打断。
+
+        winfo_width() 在替身控件上回来的是 MagicMock: 拿它减 16 得到
+        一个 MagicMock, 再拿它和 0 比较当场 TypeError —— 而这个方法是
+        每秒一次的刷新链在调的, 一抛就少刷一帧。
+        """
+        app = self.app
+        core = "核显: A    独显: B    刷新: 1 秒"
+        keys = "    回车详情"
+        class _W(object):
+            def __init__(self, w):
+                self._w = w
+            def winfo_width(self):
+                return self._w
+
+        for junk in (None, "wide", object(), 3.5, True):
+            self.assertEqual(app._status_line(core, keys, _W(junk)),
+                             core + keys,
+                             "宽度是 %r 时不该截断, 更不该抛" % (junk,))
+
+
     def test_the_status_line_announces_the_keyboard_shortcuts(self):
         u"""快捷键不说出来就等于没有。
 
