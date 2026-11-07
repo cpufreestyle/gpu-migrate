@@ -5793,3 +5793,58 @@ panel_conn_check.js。三个文件各写了一套脚手架, 而那七个坑的�
 2. 10 条新提交未 push, 与 origin/main 分叉。
 
 
+
+## 136. 续一百二十七：构建验证不再"静默十几秒"（可观测性）
+
+### 问题
+
+§135 把 `tools/verify_build.py` 端到端跑通了, 但那次实测暴露了一个
+观测性缺陷: `build()` 用 `capture_output=True` 把 PyInstaller 的输出全量
+吞掉, 构建那十几秒里屏幕上一点动静都没有, 日志文件也一直是 0 字节
+(Python 的块缓冲)。我当时据此误判过一次"卡死了", 而进程的 CPU 时间明明
+在涨 —— 也就是说, 慢和死在屏幕上看不出区别。
+
+### 改动
+
+`tools/verify_build.py:build()` 重写:
+
+1. 去掉 `run()` 助手, 直接 `subprocess.run` 并把 stdout/stderr 重定向到
+   `.tmptest/buildverify/build-<spec>.log` —— 边跑边落盘, 不是全量吞。
+2. 子进程加 `-X -u` 无缓冲, 日志能实时看见。
+3. 构建前先 `print('... 正在构建(日志 <路径>)...', flush=True)`, 二十秒内
+   就能确认在动, 且失败时知道去哪看完整日志。
+4. 成功返回 `(True, '')`, 失败返回日志后 8 行 —— 之前是取最后 6 行,
+   失败路径原本就只能拿到被截断的尾串。
+
+`main()` 的判定逻辑没动, `SPECS` 清单也没动。
+
+### 实测
+
+`C:/Python314/python.exe -X -u tools/verify_build.py`, 输出:
+
+    GPUMigrate.spec           正在构建(日志 ...build-GPUMigrate.spec.log)...
+    GPUMigrate.spec            build: OK
+                               smoke: OK  (退出码 0, 无打包类错误)
+    GPUMigrate-onedir.spec    正在构建(日志 ...build-GPUMigrate-onedir.spec.log)...
+    GPUMigrate-onedir.spec     build: OK
+                               smoke: OK  (退出码 0, 无打包类错误)
+
+    两个 spec 都构建成功, 且打出来的 exe 能跑 --once
+
+退出码 0。进度行确实在 20 秒内出现, 与 §135 的结果一致。
+
+### 测试
+
+`BuildVerifierScript` 的 5 条测试改后重跑通过 —— 被测的字符串锚点
+(`sys.executable`、`SPECS = (`)都还在, 这次改的是返回值语义和实现, 不涉及
+它们。全套 617 条两个 runner 均全绿。
+
+### 清理
+
+`.tmptest/buildverify`、`verify_out.txt`、`verify_err.txt`、
+`doverify2.py` 已删; 仓库根无 build/ 或 dist/ 残留。
+
+### 用户决策待办
+
+1. 现网 exe 仍是旧构建。要同步需 build → sync → 重启托盘(会打断当前实例)。
+2. 13 条新提交未 push, 与 origin/main 分叉。
