@@ -483,6 +483,7 @@ def _text_px(text):
 
 
 _TIP_WRAP_PX = 320          # 弹泡内容折行宽度, 比面板还宽就没意义了
+_DETAIL_WRAP_PX = 345        # 详情窗右列折行宽度, 见 _detail_build 注释
 
 
 def _bind_tip(widget, text):
@@ -2161,7 +2162,12 @@ class TrayApp:
             for i, (k, v) in enumerate(lines):
                 tk.Label(frm, text=k + ":", anchor="ne", fg=_MUTED).grid(
                     row=i, column=0, sticky="ne", pady=2)
-                lb = tk.Label(frm, text=v, anchor="w", wraplength=380,
+                # wraplength 不能比右列真能用的宽度大: 520 宽窗减掉
+                # padx 14x2 与键名列 141 之后只剩 351, 写 380 的话
+                # Tk 直接把这一行画到窗户外(它只保证折到 wraplength,
+                # 不保证折得进窗)。345 留 6px 余量给字体差异。
+                lb = tk.Label(frm, text=v, anchor="w",
+                              wraplength=_DETAIL_WRAP_PX,
                               justify="left")
                 lb.grid(row=i, column=1, sticky="w", pady=2)
                 if k == "GPU 首选项":

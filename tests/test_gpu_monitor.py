@@ -8210,6 +8210,41 @@ class DetailPrefRefresh(unittest.TestCase):
         self.assertIn("pref_label = lb", body)
 
 
+    def test_the_detail_wrap_fits_the_column_it_actually_gets(self):
+        u"""折行宽度必须窄于右列真能用的宽度。
+
+        520 宽的窗减掉 padx 14x2、再减掉最宽那个键名列（"GPU% /
+        核显% / 独显%" 实测 141px）之后，右列只剩 351px。wraplength
+        写成 380 时 Tk 不会替你收进窗内 —— 无空格的长路径（盘符目录
+        一路没空格的安装路径很常见）会整行画到窗户外，右沿被裁。
+        """
+        import tkinter as _tk
+        root = _tk.Tk()
+        root.geometry("520x300")   # 与详情窗同一个尺寸
+        try:
+            frm = _tk.Frame(root)
+            frm.pack(fill="both", expand=True, padx=14, pady=10)
+            keys = ["进程名:", "PID:", "完整路径:", "启动时间:",
+                    "当前所在:", "GPU 首选项:",
+                    "GPU% / 核显% / 独显%:", "专用/共享内存:", "注意:"]
+            for i, k in enumerate(keys):
+                _tk.Label(frm, text=k, anchor="ne").grid(
+                    row=i, column=0, sticky="ne", pady=2)
+                _tk.Label(frm, text="x", anchor="w").grid(
+                    row=i, column=1, sticky="w", pady=2)
+            frm.columnconfigure(1, weight=1)
+            root.update()
+            col0 = max(_tk.Label(frm, text=k).winfo_reqwidth()
+                       for k in keys)
+            avail = root.winfo_width() - 28 - col0
+        finally:
+            root.destroy()
+        self.assertGreater(avail, 0, "详情窗右列居然没有宽度")
+        self.assertLessEqual(
+            self.tray._DETAIL_WRAP_PX, avail,
+            f"wraplength {self.tray._DETAIL_WRAP_PX} 比右列可用宽度"
+            f" {avail} 还大，长路径会画到窗户外")
+
 class TrayIconRedrawGuard(unittest.TestCase):
     """占用数字没变就别重设托盘图标: 每次设都重建(见 _refresh_title 的注释)。
 
