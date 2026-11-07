@@ -3365,7 +3365,7 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
     这里按同一个办法收口: 窗高提到 440。
     """
 
-    def _build(self, geom, pad=1, texth=3):
+    def _build(self, geom, pad=2, texth=3):
         import tkinter as _tk
         root = _tk.Tk()
         root.geometry(geom)
@@ -3400,23 +3400,37 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
         root.update()
         return root, grid, btn
 
-    def test_the_save_button_is_not_squeezed_flat(self):
-        u"""满高度才算数: 18px 那种是被压过的, 不是正常按钮。"""
+    def _real_params(self):
+        u"""几何与间距参数全部从源码抓, 不许在这里写死。
+
+        写死过一次: 上一轮把 pady 从 1 改回 2, 测试替身还按
+        pady=1 建窗, 于是测的是改之前的布局 —— 绿灯常亮,
+        什么也没守。
+        """
         import gpu_tray
         body = inspect.getsource(gpu_tray.TrayApp._settings_build)
         geom = re.search(r'root\.geometry\("(\d+x\d+)"\)', body)
         self.assertIsNotNone(geom, "设置窗没写 geometry, 量不了")
-        root, grid, btn = self._build(geom.group(1))
+        pad = re.search(r'sticky="w", pady=(\d+)\)', body)
+        self.assertIsNotNone(pad, "设置窗的行间距不是字面量, 量不了")
+        th = re.search(r'tk\.Text\(grid, width=30, height=(\d+)\)', body)
+        self.assertIsNotNone(th, "名单 Text 的高度不是字面量, 量不了")
+        return geom.group(1), int(pad.group(1)), int(th.group(1))
+
+    def test_the_save_button_is_not_squeezed_flat(self):
+        u"""满高度才算数: 18px 那种是被压过的, 不是正常按钮。"""
+        geom, pad, texth = self._real_params()
+        root, grid, btn = self._build(geom, pad=pad, texth=texth)
         try:
             want = btn.winfo_reqheight()
             got = btn.winfo_height()
             self.assertEqual(
                 got, want,
                 f"保存键只要 {got}px(要 {want}px): 设置窗高度 "
-                f"{geom.group(1)} 装不下内容, pack 把它压平了")
+                f"{geom} 装不下内容, pack 把它压平了")
             self.assertLess(
                 grid.winfo_reqheight(),
-                int(geom.group(1).split("x")[1]) - 32 - want - 16,
+                int(geom.split("x")[1]) - 32 - want - 16,
                 "grid 请求高超过窗子给它的预算, 按钮迟早被压")
         finally:
             root.destroy()
