@@ -4,11 +4,11 @@
 
 ## 0. 现状快照（2026-10-03 第三轮重写；下面 §1–§7 是**第一轮**的原样记录，只作历史）
 
-- 分支 `main`。**已 push**：§166 轮推 54 条、§167 轮（第二写者）又推 2 条，现共 57 条（`3bf1c4a..02caf12`）在 `origin/main`，本地与远端一致、0 条未 push；release `v1.0.0` 已建，tag 仍指向 `fdea9ae`；§168 已把现网 exe 换成含 §155-§167 全部间距修复的新构建（活页阈值线实测 `<line class=thr x1=0 y1=10.7 x2=300 y2=10.7 />`）。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准。
-- 体量（§166 轮）：`gpu_monitor.py` 3365 行、`gpu_tray.py` 2836 行、`tests/test_gpu_monitor.py` 12789 行、README 405 行、HANDOFF 8023 行（含 §166）。
-- 测试：**678 条**，四种跑法 §166 轮实测 —— pytest 正序 `678 collected`（全量挂 2 条已知漂白，单独复跑全过，根因见 §166）、`python -X utf8 tests/test_gpu_monitor.py` `Ran 678 tests ... OK`（40.2s）、`python -X utf8 -m unittest discover -s tests` `Ran 678`（45.7s，2 个 error 同为 `RegisterClassEx` 已知漂白）、整套倒序（含守卫自身）随上述各跑覆盖。倒序那条是仓库里的正式用例 `SuiteRunsInReverseOrder`（子进程按类名自排除防套娃），不再靠人记得手工跑。**跑完整套后 7 个数据/日志文件逐字节不变**：`config.json` / `panel_ui.json` / `report.csv` / `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` / `gpu_monitor_error.log` —— 这句在 §111 时是假的，`tray_debug.log` 一直在被测试写穿，本轮才修真，见 §113。长行基线 §166 轮实测 `gpu_monitor.py 16 / gpu_tray.py 6 / tests 10`（后两个数比 §165 记录的 5/5 大，增量来自本轮并入的第二写者内容，见 §166 踩过的坑；约定是别新增）。
-- 本文档 166 节、8023 行，最新节号 §166，且**节号有倒挂**（§108 排在 §105 前面，尾部 §92 在 §87 前面）。查某件事按节号搜（`grep -n "^## 105\."`），别按物理位置读；新轮次请续号并顺手确认没有比它更大的号。
-- 现网状态：`GPUMigrate.exe --ensure` 父子对存活，看门狗 `GPUMigrateWatchdog` 每 2 分钟一次，面板 `127.0.0.1:8787` 正常。**exe 仍是 9 月的旧构建**：§109 的崩溃日志滚动、§110 的温度保住、本轮的 PDH 展开上界都只在源码里，生效要 build→sync→重启托盘（会打断当前实例，等用户点头）。`gpu_monitor_crash.log` 的性质见 §109 —— 它是原生故障现场记录，**不是**死亡证明，§105 里"0 字节 = 没崩"和"165 条 = 一直崩"两种读法都错。
+- 分支 `main`。**已 push**：§166 轮推 54 条（连同其 docs 提交 `66f04b1` 共 55 条）、§167 轮（第二写者）推 2 条，`3bf1c4a..02caf12` 共 57 条在 `origin/main`；§168 轮（第二写者）又推 1 条（`2d51419`）；§169 轮落 1 条 fix（`90e5084`）尚未 push，现共 59 条（`3bf1c4a..90e5084`）、未 push 1（本轮 docs 落地后为 2，push 后 `origin/main` 60 条、0 未 push）；release `v1.0.0` 已建，tag 仍指向 `fdea9ae`；§168 已把现网 exe 换成含 §155-§167 全部间距修复的新构建（活页阈值线实测 `<line class=thr x1=0 y1=10.7 x2=300 y2=10.7 />`）。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准。
+- 体量（§169 轮）：`gpu_monitor.py` 3365 行、`gpu_tray.py` 2862 行、`tests/test_gpu_monitor.py` 12976 行、README 424 行、HANDOFF 8342 行（含 §169）。
+- 测试：**679 条**。§166 轮四种跑法实测（pytest 正序 `678 collected`，全量挂 2 条已知漂白、单独复跑全过，根因见 §166；`python -X utf8 tests/test_gpu_monitor.py` `Ran 678 tests ... OK`（40.2s）、`python -X utf8 -m unittest discover -s tests` `Ran 678`（45.7s，2 个 error 同为 `RegisterClassEx` 已知漂白）；整套倒序（含守卫自身）随上述各跑覆盖，倒序那条是仓库里的正式用例 `SuiteRunsInReverseOrder`（子进程按类名自排除防套娃），不再靠人记得手工跑）。§169 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（30.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（29.4s）。**跑完整套后 7 个数据/日志文件逐字节不变**：`config.json` / `panel_ui.json` / `report.csv` / `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` / `gpu_monitor_error.log` —— 这句在 §111 时是假的，`tray_debug.log` 一直在被测试写穿，§113 才修真，§169 轮复跑实测仍旧不变（注意 `history.jsonl` 不在这 7 个里：活实例每 10s 往里追一行，拿它当"没变"的判据永远不成立，README 里那条旧声称只在没有活实例跑着的时候成立）。长行基线 §166 轮实测 `gpu_monitor.py 16 / gpu_tray.py 6 / tests 10`，§169 轮复测未变（后两个数比 §165 记录的 5/5 大，增量来自 §166 并入的第二写者内容，见 §166 踩过的坑；约定是别新增）。
+- 本文档 169 节、8342 行，最新节号 §169，且**节号有倒挂**（§108 排在 §105 前面，尾部 §92 在 §87 前面）。查某件事按节号搜（`grep -n "^## 105\."`），别按物理位置读；新轮次请续号并顺手确认没有比它更大的号。
+- 现网状态：`GPUMigrate.exe --ensure` 父子对存活（§168 换上去的新实例，PID 21856/32336，11-08 23:54 起，§169 轮实测仍在跑），看门狗 `GPUMigrateWatchdog` 每 2 分钟一次，面板 `127.0.0.1:8787` 正常（§169 轮实测返回 200）。**现网 exe 是 §168 构建**，含 §155-§167 全部间距修复（§168 字节码级验过包），§109 的崩溃日志滚动、§110 的温度保住、PDH 展开上界这些老修复同样已在其中；**§169 的间距修复不在那个 exe 里**，生效要 build→sync→重启托盘（会打断当前实例，等用户点头）。`gpu_monitor_crash.log` 的性质见 §109 —— 它是原生故障现场记录，**不是**死亡证明，§105 里"0 字节 = 没崩"和"165 条 = 一直崩"两种读法都错。
 
 ## 0a. 第一轮原文（历史，勿当作现状）
 
@@ -8218,3 +8218,125 @@ build -> sync -> 重启托盘(会打断当前实例, 重启前问用户)。本�
    不在那个 tag 里 —— 现网跑的已是含 §167 的构建, 要不要补一个 v1.0.1
    让 tag 跟上现网, 是产品决定。v1.0.0 的发布说明("间距统一, 阈值线
    修复")本身没写错, 只是慢一站。
+
+## 169. 续一百六十八：两个对话框的表单框 expand=True 把「内容 -> 按钮行」撑成大洞, 视觉间隙 44px vs 22px(布局)
+
+### 缺陷
+
+§167 的候选 B 记的是「详情窗与设置窗的『内容底 -> 按钮行顶』14 vs 16, 判定为设计决定」。
+那个数量的是**框 padding**(frm 的 pady=_DIALOG_PAD_Y 8 + 按钮行的 pady 6 或 8), 不是
+**视觉间隙**。本轮按真渲染窗口量后者, 差得远:
+
+- 设置窗 460x520: toplevel reqheight 492, 窗高保底松弛 28px, 表单框 reqh 432 -> 分配高 460,
+  表单内容底(窗内 y) 440, 按钮行顶 484, **视觉间隙 44px**, 按钮行下留白 8。
+- 详情窗 520x320: toplevel reqheight 312, 松弛 8px, 表单框 reqh 256 -> 分配高 264,
+  内容底 264, 按钮行顶 286, **视觉间隙 22px**, 按钮行下留白 6。
+
+根因两个窗同一套: grid / frm 都写 pack(fill="both", expand=True, padx=_DIALOG_PAD_X,
+pady=_DIALOG_PAD_Y)。expand=True 让表单框吞掉窗高保底的松弛, 而 grid 的行没有 weight,
+松弛全落在**表单框底部** —— 正好落在「最后一行 -> 按钮行」那一段里。松弛量两窗不同
+(28 vs 8), 所以视觉间隙差 22px。附带: 详情窗上下边距 8/6 不对称(设置窗 8/8 对称)。
+
+### 修法
+
+1. 两个表单框去掉 expand=True, 保留 fill="both"。松弛改落按钮下方(设置窗 36px, 详情窗
+   12px), 视觉间隙回到 16px = _DIALOG_PAD_Y + 按钮行 pady, 两窗同一个数。
+2. _DETAIL_BTN_PAD_Y 6 -> 8(必须等于 _DIALOG_PAD_Y): 否则详情窗这段比设置窗窄 2px, 且
+   详情窗自己的上下边距是 8/6 不对称。窗高账 312 -> 316, 仍装得进 _DETAIL_MIN_H=320。
+
+宽度一个像素都没动, 这点单独验过: Tk 的 fill 只看分配区、与 reqwidth 无关 —— 空框架
+pack(fill="both") 不写 expand 实测也是满宽(400 宽窗 + padx 20 -> 360)。所以设置窗的表单框
+改前改后都是 436px、Entry 都是 64px, 输入框没有被收窄。
+
+### 改动
+
+- gpu_tray.py
+  - _settings_build 的 grid.pack(...) 去掉 expand=True(:1356), 补注释说明松弛落在哪。
+  - _detail_build 的 frm.pack(...) 去掉 expand=True(:2496), 同上。
+  - _DETAIL_BTN_PAD_Y 6 -> 8(:667), 注释写清为什么必须等于 _DIALOG_PAD_Y。
+  - 顺手修两处假注释: 详情窗纵向预算原文写「8 行 x 32 + **padx** 10x2 = 276」—— 那是
+    pady, 且 10 是 §164 之前的旧 _DIALOG_PAD_Y; 现在是 pady _DIALOG_PAD_Yx2 = 272,
+    按钮行 _DETAIL_BTN_PAD_Yx2 + 28 = 44, 合计 316。设置窗纵向预算注释补一句: 那 28px
+    余量落在保存键下方, 不是按钮上方的洞。
+- tests/test_gpu_monitor.py
+  - 新增 TrayPanelStatusFloor.test_neither_dialog_form_frame_eats_the_button_gap(:10345)。
+  - 三处替身镜像同步去掉 expand=True: SettingsWindowFitsItsOwnFrame._build(:3387)、
+    折行宽度那条(:8528)、外层内边距那条(:10323)。
+
+### 守卫怎么写的
+
+三层, 缺一层就有漏网:
+
+1. **静态**(防「加回去」): 用括号配对取出 grid = tk.Frame(root) / frm = tk.Frame(root)
+   之后那个 pack(...) 调用的全文, 断言形状是 .pack(fill="both", 加那两个常量, 且**不出现
+   expand**。先滤掉注释行 —— 源码里 pack 之前正好有一段说明为什么不写 expand, 不滤掉取的
+   是那段注释(第一版就踩了这个, 报的是「表单框不是 pack(fill=both...): '# 不写 expand...'」)。
+2. **几何**(防「只改替身」和「拿宽度换间隙」): 460x520 真渲染一个同款窗, 断言框架**贴身**
+   (winfo_height() == winfo_reqheight())、**满宽**(窗宽减两侧内边距)、
+   **间隙 == 2*_DIALOG_PAD_Y**。expand 一加回来第一条就红(分配高 476 vs 请求 132)。
+3. **常量等式**: _DETAIL_BTN_PAD_Y == _DIALOG_PAD_Y。这两个数不相等, 两个对话框的
+   「内容 -> 按钮」间隙就差一个数, 而它们在屏幕上是同一种东西。
+
+既有断言全部自动跟随(用的都是常量本身): budget8 = 8*32 + 2*8 + 2*8 + 28 = 316 <= 320、
+budget9 = 256 + 44 + 16 + 16 + 28 = 360 > 320, 两条都还成立;
+test_the_old_geometry_squeezed_the_button_flat 也仍成立 —— 总量超限时 pack 压扁的是
+**后声明的那个控件**, 与有没有 expand 无关(单独拿 200x100 + 80px 框 + 40px 按钮验过:
+expand 开/关都是按钮被压到 20px)。
+
+### 验证结果
+
+- 探针(独立进程, 真渲染两个对话框): 改前 44/22, 改后 16/16; 表单框宽 436/496 不变,
+  内容底 440/264 不变, 窗高 520/320 不变, 详情窗 reqheight 312 -> 316。
+- gone 分支(9 行): reqheight 364, 三个按钮仍 28px 满血, 视觉间隙 16。
+- 全量: python -X utf8 tests/test_gpu_monitor.py -> Ran 679 tests ... OK(30.9s);
+  python -X utf8 -m unittest discover -s tests -> Ran 679 tests ... OK(29.7s)。
+  679 = 原 678 + 新守卫 1。
+
+### 变异验证(7 条, 全红)
+
+脚本 C:\Users\qm081\AppData\Local\Temp\gpumig_p168\mutate.py, 每条先备份、改完还原,
+结束报 restore byte-identical: True。
+
+- M1 设置窗表单框加回 expand=True -> 新守卫(静态 + 几何)。
+- M2 详情窗表单框加回 expand=True -> 新守卫(静态 + 几何)。
+- M3 _DETAIL_BTN_PAD_Y 退回 6 -> 新守卫(常量等式)。
+- M4 保存键 pady=_DIALOG_PAD_Y 退回裸 4 -> test_both_dialogs_share_one_outer_pad。
+- M5 按钮行 pady=_DETAIL_BTN_PAD_Y 退回裸 4 -> test_the_detail_button_gaps_are_all_one_number。
+- M6 只在守卫替身里加回 expand=True -> 新守卫(几何: 框架不贴身)。
+- M7 详情窗 fill="both" 改成 fill="x" -> 新守卫(静态形状)。
+
+M4/M5 说明新守卫**不**负责按钮行 pady 的裸数字(既有守卫负责), 分工清楚。
+
+### 踩过的坑
+
+- **HEAD 已经不是交接里记的 02caf12**: 动手前 git rev-parse HEAD 是 2d51419 —— 另一个写者
+  已经把 **§168** 用掉了(「把 §155-§167 同步进现网 exe」)。本轮改续 **§169**, 源码注释与
+  测试文档串里的 §168 全部重新编号(6 处)。**每轮开工先 git log --oneline -3**, 别信交接
+  快照里的 SHA。
+- **gpu_tray.py 与 tests 盘上是 CRLF**(i/lf w/crlf, core.autocrlf=true): 改它们必须
+  newline="" 读、按 \r\n 切行、按 \r\n 写回, 写完后断言
+  split("\r\n").length == split("\n").length。README / HANDOFF 是纯 LF, 另用一套。
+- **这个环境里 apply_patch 不存在**(被 PowerShell 当命令名报 ParserError)。改文件用
+  node_repl 的 fs 按行替换 + 逐条断言锚点命中一次, 比 shell heredoc 可靠;
+  node_repl 里 require 未定义, 用 await import("node:fs")。
+- python -c "..." 的双引号会被外层 PowerShell 吞掉; 而 python -c '...' 又会被 payload 里的
+  Python 单引号截断(本轮因此连废两个命令)。**长脚本一律用 node_repl 写文件、再用 python 跑文件。**
+- pwsh 里 ForEach-Object { $_.Line } 写在双层引号中, $_ 被外层 PowerShell 5.1 吞掉
+  (报「术语 '.Line' 无法识别」)。过滤输出宁可跑完再看, 或用 Select-Object -Last N。
+- 同进程里改源码再重量几何无效(模块缓存), 必须起独立 python 进程 —— 探针每次都是新进程。
+
+### 顺带发现(未改, 记档)
+
+- §167 候选 B 的原始记录「14 vs 16 是设计决定」**量的不是同一个东西**(框 padding vs 视觉间隙),
+  现已修掉; 候选 C(_DETAIL_WRAP_PX 注释里「键名列 141」是假的, 实测 132px, 余量是 19px 不是
+  注释写的 10px)仍未动。
+- 详情窗改后按钮下方留白 12px = 8(_DETAIL_BTN_PAD_Y) + 4(窗高保底松弛), 设置窗 36px =
+  8 + 28。两个窗的「按钮下留白」仍然不同, 但那是窗高保底与内容的差, 不是间隙缺陷。
+- 主面板已核过没问题: 区块间隙 4/4/4/10 全对, 顶部留白 8, 表格按设计用 expand=True 吸收
+  松弛(多显几行), 三面行距尺 _FORM_ROW_PITCH == _ROW_H == 32 早已统一。
+
+### 用户决策待办
+
+1. **是否重建产物同步现网**: §168 已把含 §155-§167 的构建换上线, 本轮的间距修复不在那个
+   exe 里。要同步需 tools/verify_build.py build -> sync -> 重启托盘(会打断实例, 需用户同意)。
+2. §167 候选 C 仍未动(见上)。
