@@ -7109,3 +7109,106 @@ Label 23 / Checkbutton 27 量的), 窗口高度与几何断言都要跟着重算
    -> 520x320、筛选栏 34 -> 28，不同步的话用户看不到这些优化。要同步需
    build -> sync -> 重启托盘(会打断实例)。
 2. 34 条新提交未 push, 与 origin/main 分叉。
+## 158. 续一百四十九：设置窗/详情窗一个 font= 都不带, 行距尺子只能取奇数 31(布局)
+
+§157 结尾记的档: 设置窗与详情窗**一个 `font=` 都没传**, 全部落在
+`TkDefaultFont` 上, 而主面板全套 `_FONT_UI`。两个窗口三种字体。本轮
+把它收掉, 顺手把 `_FORM_ROW_PITCH` 从 31 改成 32 —— 31 之所以是奇数,
+就是因为这两个窗的控件没带字体。
+
+### 为什么是缺陷
+
+不是"看着不齐"这种观感问题, 是一条**算不出来的账**:
+
+- 行距尺子 `_FORM_ROW_PITCH` 与表格行高 `_ROW_H` 差 1px。用户在三个窗
+  之间来回切, 疏密感对不上, 而代码里没有任何东西保证它们一致。
+- 这两个窗内部自己也不统一: 输入行 25px(裸 `pady=2` + Entry 21)、
+  勾选行 31px, 差 6px。
+
+### 改动
+
+- `gpu_tray.py`:
+  - `_FORM_ROW_PITCH = 31` -> `32`, 与 `_ROW_H` 相等。换上 `_FONT_UI`
+    之后控件自然高度变成 Label 22 / Entry 20 / Checkbutton 26 /
+    Button 28, 全是偶数, 32 能给每种控件都补出整数 ipady:
+    22+2*5 / 20+2*6 / 26+2*3 / 28+2*2 全都正好 32。取偶数的理由
+    (奇数高度)跟着消失。
+  - 两个窗的 13 处文本控件全部补 `font=_FONT_UI`, **含 `_ctl_h` 探针**
+    —— 探针量的是当前字体下的自然高度, 与控件本身带同一个字体, 两边
+    不一致的话算出来的 ipady 补不出目标行距。
+  - 详情窗窗高改成按内容现算, `_DETAIL_MIN_H=320` 只当下限(见下)。
+- `tests/test_gpu_monitor.py`: 见"测试"。
+
+### 详情窗窗高: 又一个"保底尺寸对不上真实请求"
+
+改完字体、行距提到 32 之后量 `gone` 分支(进程已退出, 多插一行"注意",
+折行的长路径还占两行): 9 行实测 reqheight **364**, 而窗高写死 320。
+pack 从后声明的按钮行身上扣 —— 三个按钮实测只剩 **1px** 高, 用户看得见
+字点不到键。与 §154(主面板 470)、§157(设置窗 460)是同一个坑。
+
+改成按内容现算, 但有个坑: **必须循环到量稳为止**。第一遍
+`update_idletasks()` 之后 Tk 才把折行那一行算完, `winfo_reqheight()`
+当场从 316 长到 364; 只量一遍会按旧值设窗高, 按钮照样被压平。第二遍
+之后就不再变了, 循环三次足够。常规形态 316 < 320, 一个像素都不涨。
+
+### 实测结果
+
+- 设置窗: 6 输入行 / 4 勾选行 / 2 名单行全部 32px(探针 reqheight 分别
+  22 / 20 / 26), 名单 Text 52px, 保存键 28px 满血, 窗内容 484 < 520。
+- 详情窗: 8 行全 32px, 3 个按钮 28px, reqheight 316。
+- 详情窗 `gone` 分支: 窗高 364, 按钮行仍 28px 满血, 最后一行底边 304
+  在窗内。
+
+### 测试
+
+- 全套 **664 条**(662 + 2 新), 两个 runner 均全绿。
+- `SettingsWindowFitsItsOwnFrame._build` 替身补 `font=_FONT_UI` 并**先
+  跑 `_rebuild_fonts()`**: 不装字体的话替身按 Label 23 算 ipady, 量的
+  是改之前的布局, 绿灯常亮 —— 与 §155 替身不跟着改是同一类坑。
+- `test_the_three_windows_share_one_row_pitch`: 奇数 -> 偶数; 控件高度
+  改为按 `_FONT_UI` **现量**(不再写死 23/21/27)并断言其为偶数; 表格
+  行高从"允许差 1px"改成**必须相等**。
+- 新增 `test_both_form_windows_set_their_own_font`: 括号配对抓两个窗的
+  全部 13 处构造调用, 逐个查 `font=_FONT_UI`。防回退。
+- 新增 `test_the_detail_window_grows_for_the_gone_row`: 8 行的账 316
+  装得进下限、gone 的账 354 装不进, 且源码必须按量出来的高度设
+  geometry。
+- 变异验证五条全红: 去掉保存键的 `font=` / `pitch` 改回 31 / 详情窗
+  写死 geometry / 去掉键名 Label 的 `font=` / `_DETAIL_MIN_H` 降到 300。
+
+### 踩过的坑(重要)
+
+**全套单元测试从来不建真 `Toplevel`。** 我一开始给 gone 分支写了条真
+渲染守卫(`app._detail_build(...)` + `root.update()`), 整套测试直接被
+带崩: `Tcl_AsyncDelete: async handler deleted by the wrong thread`,
+进程 abort, 连 "Ran N tests" 都打不出来。
+
+最小复现: 真 `tk.Tk()` + 一个真 `Toplevel` + `update_idletasks()`,
+后面接 `TraySingleInterpreter`(它要开线程跑 Tcl)就崩。换成纯
+Frame + Label(不建 Toplevel)怎么跑都不崩。用 `noupdate` / `nobuild` /
+`minimal` 三个变体逐一排除后确认: **建真 Toplevel 是因, 线程只是
+放大器**。注意它是确定性的, 不是偶发竞态(连跑四次全崩)。
+
+所以那条守卫改成不建真窗: 守"账算得对(8 行进得进下限、gone 进不去)
++ 代码真的按账设了窗高"。真渲染的结论由探针脚本另外给(见"实测结果")。
+
+另一个坑: `_detail_build` 收尾的 `update_idletasks()` 不能只调一遍,
+原因见上。
+
+### 顺带发现(未改, 记档)
+
+- `_FONT_NUM = ("Consolas", 12)` 只被主面板筛选 Entry 用(2 处), 本轮
+  没动 —— 它是列对齐需要的, 不是表单行。
+- 字体回退链是 `Segoe UI Variable Text` -> `Segoe UI` -> `Tahoma`
+  (`_rebuild_fonts`)。本机第一个就有。若回退到 Tahoma 给出奇数高的
+  Label, `_row_ipady` 会向下取整、行距当场差 1px ——
+  `test_the_three_windows_share_one_row_pitch` 现量控件高度并断言其为
+  偶数, 这条现在会被抓住。
+
+### 用户决策待办
+
+1. 现网 exe 仍是旧构建(10-04), 且默认窗口高度 630 -> 634、表格行高
+   28 -> 32、设置窗 460x460 -> 460x520、详情窗 520x300 -> 520x320、
+   筛选栏 34 -> 28、区块间距都看不到。不同步的话用户看不到这些优化。
+   要同步需 build -> sync -> 重启托盘(会打断实例)。
+2. 36 条新提交未 push, 与 origin/main 分叉。
