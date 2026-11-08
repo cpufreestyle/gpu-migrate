@@ -5595,21 +5595,25 @@ class TrayPanelKeyboardNav(unittest.TestCase):
             self.assertIn("回车", got)
 
             # 量得到且放得下: 一个字符都不许动
-            wide = gpu_tray._text_px(core + keys) + 16 + 40
+            wide = (gpu_tray._text_px(core + keys)
+                    + 2 * gpu_tray._PANEL_PAD + 40)
             self.assertEqual(app._status_line(core, keys, _W(wide)),
                              core + keys, "放得下还被截断了")
 
             # 放不下但核心串还放得下: 整段丢快捷键, 不留省略号
-            mid = (gpu_tray._text_px(core) + 16
-                   + gpu_tray._text_px(core + keys) + 16) // 2
+            mid = (gpu_tray._text_px(core) + 2 * gpu_tray._PANEL_PAD
+                   + gpu_tray._text_px(core + keys)
+                   + 2 * gpu_tray._PANEL_PAD) // 2
             self.assertEqual(app._status_line(core, keys, _W(mid)), core,
                              "核心串放得下时不该动它")
 
             # 核心串也放不下: 截断加省略号, 且必须真的放得下
-            core_px = gpu_tray._text_px(core) + 16
+            core_px = gpu_tray._text_px(core) + 2 * gpu_tray._PANEL_PAD
             for narrow in (400, 300, 200, 150, 80):
                 out = app._status_line(core, keys, _W(narrow))
-                self.assertLessEqual(gpu_tray._text_px(out) + 16, narrow,
+                self.assertLessEqual(
+                    gpu_tray._text_px(out) + 2 * gpu_tray._PANEL_PAD,
+                    narrow,
                                      "%dpx 放不下 %r" % (narrow, out))
                 if narrow >= core_px:
                     # 核心串还放得下: 原样给, 不该出现省略号
@@ -5625,8 +5629,8 @@ class TrayPanelKeyboardNav(unittest.TestCase):
     def test_the_status_line_survives_a_control_with_no_width(self):
         u"""宽度不是 int 的控件不许把刷新链打断。
 
-        winfo_width() 在替身控件上回来的是 MagicMock: 拿它减 16 得到
-        一个 MagicMock, 再拿它和 0 比较当场 TypeError —— 而这个方法是
+        winfo_width() 在替身控件上回来的是 MagicMock: 拿它减 2*_PANEL_PAD
+        得到一个 MagicMock, 再拿它和 0 比较当场 TypeError —— 而这个方法是
         每秒一次的刷新链在调的, 一抛就少刷一帧。
         """
         app = self.app
@@ -10030,6 +10034,59 @@ class TrayPanelStatusFloor(unittest.TestCase):
                       "会回来")
         self.assertIn("spark_box.pack(fill=\"x\", padx=_PANEL_PAD", body,
                       "趋势图没用 _PANEL_PAD")
+
+    def test_the_status_line_budget_comes_from_the_panel_pad(self):
+        u"""底部状态行的截断预算必须从 _PANEL_PAD 算, 不许是脱钩的 16。
+
+        这一行的 Label 在 _panel_build 里是 padx=_PANEL_PAD pack 的,
+        左右两边同一个数, 所以文字真正能占的宽度是
+        「实占宽度 - 2*_PANEL_PAD」。而 _status_line 原来写死
+        avail = width - 16, 只在行尾挂一句「padx=8 两侧」当说明:
+        _PANEL_PAD 哪天从 8 改成 12, 那句注释不会报错, 而账目当场说谎 ——
+        算出来的可用宽度比真实的大 8px, 于是对一段其实会被右沿切掉的文字
+        说「放得下」。用户看到的就是半句话, 而测试全是绿的。
+
+        这条两头钉: 静态钉 _status_line 里的算式, 真渲染钉 Label 实占
+        宽度与 2*_PANEL_PAD 的关系。改哪一头, 另一头都红。
+        """
+        import gpu_tray as gt
+        src = io.open(gpu_tray.__file__, encoding="utf-8").read()
+        self.assertIn("avail = width - 2 * _PANEL_PAD", src,
+                      "状态行的可用宽度又是脱钩的字面量: 它与这个 Label 的 "
+                      "padx=_PANEL_PAD 是同一个数, 写死 16 会在 _PANEL_PAD "
+                      "改动时悄悄多说 8px, 文字被右沿切成半句话")
+        body = inspect.getsource(gt.TrayApp._panel_build)
+        self.assertIn("tip.pack(fill=\"x\", padx=_PANEL_PAD", body,
+                      "状态行 Label 没有 padx=_PANEL_PAD: 上面那笔账按 "
+                      "2*_PANEL_PAD 算, 两边脱钩了")
+        # 真渲染: Label 实占宽度与窗口宽度之差必须正好是两侧 padx 之和。
+        # 四个宽度都量 —— 只量宽窗的话, 窄窗下被挤变形的那一半正好漏掉。
+        import tkinter as _tk
+        root = _tk.Tk()
+        try:
+            gt._rebuild_fonts()
+            gt._apply_fluent_theme()
+            for width in (1046, 900, 722, 650):
+                for w in root.winfo_children():
+                    w.destroy()
+                root.geometry("%dx200" % width)
+                bottom = _tk.Frame(root, bg=gt._BG, height=gt._STATUS_H)
+                bottom.pack_propagate(False)
+                bottom.pack(fill="x", padx=0, pady=(0, 0))
+                tip = _tk.Label(bottom, text="", anchor="w", fg=gt._MUTED,
+                                font=gt._FONT_UI)
+                tip.pack(fill="x", padx=gt._PANEL_PAD,
+                         pady=(0, gt._STATUS_LINE_GAP))
+                root.update()
+                slack = root.winfo_width() - tip.winfo_width()
+                self.assertEqual(
+                    slack, 2 * gt._PANEL_PAD,
+                    "窗口 %d 宽时状态行 Label 比窗口窄 %dpx, 而两侧 padx "
+                    "合计 2*_PANEL_PAD=%d: _status_line 的账就按这个差算, "
+                    "对不上就会把放不下的文字当成放得下"
+                    % (width, slack, 2 * gt._PANEL_PAD))
+        finally:
+            root.destroy()
 
     def test_the_filter_row_controls_share_one_baseline(self):
         u"""筛选栏里五个控件的底边必须对齐。

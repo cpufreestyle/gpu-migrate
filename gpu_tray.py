@@ -1516,8 +1516,8 @@ class TrayApp:
         名字上会白烧 CPU。
         """
         # winfo_width() 在替身控件上回来的是 MagicMock 而不是 int:
-        # 拿它减 16 得到一个 MagicMock, 再拿 MagicMock 和 0 比较当场
-        # TypeError。所以先问是不是 int, 不是就当成量不到 —— 量不到时
+        # 拿它减 2*_PANEL_PAD 得到一个 MagicMock, 再拿 MagicMock 和 0 比较
+        # 当场 TypeError。所以先问是不是 int, 不是就当成量不到 —— 量不到时
         # 原样返回, 至少快捷键那半句还在(老行为)。
         try:
             width = widget.winfo_width()
@@ -1525,7 +1525,13 @@ class TrayApp:
             width = 0
         if not isinstance(width, int) or isinstance(width, bool):
             return core + keys
-        avail = width - 16          # padx=8 两侧
+        # 可用宽度 = Label 实占宽度 - 它自己的 padx 两侧。这个 Label 在
+        # _panel_build 里是 padx=_PANEL_PAD pack 的(左右同一个数), 所以是
+        # 2*_PANEL_PAD。原来这里写死 16, 只在行尾挂一句"padx=8 两侧":
+        # _PANEL_PAD 一改, 注释不会报错, 而账目当场说谎 —— 算出来的可用宽度
+        # 比真实的大 8px, 文字就会被右沿切成半句话(这条用例本来要防的正是
+        # 那个)。测试按真渲染量 root 与 Label 的宽度差来钉这件事。
+        avail = width - 2 * _PANEL_PAD
         if avail <= 0:
             return core + keys
         if _text_px(core + keys) <= avail:
