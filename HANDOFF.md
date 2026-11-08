@@ -6963,4 +6963,63 @@ _HEAD_PAD_Y`。改 padding 忘了改 `_TREE_HEAD_H`、或者改了表头常量
    表格行高 28 -> 32、设置窗 460x460 -> 460x520、详情窗 520x300
    -> 520x320，不同步的话用户看不到这些优化。要同步需
    build -> sync -> 重启托盘(会打断实例)。
-2. 31 条新提交未 push, 与 origin/main 分叉。
+2. 32 条新提交未 push, 与 origin/main 分叉。
+
+
+## 156. 续一百四十七：筛选栏两个 Label 底边比按钮矮 3px, 漏量的正是它们(布局)
+
+### 现象
+
+§155 把三个窗口的行距统一成 `_FORM_ROW_PITCH` 之后, 主面板筛选栏
+(`fbar`) 看着还是歪的: 左边"筛选:"和右边"显示 N/T 行 (还有 N 行未显示)"
+两个 Label 的底边停在 25, 而 Entry 与两个按钮是 28。
+
+守卫 `test_the_filter_row_controls_share_one_baseline` 一直在跑, 也一直绿 ——
+因为它只把 `(entry, pin, srt)` 三个控件放进了 `bottoms` 集合。两个 Label
+既没有 `fill="y"` 也不带任何 padding, 量都没人量。
+
+### 为什么是缺陷
+
+这一行的行高由最高的控件(按钮 28px)定, Entry 靠 `fill="y"` 被拉齐,
+而 Label 两者都没有: pack 默认顶对齐, 它按自己请求的 22px 站到底。
+一栏里三种高度, 疏密感与刚统一好的另外两个窗口又对不上了。
+
+### 改动
+
+- `gpu_tray.py` `_panel_build`: 新增 `_fbar_ipady`, 由本行最高控件
+  (按钮 / Entry)与 Label 的自然高度差反推 —— 与设置窗/详情窗同一招
+  (`_row_ipady`), 长在控件自己身上, 不依赖邻居。两个 Label 的 `pack`
+  都带上它。实测五个控件全部 28px、底边全齐, `fbar` 自身高度从 34
+  回落到 28, 省下的 6px 归给表格。
+- `tests/test_gpu_monitor.py`:
+  - `bottoms` / `heights` 集合从三个控件扩到五个, 两个 Label 进场;
+  - 新增源码断言: 两个 Label 的 `pack` 必须带 `ipady=` 且不带 `pady=`。
+    取完整调用不能靠正则 —— `hint.pack` 跨两行, 且参数里有
+    `padx=(6, 0)` 这种一层嵌套括号, `[^)]*` 会被提前截断。用
+    `((?:[^()]|\([^()]*\))*)` 这支"括号配一层"的模式;
+  - 替身窗先跑 `_rebuild_fonts()` + `_apply_fluent_theme()`: 默认字体下
+    Label 23 / 按钮 30, 拿这组数算 `ipady` 补出来是 29px, 与真实面板
+    (28)差 1px —— 不装运行期字体的话, 这条用例守的是个假象。
+
+### 踩坑
+
+- 补丁脚本按行号替换时 off-by-one, 在 `finally` 里留了两句
+  `root.destroy()`, 报 `TclError: application has been destroyed`。
+  替换区间是**左闭右开**, 且 `lines[i-1]` 才是第 i 行。
+- `HANDOFF.md` 是 CRLF + 约 680 个裸 LF 混排, `split("\r\n")` 会漏掉
+  一半行。用 `splitlines()` 拆、再按原分隔符拼回去。
+
+### 测试
+
+- 新增一条(`test_the_filter_row_controls_share_one_baseline` 扩写),
+  全套 **660 条**(659 + 1), 两个 runner 均全绿。
+- 变异验证: 分别去掉 `_filter_hint` 与 `hint` 的 `ipady=`, 测试均红,
+  且报错信息准确指向对应控件(`'ipady=' not found in 'side="left"'`)。
+
+### 用户决策待办
+
+1. 现网 exe 仍是旧构建(10-04)，且默认窗口高度从 630 涨到 634、
+   表格行高 28 -> 32、设置窗 460x460 -> 460x520、详情窗 520x300
+   -> 520x320、筛选栏 34 -> 28，不同步的话用户看不到这些优化。要同步需
+   build -> sync -> 重启托盘(会打断实例)。
+2. 32 条新提交未 push, 与 origin/main 分叉。
