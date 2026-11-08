@@ -10594,7 +10594,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
                     for i, (lab, val, _c, _tip) in enumerate(rows):
                         cell = _tk.Frame(cards)
                         cell.pack(side="left", fill="x", expand=True,
-                                  padx=(0, 0 if i == last else 8))
+                                  padx=(0, 0 if i == last else gt._CARD_GAP))
                         inner = _tk.Label(cell, text=lab)
                         inner.pack(anchor="w", padx=gt._CARD_PAD_X,
                                    pady=(gt._CARD_PAD_Y, gt._CARD_LABEL_GAP))
@@ -10678,7 +10678,8 @@ class TrayPanelCardGeometry(unittest.TestCase):
     那个 790x503 的结果窗体, 内容区四边内边距是同一个数(7px), 没有哪
     一边是另算的。上下对称不是审美偏好, 是成熟工具的通例。
 
-    三条分别守: 与 Web 同数、上下对称、_CARD_H 的账面等于实测。
+    五条分别守: 与 Web 同数(纵向内边距、横向 gap 各一条)、上下对称、
+    _CARD_H 的账面等于实测、相邻卡片的实测间隔等于 _CARD_GAP。
     """
 
     def _cards(self, root, rows):
@@ -10693,7 +10694,7 @@ class TrayPanelCardGeometry(unittest.TestCase):
             cell = _tk.Frame(cards, bg=gt._PANEL_BG, highlightthickness=1,
                              highlightbackground=gt._LINE)
             cell.pack(side="left", fill="x", expand=True,
-                      padx=(0, 0 if i == last else 8))
+                      padx=(0, 0 if i == last else gt._CARD_GAP))
             lb = _tk.Label(cell, text=lab, bg=gt._PANEL_BG, fg=gt._MUTED,
                            font=gt._FONT_UI)
             lb.pack(anchor="w", padx=gt._CARD_PAD_X,
@@ -10787,6 +10788,51 @@ class TrayPanelCardGeometry(unittest.TestCase):
                                  "卡片实测 %dpx 而 _CARD_H=%d: 同步它, "
                                  "并跟着同步 _PANEL_MIN_H 的账面"
                                  % (cell.winfo_height(), gt._CARD_H))
+        finally:
+            root.destroy()
+
+    def test_the_card_gap_matches_the_web_panel(self):
+        u"""卡片之间的横向间距必须和 Web 面板 .cards{gap:8px} 同数。
+
+        这条以前不存在: 标签间距、上下内边距、左右内边距都各有跨面对照的守卫,
+        唯独卡片之间的横向 gap 是裸 8 —— pack 那句写作
+        padx=(0, 0 if i == last else 8), 既没有名字也说不出来历。于是 Web 那边
+        把 .cards 的 gap 一改, 托盘这边六张卡的疏密会悄悄分家, 而没有任何
+        测试看得见。
+        """
+        import gpu_tray as gt
+        import gpu_monitor as gm
+        src = io.open(gpu_tray.__file__, encoding="utf-8").read()
+        self.assertIn("_CARD_GAP = ", src,
+                      "卡片横向间距没有常量, 又回到裸数字了")
+        hit = re.search(r"\.cards\{[^}]*gap:(\d+)px", gm._PANEL_STYLE)
+        self.assertIsNotNone(hit, "Web 面板 .cards 的 gap 不见了")
+        gap = int(hit.group(1))
+        self.assertEqual(gap, gt._CARD_GAP,
+                         "托盘卡片间距 %dpx / Web %dpx: 六张卡的疏密对不上"
+                         % (gt._CARD_GAP, gap))
+        self.assertIn("padx=(0, 0 if i == last else _CARD_GAP)", src,
+                      "pack 那句没用 _CARD_GAP: 横向间距又是裸数字了")
+
+    def test_the_card_gap_is_what_the_render_shows(self):
+        u"""按真渲染量: 相邻两张卡的间隔就是 _CARD_GAP。
+
+        上面那条只证明源码里写了常量, 这条证明常量没有说谎 —— 量出来的间隔
+        和 _CARD_GAP 不相等, 说明 pack 那句的写法(或者 expand/fill 的组合)
+        已经和常量的含义对不上了。
+        """
+        import tkinter as _tk
+        import gpu_tray as gt
+        import gpu_monitor as gm
+        root = _tk.Tk()
+        try:
+            cells = self._cards(root, gm.panel_summary({}))
+            self.assertGreaterEqual(len(cells), 2, "汇总卡少于两张, 量不出间隔")
+            for a, b in zip(cells, cells[1:]):
+                space = b[0].winfo_x() - (a[0].winfo_x() + a[0].winfo_width())
+                self.assertEqual(space, gt._CARD_GAP,
+                                 "相邻卡片之间 %dpx, 而 _CARD_GAP=%d"
+                                 % (space, gt._CARD_GAP))
         finally:
             root.destroy()
 

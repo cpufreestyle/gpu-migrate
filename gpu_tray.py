@@ -280,6 +280,14 @@ _CARD_PAD_Y = 9
 # 22 是 _FONT_UI 下 Label 的实测高度(§158)。字号或内边距一改就要同步,
 # TrayPanelCardGeometry.test_the_card_height_matches_its_parts 量着盯。
 _CARD_H = 66
+# 汇总卡与汇总卡之间的横向间距, 和 Web 面板 .cards{gap:8px} 同数。原来是
+# 裸 8: pack 那句写作 padx=(0, 0 if i == last else 8), 既没有名字也说不出
+# 来历, 而浏览器里 .cards{display:flex;gap:8px} 是明写的。两边一个改一个
+# 不改, 六张卡的疏密会悄悄分家, 而没有任何测试看得见 —— 标签间距、上下内
+# 边距、左右内边距都各有跨面对照的守卫, 横向 gap 这条一直没有。
+# 外部参照: 反编译 AIDA64 Engineer 5.20 的窗体里按钮与按钮横向 gap 是 6px,
+# 同一类"控件之间才分松紧"的间距, 见 §159。
+_CARD_GAP = 8
 # 底部状态区两行 Label 之间的间距, 和 Web 面板 #hidden / #counters 的
 # margin:2px 0 0 对齐。原来是 1px: 两行灰字几乎贴在一起, 而浏览器
 # 里空着 2px。
@@ -1846,7 +1854,7 @@ class TrayApp:
                 # 而不是把右边几张直接切到视口外。grid 做不到这一点 ——
                 # 列的请求宽度有下限, uniform 也只是分多余空间。
                 cell.pack(side="left", fill="x", expand=True,
-                          padx=(0, 0 if i == last else 8))
+                          padx=(0, 0 if i == last else _CARD_GAP))
                 tk.Label(cell, text=label, bg=_PANEL_BG, fg=_MUTED,
                          font=_FONT_UI).pack(anchor="w", padx=_CARD_PAD_X,
                                             pady=(_CARD_PAD_Y, _CARD_LABEL_GAP))
