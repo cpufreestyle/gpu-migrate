@@ -3380,7 +3380,11 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
         gt._rebuild_fonts()
         root.geometry(geom)
         grid = _tk.Frame(root)
-        grid.pack(fill="both", expand=True,
+        # 与 _settings_build 同一套: 表单框不 expand(§169)。expand
+        # 的框会吞掉窗高保底的松弛, 把「最后一行 -> 保存键」那一段撑
+        # 成一个洞(实测 44px), 见
+        # test_neither_dialog_form_frame_eats_the_button_gap。
+        grid.pack(fill="both",
                   padx=gt._DIALOG_PAD_X, pady=gt._DIALOG_PAD_Y)
         labels = ["迁移阈值 %", "显存阈值 MiB", "电池阈值 %",
                   "温度提醒 °C", "采样周期 秒", "Web 端口(0关)"]
@@ -8519,7 +8523,9 @@ class DetailPrefRefresh(unittest.TestCase):
                                  self.tray._DETAIL_MIN_H))
         try:
             frm = _tk.Frame(root)
-            frm.pack(fill="both", expand=True,
+            # 与 _detail_build 同一套: 不 expand(§169), 理由见
+            # test_neither_dialog_form_frame_eats_the_button_gap。
+            frm.pack(fill="both",
                       padx=self.tray._DIALOG_PAD_X,
                       pady=self.tray._DIALOG_PAD_Y)
             keys = ["进程名:", "PID:", "完整路径:", "启动时间:",
@@ -10311,7 +10317,10 @@ class TrayPanelStatusFloor(unittest.TestCase):
                     w.destroy()
                 root.geometry(geom)
                 frm = _tk.Frame(root)
-                frm.pack(fill="both", expand=True,
+                # 与两个 _build 同一套: 不 expand(§169)。量宽度虽
+                # 然不受影响(fill 只看分配区), 但替身与源码的形状漂
+                # 开了就再没人咬得住。
+                frm.pack(fill="both",
                          padx=gt._DIALOG_PAD_X, pady=gt._DIALOG_PAD_Y)
                 root.update()
                 self.assertEqual(
@@ -10330,6 +10339,116 @@ class TrayPanelStatusFloor(unittest.TestCase):
                     "差算, 对不上长路径会画到窗户外"
                     % (geom, root.winfo_width() - frm.winfo_width(),
                        2 * gt._DIALOG_PAD_X))
+        finally:
+            root.destroy()
+
+    def test_neither_dialog_form_frame_eats_the_button_gap(self):
+        u"""两个对话框的「表单内容底 -> 按钮行顶」间隙必须等于 2*_DIALOG_PAD_Y。
+
+        §169 量到的真缺陷: 两个表单框都写着 pack(fill="both",
+        expand=True)。expand 的框会吞掉窗高保底的松弛 —— 设置窗 520 比
+        内容高 28px, 详情窗 320 比内容高 8px, 而两个窗的 grid 行都没有
+        weight, 松弛全落在表单框底部, 正好落在「最后一行 -> 按钮行」
+        那一段里。真渲染实测视觉间隙: 设置窗 44px, 详情窗 22px, 两个
+        对话框差 22px, 用户在两个窗之间来回时看得见。
+
+        去掉 expand 之后松弛改落按钮下方(设置窗按钮下 36px, 详情窗
+        12px), 间隙回到 2*_DIALOG_PAD_Y: 表单框自己的 pady 下 + 按钮行
+        的 pady 上。宽度一个像素都没动 —— Tk 的 fill 只看分配区, 与
+        reqwidth 无关(空框架实测也是满宽), 所以这不是拿宽度换间隙。
+        两条一起量: 不然「收窄换间隙」那种换法守不住。
+
+        静态钉两个 pack 的形状(不许 expand), 真渲染钉框架贴身、满宽与
+        间隙本身。替身按源码同一套参数重建, 只改替身不改源码, 静态那
+        一层当场红。
+        """
+        import gpu_tray as gt
+        import tkinter as _tk
+
+        def form_pack(body, decl):
+            u"""取 decl 那一行之后那个 pack(...) 调用的全文(括号配对)。
+
+            正则不行: 调用跨两行, 而且参数里还有别的括号。
+            """
+            # 注释不是调用的一部分: 源码里 pack 之前正好有一段说明
+            # 为什么不该写 expand, 不滤掉它取到的是那段注释。
+            lines = [l for l in body.splitlines()
+                     if not l.lstrip().startswith("#")]
+            for i, line in enumerate(lines):
+                if line.strip() != decl:
+                    continue
+                buf, depth = [], 0
+                for nxt in lines[i + 1:]:
+                    buf.append(nxt.strip())
+                    depth += nxt.count("(") - nxt.count(")")
+                    if depth <= 0:
+                        break
+                return " ".join(buf)
+            return ""
+
+        cases = (("设置窗", "grid = tk.Frame(root)",
+                  inspect.getsource(gt.TrayApp._settings_build)),
+                 ("详情窗", "frm = tk.Frame(root)",
+                  inspect.getsource(gt.TrayApp._detail_build)))
+        for name, decl, body in cases:
+            call = form_pack(body, decl)
+            self.assertIn(
+                '.pack(fill="both",', call,
+                "%s 的表单框不是 pack(fill=\"both\", ...): %r"
+                % (name, call))
+            self.assertNotIn(
+                "expand", call,
+                "%s 的表单框又写了 expand: 它会吞掉窗高保底的松弛, 把"
+                "「最后一行 -> 按钮行」那一段撑成一个洞(§169 实测设置窗 "
+                "44px、详情窗 22px)" % name)
+            self.assertIn(
+                "padx=_DIALOG_PAD_X, pady=_DIALOG_PAD_Y", call,
+                "%s 的表单框内边距又不是那两个常量: %r" % (name, call))
+        # 按钮行的留白必须等于 _DIALOG_PAD_Y: 不相等的话两个对话框的
+        # 「内容 -> 按钮」间隙就差一个数, 而它们在屏幕上是同一种东西。
+        self.assertEqual(
+            gt._DETAIL_BTN_PAD_Y, gt._DIALOG_PAD_Y,
+            "_DETAIL_BTN_PAD_Y=%d 而 _DIALOG_PAD_Y=%d: 两个对话框的"
+            "「内容 -> 按钮」间隙必须是同一个数"
+            % (gt._DETAIL_BTN_PAD_Y, gt._DIALOG_PAD_Y))
+        root = _tk.Tk()
+        try:
+            gt._rebuild_fonts()
+            gt._apply_fluent_theme()
+            # 460x520 是设置窗的真尺寸: 比内容高 28px, 有松弛可吞。
+            root.geometry("460x520")
+            frm = _tk.Frame(root)
+            frm.pack(fill="both",
+                     padx=gt._DIALOG_PAD_X, pady=gt._DIALOG_PAD_Y)
+            for i in range(6):
+                _tk.Label(frm, text="第 %d 行" % i, anchor="w",
+                          font=gt._FONT_UI).grid(row=i, column=0,
+                                                sticky="w")
+            saver = _tk.Button(root, text="保存 (热重载立即生效)",
+                               font=gt._FONT_UI)
+            saver.pack(pady=gt._DIALOG_PAD_Y)
+            root.update()
+            # 框架必须贴身裹住自己的内容: 高出多少, 吞掉的就是窗高松弛。
+            self.assertEqual(
+                frm.winfo_height(), frm.winfo_reqheight(),
+                "表单框分配高 %d 比自己请求的 %d 高 %dpx: expand 把窗高"
+                "保底的松弛吞进表单底部了(§169 修的就是这个)"
+                % (frm.winfo_height(), frm.winfo_reqheight(),
+                   frm.winfo_height() - frm.winfo_reqheight()))
+            self.assertEqual(
+                frm.winfo_width(),
+                root.winfo_width() - 2 * gt._DIALOG_PAD_X,
+                "表单框宽 %d, 而窗宽减两侧内边距是 %d: fill 不依赖 "
+                "expand, 窄了就是拿宽度换了间隙"
+                % (frm.winfo_width(),
+                   root.winfo_width() - 2 * gt._DIALOG_PAD_X))
+            gap = saver.winfo_y() - (frm.winfo_y()
+                                    + frm.winfo_reqheight())
+            self.assertEqual(
+                gap, 2 * gt._DIALOG_PAD_Y,
+                "「表单内容底 -> 保存键顶」视觉间隙 %dpx, 而 "
+                "2*_DIALOG_PAD_Y=%d: 窗高松弛没有落到按钮下方"
+                % (gap, 2 * gt._DIALOG_PAD_Y))
         finally:
             root.destroy()
 

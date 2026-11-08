@@ -659,7 +659,12 @@ _TIP_EDGE_GAP = 8           # 弹泡离屏幕右缘的最小间隙
 _DETAIL_WRAP_PX = 345        # 详情窗右列折行宽度, 见 _detail_build 注释
 # 详情窗窗高下限: 8 行的常规形态。gone 分支多插一行, 窗高改成按内容
 # 现算(见 _detail_build 收尾), 这个数只是"常规形态别比现在更矮"。
-_DETAIL_BTN_PAD_Y = 6       # 详情窗按钮行上下的留白
+# 详情窗按钮行上下的留白。必须等于 _DIALOG_PAD_Y(§169): 「表单内容底 ->
+# 按钮行顶」这段视觉间隙, 设置窗那边就是 _DIALOG_PAD_Yx2(两个表单框
+# 都不 expand, 窗高保底的松弛改落按钮下方, 见两处 pack 的注释), 这里
+# 写 6 就比设置窗窄 2px, 两个对话框来回切换时看得见。顺带把上下边距
+# 修成 8/8 对称(原来是上 8 下 6)。
+_DETAIL_BTN_PAD_Y = 8       # 详情窗按钮行上下的留白
 _DETAIL_MIN_H = 320
 
 
@@ -1327,6 +1332,8 @@ class TrayApp:
             #   = 192 + 128 + 104 + 8 = 432
             # 加 grid 的 pady _DIALOG_PAD_Yx2 与保存键 28 +
             # pady _DIALOG_PAD_Yx2 = 492, 所以 520 留得出余量。
+            # 那 28px 余量落在保存键下方(表单框不 expand, 见下面 pack
+            # 那段), 不是按钮上方的一个洞。
             # 460 那个老尺寸装不下: expand 的
             # grid 一超预算, pack 就把后声明的保存键压成 1px 高 ——
             # 与主面板 470 那个坑同款。实测:
@@ -1339,7 +1346,14 @@ class TrayApp:
             cfg = load_config(self.config_path)
             rows = []
             grid = tk.Frame(root)
-            grid.pack(fill="both", expand=True,
+            # 不写 expand(§169): expand 的 grid 会吞掉窗高保底的松弛(520 比
+            # 内容多 28px), 而 grid 的行没有 weight, 松弛全落在表单框
+            # 底部 —— 正好落在「最后一行 -> 保存键」那一段里, 实测把
+            # 视觉间隙撑到 44px(= 28 松弛 + _DIALOG_PAD_Yx2)。去掉之后
+            # 松弛改落保存键下方的窗底余量, 间隙回到 16px, 与详情窗同
+            # 一把尺。fill="both" 照样撑满宽度(Tk 的 fill 不依赖
+            # expand), 输入框一个像素都不动。
+            grid.pack(fill="both",
                       padx=_DIALOG_PAD_X, pady=_DIALOG_PAD_Y)
 
             # 行的目标高度直接写在控件上(ipady), 不给 grid pady:
@@ -2416,9 +2430,10 @@ class TrayApp:
             self._ui_windows += 1
             root.title(f"进程详情 - pid {pid}")
             # 纵向预算(实测, 按 _FORM_ROW_PITCH=32 算): 8 行 x 32
-            # + padx 10x2 = 276, 按钮行 6 + 28 + 6 = 40, 合计 316 ——
-            # _DETAIL_MIN_H=320 留得出余量。原来是 300: 行距 27px 时
-            # 刚好, 提到 31 之后 reqheight 310, 底边那行会被裁掉一半。
+            # + pady _DIALOG_PAD_Yx2 = 272, 按钮行 _DETAIL_BTN_PAD_Y
+            # x2 + 28 = 44, 合计 316 —— _DETAIL_MIN_H=320 留得出余量。
+            # 原来是 300: 行距 27px 时刚好, 提到 31 之后 reqheight
+            # 310, 底边那行会被裁掉一半。
             # 这个 geometry 只是初始尺寸(也是下限), 收尾按内容现算。
             root.geometry("520x%d" % _DETAIL_MIN_H)
             root.attributes("-topmost", True)
@@ -2473,8 +2488,13 @@ class TrayApp:
             where = gpu_where_text(ig, dg)
 
             frm = tk.Frame(root)
-            frm.pack(fill="both", expand=True,
-                      padx=_DIALOG_PAD_X, pady=_DIALOG_PAD_Y)
+            # 不写 expand(§169), 与设置窗同一个理由: expand 的 frm 吞掉窗高
+            # 保底的松弛(320 比内容多 8px), 而 grid 行没有 weight, 松弛
+            # 全落在「最后一行 -> 按钮行」那一段里, 实测把视觉间隙撑到
+            # 22px。去掉之后回到 _DIALOG_PAD_Y + _DETAIL_BTN_PAD_Y =
+            # 16, 与设置窗同值。
+            frm.pack(fill="both",
+                     padx=_DIALOG_PAD_X, pady=_DIALOG_PAD_Y)
             lines = [
                 ("进程名", name), ("PID", str(pid)),
                 ("完整路径", full), ("启动时间", start_str),
