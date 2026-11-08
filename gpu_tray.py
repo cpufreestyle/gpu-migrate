@@ -264,8 +264,12 @@ _CARD_LABEL_GAP = 2
 # margin:2px 0 0 对齐。原来是 1px: 两行灰字几乎贴在一起, 而浏览器
 # 里空着 2px。
 _STATUS_LINE_GAP = 2
+_STATUS_BOTTOM_PAD = 6   # 状态区最下面那行 Label 与窗口底边的距离
 # 底部状态区(刷新节奏/快捷键 + 会话累计)的保底高度: 两行 Label 各 22px
-# (字号 9 的 linespace 是 16px, 上下各留 3px) + 行间 2px + 底部 6px。
+# (字号 9 的 linespace 是 16px, 上下各留 3px) + 行间 _STATUS_LINE_GAP
+# + 底部 _STATUS_BOTTOM_PAD。两行必须是 22px 而不是 23px: 默认字体
+# (TkDefaultFont)的 Label 是 23px, 那 1px x 2 会把第二行压掉 2px ——
+# 所以这两个 Label 必须带 font=_FONT_UI, 见 _panel_build 里那段。
 # 行间 2px 与 Web 面板 #hidden / #counters 的 margin:2px 0 0 对齐。
 # 这个高度会被 Frame 锁死, 详见 _panel_build 里 spark_box / bottom 那段。
 _STATUS_H = 52
@@ -1913,8 +1917,15 @@ class TrayApp:
                     tree.tag_configure(cls, foreground=color)
             # 前景归热度 tag 管, 背景归隔行 tag 管, 两个 tag 各管一头
             tree.tag_configure(_ROW_ALT_TAG, background=_ROW_ALT_BG)
+            # pady 只写下边: grid 那条教训在 pack 上一样成立 —— 相邻两
+            # 个区块的间距 = 上一个的 pady 下 + 下一个的 pady 上。表格原
+            # 来写裸 pady=_BLOCK_GAP(上下各 4), 与筛选栏底部的 4 叠成
+            # 8px, 而汇总卡->筛选栏、表格->趋势图两处都是 4px: 区块间距
+            # 成了 4/8/4, 疏密不匀(实测筛选栏底边 96, 表格顶边 104)。
+            # 改成 (0, _BLOCK_GAP) 之后三处一样。约定: 每个区块只声明
+            # 自己的下边距, 上边距一律 0(汇总卡顶部那 8 是窗口上沿)。
             tree.pack(fill="both", expand=True, padx=_PANEL_PAD,
-                      pady=_BLOCK_GAP)
+                      pady=(0, _BLOCK_GAP))
 
             # Esc: 有筛选词先清空, 已经空了才关窗 (和常见工具的套路一致)
             def _on_escape(_event=None):
@@ -1969,12 +1980,19 @@ class TrayApp:
             # padx=_PANEL_PAD, 外层再来一次就成了 16px, 会比其他区块
             # 多缩进一半。
             bottom.pack(fill="x", padx=0, pady=(0, 0))
-            tip = tk.Label(bottom, text="", anchor="w", fg=_MUTED)
+            # font=_FONT_UI 不能省: 这两行是全面板唯一没带字体的文本,
+            # 不带的后果有两个 —— 一是它们用 TkDefaultFont(Microsoft
+            # YaHei UI), 与同窗其余文字(Segoe UI Variable Text)不是
+            # 一张脸; 二是它的行高 23px, 而下面这笔账按 22px 算,
+            # 少算的 1px x 2 行正好把第二行压掉 2px(实测 23 -> 21)。
+            tip = tk.Label(bottom, text="", anchor="w", fg=_MUTED,
+                           font=_FONT_UI)
             tip.pack(fill="x", padx=_PANEL_PAD,
-                      pady=(0, _STATUS_LINE_GAP))
-            count = tk.Label(bottom, text="", anchor="w", fg=_MUTED)
+                     pady=(0, _STATUS_LINE_GAP))
+            count = tk.Label(bottom, text="", anchor="w", fg=_MUTED,
+                             font=_FONT_UI)
             count.pack(fill="x", padx=_PANEL_PAD,
-                       pady=(0, 6))
+                       pady=(0, _STATUS_BOTTOM_PAD))
 
             # 右键菜单: 永不迁移
             menu = tk.Menu(root, tearoff=0)
@@ -2651,4 +2669,3 @@ def run_tray(config_path=None):
         except OSError:
             pass
         raise
-

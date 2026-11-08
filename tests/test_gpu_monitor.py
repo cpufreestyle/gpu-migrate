@@ -9808,12 +9808,24 @@ class TrayTextColorGuard(unittest.TestCase):
         两行 Label 现在装在 bottom 这个"尺寸不传播"的 Frame 里(见
         TrayPanelStatusFloor), 父控件从 root 换成了 bottom —— 但用的还是
         共享的 _MUTED, 这条契约没变。
+
+        §157 又给这两行加了 font=_FONT_UI: 它们原来是全面板唯一没带
+        字体的文本, 落在 TkDefaultFont 上, 与同窗其余文字不是一张脸,
+        而且行高 23px 会把 _STATUS_H 的账撑爆。所以这里按名字逐行抓,
+        不再匹配整行字面量 —— 一改参数就红的断言没人会去改参数。
         """
         src = self._code_only(self._tray_source())
-        self.assertIn('tip = tk.Label(bottom, text="", anchor="w", fg=_MUTED)',
-                      src)
-        self.assertIn('count = tk.Label(bottom, text="", anchor="w", fg=_MUTED)',
-                      src)
+        for name in ("tip = tk.Label(bottom", "count = tk.Label(bottom"):
+            i = src.index(name)
+            call = src[i:src.index(")", i) + 1]
+            self.assertIn("fg=_MUTED", call,
+                          "%s 不再用共享的 _MUTED: 小字低对比, 读不出来"
+                          % name)
+            self.assertIn("font=_FONT_UI", call,
+                          "%s 没带 font=_FONT_UI: 它会落到 TkDefaultFont,"
+                          " 行高 23px 而 _STATUS_H 按 22px 算, 第二行被压扁"
+                          % name)
+
 
 
 class TrayPanelStatusFloor(unittest.TestCase):
@@ -9840,6 +9852,10 @@ class TrayPanelStatusFloor(unittest.TestCase):
                 # 线性决定(22 + 2*_HEAD_PAD_Y), 而 _PANEL_MIN_H 的
                 # 账面上按同一个数算。
                 12 * gt._ROW_H + gt._TREE_HEAD_H + 2,
+                gt._BLOCK_GAP,       # 表格自己的下边距: 每个区块只
+                # 声明下边距(上边距一律 0), 所以区块间距
+                # 恒等于 _BLOCK_GAP, 不会两两相加。少了这一项,
+                # 保底高度就少算 4px —— 表格会去压趋势图。
                 gt._SPARK_H,
                 gt._SPARK_GAP,       # 趋势图与状态区之间的间距
                 gt._STATUS_H)
@@ -9858,19 +9874,46 @@ class TrayPanelStatusFloor(unittest.TestCase):
         这三个 4px 原来是散在 _panel_build 里的裸数字: 改一处不牵动
         另外两处, 区块之间的节奏就这么悄悄歪掉。_budget() 里也跟着
         写死过同一个数 —— §147 修的就是这类漂移。
+
+        §157 又加了一条: 三处必须写成 pady=(0, _BLOCK_GAP) 这种"只
+        声明下边距"的形状。表格原来写裸 pady=_BLOCK_GAP(上下各 4),
+        与上一块的下边距相加成了 8px —— 只数引用处数不出这种形状,
+        所以下面逐处点名。
         """
         import gpu_tray as gt
         src = io.open(gpu_tray.__file__, encoding="utf-8").read()
         self.assertIn("_BLOCK_GAP = ", src,
                       "区块间距没有常量, 又回到裸数字了")
         body = inspect.getsource(gt.TrayApp._panel_build)
-        self.assertEqual(body.count("_BLOCK_GAP"), 3,
-                         "区块间距有三处, 必须都用 _BLOCK_GAP: "
-                         "现在只有 %d 处" % body.count("_BLOCK_GAP"))
-        for line in ("pady=(8, _BLOCK_GAP)", "pady=(0, _BLOCK_GAP)"):
-            self.assertIn(line, body, "少了这处: " + line)
-        self.assertIn("pady=_BLOCK_GAP", body,
-                      "表格那处没用 _BLOCK_GAP")
+        self.assertGreaterEqual(body.count("_BLOCK_GAP"), 3,
+                                "区块间距有三处, 必须都用 _BLOCK_GAP: "
+                                "现在只有 %d 处" % body.count("_BLOCK_GAP"))
+        # 逐个点名, 且必须是 (0, _BLOCK_GAP) 这个形状: 裸 pady=_BLOCK_GAP
+        # 会让上下都吃 4px, 与上一块叠成 8px
+        # 逐个点名, 且形状必须是"只声明下边距": 裸 pady=_BLOCK_GAP
+        # 会让上下都吃 4px, 与上一块的下边距叠成 8px。汇总卡顶部那 8
+        # 是窗口上沿, 不是区块间距, 所以它是唯一带非零上边距的一处。
+        expect = (("cards.pack(fill=\"x\", padx=_PANEL_PAD,",
+                   "pady=(8, _BLOCK_GAP)"),
+                  ("fbar.pack(fill=\"x\", padx=_PANEL_PAD,",
+                   "pady=(0, _BLOCK_GAP)"),
+                  ("tree.pack(fill=\"both\", expand=True, padx=_PANEL_PAD,",
+                   "pady=(0, _BLOCK_GAP)"))
+        for line, want in expect:
+            k = body.index(line)
+            nxt = body[body.index("\n", k) + 1:body.index("\n", k) + 60]
+            self.assertIn(want, nxt,
+                          "%s 的 pady 不是 %s: 它只该声明自己的下边距,"
+                          "上边距归上一块管(或归窗口上沿)"
+                          % (line.split(".")[0], want))
+        # 只看代码行: 注释里提一句"原来写裸 pady=_BLOCK_GAP"是留底,
+        # 不该被这条误伤。整行注释才剥, 行内的 # 可能在字符串里。
+        code = "\n".join(l for l in body.splitlines()
+                          if not l.lstrip().startswith("#"))
+        self.assertNotIn("pady=_BLOCK_GAP", code,
+                         "还有裸 pady=_BLOCK_GAP: 上下各 4 会与上一块"
+                         "的下边距叠成 8px, 区块间距又歪了")
+
 
     def test_every_block_shares_one_left_and_right_edge(self):
         u"""四个区块的左右边缘必须在同一条竖线上。
@@ -10191,13 +10234,89 @@ class TrayPanelStatusFloor(unittest.TestCase):
             root.destroy()
 
     def test_the_status_floor_is_taller_than_its_two_labels(self):
-        u"""状态区高度要装得下两行 Label, 不然压扁的还是它自己。"""
+        u"""状态区高度要装得下两行 Label, 不然压扁的还是它自己。
+
+        这条原来写死 22 + 1 + 22 = 45, 而真实需求是 22 + 2 + 22 + 6 =
+        52 —— 45 这个数松得能放过任何少算, §157 之前它就一直绿灯,
+        而第二行 Label 实测被压成 21px(要 23px)。行高不写死: 按
+        _FONT_UI 现量一个真 Label, 字体换了这条跟着走。
+        """
+        import tkinter as _tk
         import gpu_tray as gt
-        # 两行各 22px(字号 9 的 linespace 16 + 上下各 3px) + 行间 1px
-        need = 22 + 1 + 22
-        self.assertGreaterEqual(gt._STATUS_H, need,
-                               msg="状态区 %dpx 装不下两行(%dpx): 会压扁"
-                                    % (gt._STATUS_H, need))
+        root = _tk.Tk()
+        try:
+            gt._rebuild_fonts()
+            gt._apply_fluent_theme()
+            probe = _tk.Label(root, text="", anchor="w", fg=gt._MUTED,
+                              font=gt._FONT_UI)
+            root.update()
+            row = probe.winfo_reqheight()
+        finally:
+            root.destroy()
+        need = (row + gt._STATUS_LINE_GAP + row + gt._STATUS_BOTTOM_PAD)
+        self.assertEqual(gt._STATUS_H, need,
+                         "状态区 %dpx 与两行 Label 的实测量 %dpx 对不上: "
+                         "少算的部分会从第二行身上扣(实测压掉 2px)"
+                         % (gt._STATUS_H, need))
+    def test_every_block_gap_in_the_panel_is_the_same_number(self):
+        u"""面板四个区块之间的间距必须恒等于 _BLOCK_GAP。
+
+        pack 的间距是**相加**的: 相邻两个区块的间隔 = 上一个的 pady
+        下 + 下一个的 pady 上。§157 之前表格写的是裸 pady=_BLOCK_GAP
+        (上下各 4), 与筛选栏底部的 4 叠成 8px, 而汇总卡->筛选栏、
+        表格->趋势图两处都是 4px —— 区块间距成了 4/8/4, 一整栏疏密
+        不匀, 而没有任何一条用例在量它。
+
+        这条按 _panel_build 同样的 pack 方式真渲染出来量, 不查源码:
+        查源码只能证明"写了什么", 量出来才证明"排成了什么"。
+        """
+        import tkinter as _tk
+        import gpu_tray as gt
+        root = _tk.Tk()
+        try:
+            root.geometry("1046x590")
+            cards = _tk.Frame(root)
+            cards.pack(fill="x", padx=gt._PANEL_PAD, pady=(8, gt._BLOCK_GAP))
+            fbar = _tk.Frame(root)
+            fbar.pack(fill="x", padx=gt._PANEL_PAD, pady=(0, gt._BLOCK_GAP))
+            tree = _tk.Frame(root)
+            tree.pack(fill="both", expand=True, padx=gt._PANEL_PAD,
+                      pady=(0, gt._BLOCK_GAP))
+            spark_box = _tk.Frame(root, height=gt._SPARK_H)
+            spark_box.pack_propagate(False)
+            spark_box.pack(fill="x", padx=gt._PANEL_PAD,
+                           pady=(0, gt._SPARK_GAP))
+            root.update()
+            order = (cards, fbar, tree, spark_box)
+            gaps = [b.winfo_y() - (a.winfo_y() + a.winfo_height())
+                    for a, b in zip(order, order[1:])]
+            self.assertEqual(gaps, [gt._BLOCK_GAP] * 3,
+                             "区块间距不是清一色 %dpx: %s"
+                             % (gt._BLOCK_GAP, gaps))
+        finally:
+            root.destroy()
+
+    def test_the_status_lines_use_the_panel_font(self):
+        u"""底部两行状态文字必须用 _FONT_UI, 不能用系统默认字体。
+
+        这两行原来是全面板唯一没带 font= 的文本, 后果有两个: 一是
+        它们落在 TkDefaultFont(Microsoft YaHei UI)上, 与同窗其余文字
+        (Segoe UI Variable Text)不是一张脸; 二是那个字体的 Label 行高
+        23px, 而 _STATUS_H 的账按 22px 算, 少算的 1px x 2 行正好把
+        第二行压掉 2px(实测 23 -> 21, 文字上下各被削 1px)。
+
+        这条把"每个文本控件都显式带字体"钉死, 并且顺带查字体值:
+        默认字体在别的机器上可能是另一套, 只有显式写出来才可控。
+        """
+        import gpu_tray as gt
+        body = inspect.getsource(gt.TrayApp._panel_build)
+        for name in ("tip = tk.Label(bottom", "count = tk.Label(bottom"):
+            i = body.index(name)
+            call = body[i:body.index(")", i) + 1]
+            self.assertIn("font=_FONT_UI", call,
+                          "%s 没带 font=_FONT_UI: 它会落到 TkDefaultFont, "
+                          "行高 23px 而 _STATUS_H 按 22px 算, 第二行被压扁"
+                          % name)
 
     def test_the_spark_and_status_boxes_do_not_propagate_their_size(self):
         u"""两个 Frame 必须 pack_propagate(False), 否则高度锁不死。"""
