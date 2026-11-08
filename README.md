@@ -250,6 +250,19 @@ python gpu_monitor.py --unset-all
 
 - **Web 趋势图的迁移阈值线不再整条消失**: `sparkline_html` 里 `<line class=thr ... y2={thr_y}/>` 少一个空格 —— HTML 对未加引号的属性值只认空白符和 `>` 作终止, **不认 `/`**, 值被读成 `"10.7/"`, SVG 报 Invalid length 把**整条线**丢掉, 而面板每 1000ms 重注入一次 innerHTML, 控制台每秒刷一条错。前缀断言 `"<line class=thr" in html` 对此全无感觉 —— **标签在, 线不在**。新增 `SparklineHtml.test_the_threshold_line_is_a_line_the_browser_will_draw`: 按 HTML 的解析规则 (`([a-z0-9]+)=([^\s>]+)`) 把属性值当真读出来再 `float()` 一遍 —— 解析不出数字, 就是浏览器画不出来的线; 顺带断言 `y2 == y1`(阈值线是水平线)。变异验证: 删掉那个空格当场红。
 - **设置窗两段名单之间不再 0px 贴合**: 「勾选区 -> 游戏名单 -> 排除名单」原来靠跳过空 grid 行分隔(`r2 = r + 4` 之后 `r2 += 5`), 而**没有控件、也没有 `rowconfigure(minsize=)` 的 grid 行高度是 0** —— 实测两段名单贴在一起("排除名单" Label 顶边减游戏名单 Text 底边 = 0), 那 4 行从头到尾没生效过。`git log -S` 证明这两个偏移量来自最初提交 9bc4de0: 当时每一行都带 `pady=2`, 间隙是控件自己的 2+2 凑出来的; §155 把 pady 换成 ipady 之后那 4px 消失, 是行距工作自己引入的回退。现在每处间隙占一整行 + `rowconfigure(minsize=_FORM_BLOCK_GAP)`, 与面板四处区块间隙 `_BLOCK_GAP` 同数(4)是有意的: 分两个数的话, 用户在面板与设置窗之间看到的是两种节奏。守卫两层: 真渲染量两处间隙 == `_FORM_BLOCK_GAP`、两段名单 grid row 差 2、间隙行高度被 `grid_bbox` 量到; 静态钉 `_FORM_BLOCK_GAP == _BLOCK_GAP`、`minsize=_FORM_BLOCK_GAP` 恰好两处且都是 `grid.rowconfigure(`、行号推进只许 +1、名单 Text 的 grid 不许带 pady、rowconfigure 那一行不许写裸数字。变异验证 5 条全红。
+- **详情窗底部三个按钮不再偏心**: 「立即设为独显 / 撤销独显设置 / 关闭」三个按钮都写
+  `padx=(_CTL_GAP, 0)`, 而**第一个按钮左边没有邻居** —— 这一份 6px 是孤儿声明。
+  §162 立的规矩是"每个间隙只许有一个属主": 左边的元素不声明自己的右边距, 右边的元素用
+  `padx=(_CTL_GAP, 0)` 声明它左边那一份, 而最左那个元素的左边根本没有间隙可归属。
+  带着它, 三个按钮的视觉组在按钮行里是左 6 / 右 0, 而按钮行按窗心居中(`pack` 默认
+  `anchor=center`) —— 整组偏离窗心 2.5px(520 宽窗实测: 视觉组中心 262.5, 窗心 260)。
+  现在第一个按钮 `pack(side="left")` 不带 padx, 左右留白都是 0, 视觉组中心与窗心只差
+  0.5px —— 那是 213px 奇数宽的四舍五入, 不是缺陷。筛选栏那一行同规矩: 最左的"筛选:"
+  标签不带 padx, 由它右边的输入框声明那一份。守卫三层: 静态数 `padx=(_CTL_GAP, 0)`
+  恰好两处(三个按钮两个间隙); 静态按按钮点名, 第一个的 pack 里不许出现 `padx`、后两个
+  必须带 —— 只数次数数不出"孤儿声明挪到第二个按钮"(计数还是 2, 而第一个间隙当场掉成 0);
+  真渲染量左右留白都是 0、按钮行宽等于三个按钮加两个间隙、视觉组中心落在窗心上
+  (1px 容差)。变异验证 15 条全红。
 - **面板打不开不再无声无息**: `_panel_build` 的总 except 以前只退窗口计数、复位标志，异常本身吞得干干净净 —— `tray_debug.log` / `tray_error.log` 里一个字都没有，半建的 Toplevel 也没人 `destroy`。于是真出问题时用户看到的是“打开实时面板点了没反应”，而日志里连一行痕迹都没有，想排查都没有抓手；并且每点一次菜单就漏一个看不见的窗口。现在失败会把 traceback 写进 `tray_debug.log`（和 `_safe_refresh` 同一个规矩），并把半建窗口收掉。实测拿真 tkinter 灌 32 种敌意 `panel_ui.json`（`geometry` 畸形 / 越界、`widths` 是字符串或负数、`sort` 列名非法、`filter` / `topmost` 是 list / dict / int），面板全部正常打开。
 - **监控循环单轮异常不再杀死整个程序**: 采样循环 `cmd_monitor` 以前只在 `collect_gpu_sample` 外面接了 `OSError`＋聚合 / 进程名 / 注册表回读 / NVML 温度 / 迁移 / 面板回调任意一步抛个非 `OSError`（ctypes `ArgumentError`、解码错、回调里的 bug……），就会一路冒到托盘的 `_monitor_thread`，进而 `self.stop=True` 把**整个托盘退掉** —— `--noconsole` 下用户只看到“程序一直崩溃 / 图标没了”，而日志里连一行原因都没有（托盘那条路径以前只在异常时才写 `tray_error.log`，而进程若被 C 级段错故障拷死连这个文件都不会有）。现在整段循环兜底：一轮里任何 `Exception` 都把 traceback 同时写进 `gpu_monitor.log` 和永远落盘的 `gpu_monitor_error.log`，睡够一个周期再接着跑，宁可少采一帧也不让监控停摆（`KeyboardInterrupt` / `SystemExit` 仍照常退出，不误吞）。真正的 C 级访问冲突（`0xc0000005`）能不能被 Python 接住，取决于**被调方**内部有没有 SEH，不取决于 Python：`install_fault_dump()` 装的 faulthandler 挂的是**向量化**异常处理器，它在被调方自己的 SEH 之前先跑，所以哪怕冲突被 `nvml` / `kernel32` 内部接住、ctypes 照常返回、Python 一个异常都收不到，`gpu_monitor_crash.log` 里也照样落一条 `Windows fatal exception`。本机实测一个实例连跑 17.5 小时写了 165 条这种转储，五条线程 ID 全程一致、期间没有一次重启 —— **这份文件是原生故障现场记录，不是死亡证明**，判死活要拿它去对 `gpu_monitor.log` 里的“启动监控”行有没有重启（真被内核干掉的进程反而一条都写不出来，那一路才由 2 分钟一次的看门狗兜底）。现在这个文件**新建**时（首次运行或刚滚走）开头会写一行说明，旧文件超过 1MB 先滚成 `gpu_monitor_crash.log.1`，`gpu_monitor_crash.log` / `gpu_monitor_error.log` 也都登记进了 `.gitignore`（有测试从源码扫 `os.path.join(_DIR, "*.log")` 来守这张表，新加日志忘了登记会当场红）。说明只在文件是新建的时候写、绝不往已存在的文件里追加，是因为上一版每实例追加一行会被拿 `subprocess` 真跑脚本的用例打穿——一轮测试就往线上文件插了 3 行；现在有专门一条用例钉住“已存在的 crash log 一个字节都不许多写”。
 - **NVML 抖一下不再把温度读数冲掉, 也不再静默**: 温度块原来是无条件

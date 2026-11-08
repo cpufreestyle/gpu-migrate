@@ -8021,3 +8021,119 @@ rowconfigure(minsize=) 的 grid 行高度是 0** —— 实测两段名单贴在
    重启前问用户)。
 3. live-autoclicker 仓库现为 private(已有 v1.0.0), 是否公开由用户
    定; dvpack 已公开且有 v0.1.0; silver-guardian 已公开。
+
+## 167. 续一百六十六：详情窗底部三个按钮的孤儿左 padx 让整组偏离窗心 2.5px(布局)
+
+### 缺陷
+
+详情窗底部「立即设为独显 / 撤销独显设置 / 关闭」三个按钮都写
+`padx=(_CTL_GAP, 0)`。§162 立的规矩是"每个间隙只许有一个属主: 左边的元素
+不声明自己的右边距, 右边的元素用 `padx=(_CTL_GAP, 0)` 声明它左边那一
+份"—— 而**第一个按钮的左边没有邻居**, 它这一份 6px 是孤儿声明, 没有任何
+间隙可以归属。
+
+实测(520x320 详情窗, 探针真渲染): `btns` 框架 x=150 w=219 按窗心居中,
+但 b1 x=6、b3 右缘=219 —— 视觉组在框架里是左 6 / 右 0。于是三个按钮的
+视觉组中心 262.5, 而窗心是 260, **整组偏离窗心 2.5px**。筛选栏那一行做对
+了: 最左的 `_filter_hint`(gpu_tray.py 1964)不带 padx, 由它右边的输入框
+声明那一份。
+
+单个像素级偏差, 但它是 §162 那条规矩的唯一漏网点: 三个按钮里两个声明是对的,
+恰恰是最左那一个写错了。而 `_CTL_GAP` 的注释(gpu_tray.py 375-384)把规矩
+写得清清楚楚, 代码没跟上。
+
+### 修法
+
+`gpu_tray.py` 2546-2557: 第一个按钮改 `pack(side="left")` 不带 padx, 后两
+个原样。注释说明为什么第一个不声明(它左边没有邻居), 并记下筛选栏那一行是
+同规矩的正例。
+
+修完复量: 左留白 0 / 右留白 0, `btns` 宽 213 == 三个按钮 83+83+35 加两个
+间隙 12, 视觉组中心 259.5 vs 窗心 260 —— 只差 0.5px, 那是 213px 奇数宽的
+`winfo_x` 四舍五入, 不是缺陷。按钮自然高 28 不变,
+`btns.winfo_y() == _DETAIL_BTN_PAD_Y == 6` 不变, 所以详情窗的高度账一分钱
+没动。
+
+### 守卫怎么写的
+
+`tests/test_gpu_monitor.py` 的
+`TrayPanelStatusFloor.test_the_detail_button_gaps_are_all_one_number`(原来
+只量"按钮之间的间隙等于 _CTL_GAP")扩成三层:
+
+1. **静态数次数**: `padx=(_CTL_GAP, 0)` 恰好两处(三个按钮两个间隙)。原来
+   这里是 3, 本轮改成 2。
+2. **静态按按钮点名**: 把剥过注释的源码按 `tk.Button(btns, text=` 切开, 逐
+   个取它的 `.pack(` 调用 —— 第一个的 pack 里**不许出现 padx 这三个字母**,
+   后两个必须含 `padx=(_CTL_GAP, 0)`。
+3. **真渲染量**: 左右留白都是 0、`btns` 宽 == 三个按钮 + 两个间隙、视觉组
+   中心落在窗心上(`assertAlmostEqual(delta=1)`, 容差给奇数宽四舍五入)。
+   原来就有的"框架贴身 / 上边距是 _DETAIL_BTN_PAD_Y"两条留着 —— padx 改动
+   不该牵动高度。
+
+第二层是必需的, 而且是本轮实测逼出来的: 只数次数**数不出"孤儿声明挪到第二
+个按钮"** —— 计数还是 2, 而第一个间隙当场掉成 0, 替身几何量不到(替身是自
+己搭的, 源码漂开了它照样绿)。第一轮变异 M10 正是这么逃掉的, 补了第二层才红。
+
+### 验证结果
+
+- `python -X utf8 tests/test_gpu_monitor.py`: `Ran 678 tests ... OK`(31.4s)。
+- `python -X utf8 -m unittest discover -s tests`: `Ran 678`, 2 个 error 全是
+  §165/§166 记的已知漂白(`TraySingleInterpreter` 两条, pystray
+  `RegisterClassEx` WinError 1410); 单独复跑该类 19 条全过。
+- `TrayPanelStatusFloor` 单跑 30 条全过; `SettingsWindowFitsItsOwnFrame` 4 条
+  全过。
+- 变异 15 条全红, 0 逃逸(见下)。
+
+### 变异验证(15 条, 全红)
+
+源码 10 条: M1 第一个按钮又把孤儿 padx 写回来 / M2 第二个按钮左右都声明(叠成
+12) / M3 第三个按钮不声明(掉成 0) / M4 声明写到右边那一份 / M5 退回裸
+`padx=_CTL_GAP` / M6 按钮行上下留白退回裸数字 / M7 `btns` 改 anchor=w /
+M8 `btns` 加 fill=x / M9 第一个按钮写 (0,0) 占位 / M10 **孤儿声明挪到
+第二个按钮(计数仍 2)**。
+
+替身 5 条(只改测试, 防"守卫自己漂"): M11 计数期望 2->3 / M12 tight 预算多算
+一份 / M13 左留白期望 0->6 / M14 替身的第一个按钮也带 padx / M15 把 per-button
+静态钉从 assertNotIn 改成 assertIn。
+
+第一轮只跑前 10 条时 M9/M10 两条逃逸: M9 是 `padx=(0,0)`(几何上等于不声明,
+但代码里多个死参数), M10 就是上面说的"孤儿声明搬家"。第二层静态钉把两条都
+按住了。
+
+### 踩过的坑
+
+- **`git ls-files --eol` 说 gpu_tray.py 是 i/lf w/crlf**: 盘上是
+  CRLF(core.autocrlf=true), 索引里是 LF。补丁脚本第一版按 LF 写锚点, 10 条
+  源码变异**全部命中 0 次**却只报"跳过(脚本问题)", 差点当成守卫失效。读文件
+  必须带 newline 空串参数, 并先断言 CR / LF / CRLF 三个计数相等。
+- **`apply_patch` 在这个环境里不存在**(会被 PowerShell 当成命令名报
+  ParserError), 只能用 Python 脚本改文件。而 python -c 后面跟双引号会被外层
+  PowerShell 吞掉 —— 改用**单引号**包整段 Python 代码, 里面就可以放心用
+  双引号, 只是不能出现 ASCII 单引号。
+- **`rtk bypass git status --porcelain` 仍然要用**: 本轮两次被压缩输出骗过
+  (一次是"干净"的假象)。补钉前先 `git diff-files --name-status`。
+- `tests/test_gpu_monitor.py` 与 `gpu_tray.py` 盘上都是 CRLF; 写回必须带
+  newline 空串参数, 否则 Python 会把换行再翻倍成 CR CR LF。
+- 本会话开头没有第二个写者在活动(三个 pwsh 进程全是本会话的), 但 §166 记过的
+  现象随时可能回来, 每轮 `git add` 前仍然先 `git diff`。
+
+### 顺带发现(未改, 记档)
+
+- **§167 候选 B/C/D 仍未动**: B 是详情窗"内容底 -> 按钮行顶"14 vs 设置窗 16
+  (差 2px), 但 `_DETAIL_BTN_PAD_Y = 6` 的数值历史上明确记为"无外部参照、未
+  钉"(§159/§165), 改它要连带改
+  `test_the_detail_window_grows_for_the_gone_row` 的 budget8/budget9
+  (tests/test_gpu_monitor.py 10990-10991 / 10998-10999), 是设计决定; C 是
+  `_DETAIL_WRAP_PX` 注释里"键名列 141"是假的(实测 132px), 余量是 19px 不是
+  注释写的 10px —— 数字偏保守所以不出错, 但注释不实; D 汇总卡已核过没问题
+  (卡间间隙 [8,8,8,8,8] == `_CARD_GAP`, 左右留白 16 == `_CARD_PAD_X`)。
+- 现网跑的仍是 10-04 旧构建 `GPUMigrate.exe`(进程 9992/16452), 本轮这个
+  3px 的修复同样不在那个 exe 里。
+
+### 用户决策待办
+
+1. 本轮 2 条提交待 push(fix + docs), 提交前先
+   `git rev-list --count origin/main..HEAD` 核实并 `git pull --rebase`。
+2. 现网 exe 仍是旧构建(10-04), §155-§167 所有间距修复一条都不在那个 exe
+   里。要同步需 `tools/verify_build.py` build -> sync -> 重启托盘(会打断
+   当前实例, 重启前问用户)。
