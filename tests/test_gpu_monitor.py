@@ -3604,6 +3604,16 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
         # rowconfigure 必须紧跟一次 r2 推进: 它声明的是刚空出来的那一行。
         # 挂在别处(比如勾选那一行)minsize 是空转 —— 那一行已经有 32px
         # 的控件, minsize 只是个下限, 拦不住什么。
+        # 间隙那一行不许写裸数字: 常量是唯一的属主。写死一次就会出现
+        # 第二个属主, 改 _FORM_BLOCK_GAP 不牵动它 —— 与 §162-165 清裸
+        # 数字是同一个理由。
+        for l in code:
+            if "grid.rowconfigure(" not in l:
+                continue
+            self.assertIn(
+                "minsize=_FORM_BLOCK_GAP", l,
+                "rowconfigure 必须用 _FORM_BLOCK_GAP, 不许写裸数字: %r"
+                % l.strip())
         for k, l in enumerate(code):
             if "minsize=_FORM_BLOCK_GAP" not in l:
                 continue
