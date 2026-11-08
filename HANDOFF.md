@@ -4,7 +4,7 @@
 
 ## 0. 现状快照（2026-10-03 第三轮重写；下面 §1–§7 是**第一轮**的原样记录，只作历史）
 
-- 分支 `main`。**已 push**：§166 轮把积压的 54 条一次性推上 `origin/main`（`3bf1c4a..fdea9ae`），本地与远端一致、0 条未 push；release `v1.0.0` 已建，tag 指向 `fdea9ae`。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准。
+- 分支 `main`。**已 push**：§166 轮推 54 条、§167 轮（第二写者）又推 2 条，现共 57 条（`3bf1c4a..02caf12`）在 `origin/main`，本地与远端一致、0 条未 push；release `v1.0.0` 已建，tag 仍指向 `fdea9ae`；§168 已把现网 exe 换成含 §155-§167 全部间距修复的新构建（活页阈值线实测 `<line class=thr x1=0 y1=10.7 x2=300 y2=10.7 />`）。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准。
 - 体量（§166 轮）：`gpu_monitor.py` 3365 行、`gpu_tray.py` 2836 行、`tests/test_gpu_monitor.py` 12789 行、README 405 行、HANDOFF 8023 行（含 §166）。
 - 测试：**678 条**，四种跑法 §166 轮实测 —— pytest 正序 `678 collected`（全量挂 2 条已知漂白，单独复跑全过，根因见 §166）、`python -X utf8 tests/test_gpu_monitor.py` `Ran 678 tests ... OK`（40.2s）、`python -X utf8 -m unittest discover -s tests` `Ran 678`（45.7s，2 个 error 同为 `RegisterClassEx` 已知漂白）、整套倒序（含守卫自身）随上述各跑覆盖。倒序那条是仓库里的正式用例 `SuiteRunsInReverseOrder`（子进程按类名自排除防套娃），不再靠人记得手工跑。**跑完整套后 7 个数据/日志文件逐字节不变**：`config.json` / `panel_ui.json` / `report.csv` / `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` / `gpu_monitor_error.log` —— 这句在 §111 时是假的，`tray_debug.log` 一直在被测试写穿，本轮才修真，见 §113。长行基线 §166 轮实测 `gpu_monitor.py 16 / gpu_tray.py 6 / tests 10`（后两个数比 §165 记录的 5/5 大，增量来自本轮并入的第二写者内容，见 §166 踩过的坑；约定是别新增）。
 - 本文档 166 节、8023 行，最新节号 §166，且**节号有倒挂**（§108 排在 §105 前面，尾部 §92 在 §87 前面）。查某件事按节号搜（`grep -n "^## 105\."`），别按物理位置读；新轮次请续号并顺手确认没有比它更大的号。
@@ -8127,13 +8127,94 @@ M8 `btns` 加 fill=x / M9 第一个按钮写 (0,0) 占位 / M10 **孤儿声明�
   `_DETAIL_WRAP_PX` 注释里"键名列 141"是假的(实测 132px), 余量是 19px 不是
   注释写的 10px —— 数字偏保守所以不出错, 但注释不实; D 汇总卡已核过没问题
   (卡间间隙 [8,8,8,8,8] == `_CARD_GAP`, 左右留白 16 == `_CARD_PAD_X`)。
-- 现网跑的仍是 10-04 旧构建 `GPUMigrate.exe`(进程 9992/16452), 本轮这个
-  3px 的修复同样不在那个 exe 里。
+- 现网已换新构建（见 §168）: 23:48 构建的 `GPUMigrate.exe`, 本轮这个 3px 的
+  修复在包里, 活实例 PID 21856/32336。
 
 ### 用户决策待办
 
-1. 本轮 2 条提交待 push(fix + docs), 提交前先
-   `git rev-list --count origin/main..HEAD` 核实并 `git pull --rebase`。
-2. 现网 exe 仍是旧构建(10-04), §155-§167 所有间距修复一条都不在那个 exe
-   里。要同步需 `tools/verify_build.py` build -> sync -> 重启托盘(会打断
-   当前实例, 重启前问用户)。
+1. [已完成] 第二写者自行 push 了 dfbc38b(fix) + 02caf12(docs), 现 0 条未
+   push（§168 核实过 `3bf1c4a..HEAD` 共 57 条、本地与 origin/main 一致）。
+2. [已完成] 用户本轮说“继续”即放行: §168 走了 build（两个 spec + 冒烟）->
+   字节码级验包 -> 换活实例（停 9992/16452、覆盖仓库根 exe、看门狗路径拉起
+   21856/32336）, 活页阈值线实测带 ` />`。
+
+
+## 168. 续一百六十七：把 §155-§167 的间距修复同步进现网 exe —— build -> 字节码级验包 -> 换活实例(部署)
+
+### 起因
+
+§167 的"用户决策待办"两条: (1) 本轮 2 条提交待 push; (2) 现网 exe 仍是
+10-04 旧构建, §155-§167 所有间距修复一条都不在那个 exe 里, 要同步需
+build -> sync -> 重启托盘(会打断当前实例, 重启前问用户)。本节把这两条闭环。
+
+### 经过
+
+- **第二写者又回来了一轮**(§166 记过的现象): 23:36-23:44 它写了 §167
+  (详情窗三个按钮的第一个不带 padx —— 它左边没有邻居, 那一份 6px 是孤儿
+  声明, 三个按钮的视觉组偏离窗心 2.5px), dfbc38b(fix) + 02caf12(docs)
+  两个提交它自己 push 了; 之后 23:50 又试了一处删 `expand=True`
+  (汇总卡 grid), 23:51 自行回退。协议不变: 不碰它在编辑的
+  `gpu_tray.py` / `tests/test_gpu_monitor.py`, 等它本轮落地(commit +
+  push)再动构建。
+- **测试**: 678 条。pytest 全量 677 passed + 1 failed —— 失败的
+  `SettingsWindowFitsItsOwnFrame::test_the_two_list_blocks_are_separated`
+  单独跑过; 类内跑 `TrayPanelStatusFloor` 挂 2 条同因。都是同进程第二个
+  `Tk()` 的 `RegisterClassEx` 漂白(§165/§166 已记, 每次挂不同条), 不是
+  真红。
+- **build**: `C:\Python314\python.exe -X -u tools\verify_build.py`, 两个
+  spec 都 build OK + `--once` 冒烟 OK(退出码 0, 枚举 3 块显卡); 产物转存
+  `dist\GPUMigrate.exe`(32314479 字节单文件)与
+  `dist\GPUMigrate-onedir\`(1145 文件)。
+- **字节码级验包**(新脚本 `.tmptest/_pyzcheck10.py`): 不满足于"构建退出码
+  0", 从 exe 里把 code object 掏出来看。`CArchiveReader(exe).extract(
+  "PYZ.pyz")` 摘出 PYZ, `ZlibArchiveReader` 取模块字节, `marshal.loads`
+  成 code object, 递归走 `co_consts`/`co_names` 并用 `dis` 数指令。三条
+  断言, 两个 exe 六项全过:
+  1. `gpu_monitor` 的常量里有 `' />'` 且无裸 `'/>'` —— §166 阈值线修复
+     (f-string 的最后一片修前是 `'/>'`, HTML 不认 `/` 终止未加引号的
+     属性值, 值被读成 `"10.7/"` 整条线丢掉);
+  2. `gpu_tray` 的 `co_names` 里有 `_FORM_BLOCK_GAP` —— §166 设置窗两段
+     名单间隙修复;
+  3. `_detail_build` 里 `LOAD_GLOBAL _CTL_GAP` 恰好 2 次 —— §167 孤儿左
+     padx 修复(修前 3 次: 第一个按钮的 `padx=(_CTL_GAP, 0)` 也 load 一次;
+     三个按钮只有两个间隙, 每个间隙只许有一个属主)。
+- **换活实例**: §167 待办里"重启前问用户"的问询, 用户本轮一个"继续"即
+  放行。`swap_exe.ps1` 跑通: 停 9992/16452(13:37 起的旧实例) -> 等文件锁
+  释放 -> `dist\GPUMigrate.exe` 覆盖仓库根 -> 看门狗同路径
+  `cmd /c start "" /B GPUMigrate.exe --ensure` 立即拉起(没等 2 分钟的
+  重复触发器)。新实例 PID 21856/32336, 23:54:47 起, 日志"启动监控:
+  阈值 50.0%... Web 面板: http://127.0.0.1:8787"。
+- **活体验证**: 拉 `http://127.0.0.1:8787/` 实页, 阈值线标签是
+  `<line class=thr x1=0 y1=10.7 x2=300 y2=10.7 />` —— §166 那个修复在
+  现网生效, 不再是修前那条被浏览器丢掉的线。
+
+### 踩坑
+
+- `_pyzcheck10.py` 第一版把 `_FORM_BLOCK_GAP` 当 `co_consts` 找, 报了假
+  FAIL —— **全局名在 `co_names` 不在 `co_consts`**(`LOAD_GLOBAL` 的参数
+  是名字索引)。第二版递归走 `co_names`, 并对序列化块直接查字节
+  (`b"_FORM_BLOCK_GAP" in marshal.dumps(gt)`)双保险。
+- **PYZ 条目是裸 marshal, 没有 16 字节 pyc 头**; 顶层 CArchive 条目才
+  有。`try_marshal` 两种都试(先裸后剥 16 字节)才对两种摘法都成立。
+- `swap_exe.ps1` 第一版挂在 PowerShell 5.1 的编码上: **无 BOM 的 UTF-8
+  `.ps1` 按 GBK 解码**, 中文 `Write-Host` 的字串被吞得引号不配对,
+  ParserError 整个脚本不执行(幸好是解析期炸, 什么都没动)。重写成纯
+  ASCII 消息后跑通。教训: 这个环境里给 PowerShell 5.1 的脚本, 用户可见
+  消息要么纯 ASCII, 要么存成带 BOM 的 UTF-8。
+- 看门狗计划任务 `GPUMigrateWatchdog` 的动作是
+  `cmd /c start "" /B "...\GPUMigrate.exe" --ensure` 的重复触发器; 手动
+  提前拉起必须用**同一条命令**(`--ensure` 是幂等的单实例路径), 直接
+  `Start-Process` 裸 exe 会走常驻托盘路径, 和 2 分钟后的看门狗撞出双实例。
+
+### 顺带发现(未改, 记档)
+
+- §167 候选 B/C/D 仍未动(B 详情窗与设置窗的"内容底 -> 按钮行顶"14 vs 16
+  是设计决定; C `_DETAIL_WRAP_PX` 注释里"键名列 141"是假的实测 132;
+  D 汇总卡已核过没问题)。
+
+### 用户决策待办
+
+1. release `v1.0.0` 的 tag 仍指 `fdea9ae`(§166 那条), §167 的 3px 修复
+   不在那个 tag 里 —— 现网跑的已是含 §167 的构建, 要不要补一个 v1.0.1
+   让 tag 跟上现网, 是产品决定。v1.0.0 的发布说明("间距统一, 阈值线
+   修复")本身没写错, 只是慢一站。
