@@ -7606,3 +7606,84 @@ N/T 行」又写 `padx=(6, 0)`，两份叠成 12px; 详情窗三个按钮都写 
    34 -> 28、汇总卡 56 -> 66、卡片间距、控件间隙都看不到。要同步需
    build -> sync -> 重启托盘(会打断实例)。
 2. 44 条新提交未 push，与 origin/main 分叉。
+
+## 163. 续一百五十四：底部状态行的截断预算与 _PANEL_PAD 脱钩, 写死的 16 会在改 padding 时悄悄多说 8px(布局)
+
+§162 扫出来但没处理的那批未命名间距字面量, 本轮取其中唯一一条**已经在源码里**的:
+`_status_line` 的 `avail = width - 16  # padx=8 两侧`。
+
+### 为什么是缺陷
+
+底部状态行(「核显: ... 独显: ... 刷新: 1 秒」+ 一串快捷键)那个 Label 在
+`_panel_build` 里是 `padx=_PANEL_PAD` pack 的, 左右两边同一个数, 所以文字真正
+能占的宽度是「实占宽度 - 2*_PANEL_PAD」。而 `_status_line` 原来写死 16, 只在行尾
+挂一句「padx=8 两侧」当说明。
+
+这不是洁癖: `_PANEL_PAD` 哪天从 8 改成 12, 那句注释不会报错, 而账目当场说谎 ——
+算出来的可用宽度比真实的大 8px, 于是对一段其实会被右沿切掉的文字说「放得下」。
+用户看到的就是半句话, 而测试全是绿的(本轮之前全套 672 条没一条量这件事)。
+
+同一批里还有三处测试镜像硬编码 `4`(`pady=(gt._PANEL_PAD, 4)` 两处、
+`pady=(0, 4)` 一处, 源码那边是 `_BLOCK_GAP`), 留作下一轮候选。
+
+### 改动
+
+- `gpu_tray.py`
+  - `avail = width - 16` -> `avail = width - 2 * _PANEL_PAD`, 并把行尾那句
+    「padx=8 两侧」展开成一段注释: 说明这个 Label 的 pack 方式、为什么是两倍、
+    以及写死 16 的后果(多说 8px -> 被右沿切掉)。
+  - 同一段上方「拿它减 16 得到一个 MagicMock」的注释同步改成 `2*_PANEL_PAD`。
+- `tests/test_gpu_monitor.py`
+  - `test_the_status_line_never_gets_clipped_at_the_right_edge` 里算「放得下 /
+    放不下」的四个 `+ 16` 全部改成 `2 * gpu_tray._PANEL_PAD`。这四个是同一个数
+    的副本: 源码改了镜像不改, 那条用例守的就是个假象。
+  - `test_the_status_line_survives_a_control_with_no_width` 的 docstring 里
+    「拿它减 16」同步。
+  - 新增 `TrayPanelStatusFloor.test_the_status_line_budget_comes_from_the_panel_pad`,
+    两头钉: 静态钉 `avail = width - 2 * _PANEL_PAD` 与
+    `tip.pack(fill="x", padx=_PANEL_PAD`; 真渲染在 1046/900/722/650 四个宽度下
+    量「root.winfo_width() - tip.winfo_width()` 必须正好等于 `2*_PANEL_PAD`。
+    先拿探针脚本量过: 四个宽度全是 16 == 2*8, 量法可靠才写进用例。
+
+### 验证结果
+
+- 两个 runner 各 **673 条全绿**(原 672 + 1 新)。
+- 变异验证 6 条(`.tmptest/_mut163.py` / `_mut163b.py`, `finally` 还原):
+  - M1 算式退回裸 `16`: 红
+  - M2 系数 `2` -> `3`: 红
+  - M3 `tip.pack` 的 `padx=_PANEL_PAD` -> `padx=0`: 红(真渲染那条抓的)
+  - M4 `_PANEL_PAD` 8 -> 12(源码与镜像一起动): 绿 —— 覆盖边界
+  - M5 `_PANEL_PAD` 8 -> 40 同时把 `wide` 那处镜像退回 `16`: 红 —— 证明镜像现在
+    真的承力(小步长时余量会把它吸收掉, 必须大步长才现形)
+  - M6 五处镜像全退回 `16` 而 `_PANEL_PAD` 不变: 绿 —— 纯卫生性改动, 无数值差异
+
+### 踩过的坑
+
+- 第一版 M5 用 `_PANEL_PAD` 8 -> 12 + 一处镜像退回 `16`, 结果**全绿**, 与预期
+  相反。原因是那条用例只断言相对关系(放得下/放不下), 4px 的偏差被 `+ 40` 的
+  余量吸收了。换成 8 -> 40 才红。教训: 镜像类变异要选**足够大的步长**, 否则
+  「绿」什么都证明不了。
+- PowerShell here-string 里写 python 补丁时, 用 `\uXXXX` 转义写中文容易抄错码位
+  (把「替」写成「代」U+4EE3), 匹配静默失败。直接用字面中文更稳(commit message
+  那一版就是这么写的)。
+
+### 顺带发现(未改, 记档)
+
+- 测试镜像里硬编码 `4` 共三处: `pady=(gt._PANEL_PAD, 4)` 两处(tests 10760 /
+  10765, `test_the_card_text_still_fits_at_the_narrowest_window`)、
+  `pady=(0, 4)` 一处(tests 10087, `test_the_filter_row_controls_share_one_baseline`)
+  —— 源码那边都是 `_BLOCK_GAP`。下一轮候选。
+- 弹泡 `padx=8, pady=6` 共 2 处(gpu_tray.py 674 / 738, `_bind_tip` 与
+  `_bind_tree_tip` 各写一遍); 同两处还各有一个屏幕边距裸 `8`
+  (`if x + w + 8 > sw`)。
+- `_DETAIL_BTN_PAD_Y` 的数值本身无外部参照, 未钉。
+- aida64.ini `[Generic]` 按界面分面设刷新率(SensorPage 3000 / GPUPage 3000 /
+  SensorIcons 5000), 面板三个面共用一个频率。
+
+### 用户决策待办
+
+1. 现网 exe 仍是旧构建(10-04), 默认窗口高度 630 -> 634 -> 644、表格行高
+   28 -> 32、设置窗 460x460 -> 460x520、详情窗 520x300 -> 520x320、筛选栏
+   34 -> 28、汇总卡 56 -> 66、卡片间距、控件间隙、状态行截断都看不到。要同步需
+   build -> sync -> 重启托盘(会打断实例)。
+2. 46 条新提交未 push, 与 origin/main 分叉。
