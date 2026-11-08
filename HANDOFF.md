@@ -4,11 +4,11 @@
 
 ## 0. 现状快照（2026-10-03 第三轮重写；下面 §1–§7 是**第一轮**的原样记录，只作历史）
 
-- 分支 `main`。**已 push**：§166 轮推 54 条（连同其 docs 提交 `66f04b1` 共 55 条）、§167 轮（第二写者）推 2 条，`3bf1c4a..02caf12` 共 57 条在 `origin/main`；§168 轮（第二写者）又推 1 条（`2d51419`）；§169 轮落 1 条 fix（`90e5084`）尚未 push，现共 59 条（`3bf1c4a..90e5084`）、未 push 1（本轮 docs 落地后为 2，push 后 `origin/main` 60 条、0 未 push）；release `v1.0.0` 已建，tag 仍指向 `fdea9ae`；release `v1.0.1` 已建（11-09，tag 指 `d097bf6`，即 §169 现网构建对应的源码树，<https://github.com/cpufreestyle/gpu-migrate/releases/tag/v1.0.1>）；§168 已把现网 exe 换成含 §155-§167 全部间距修复的新构建（活页阈值线实测 `<line class=thr x1=0 y1=10.7 x2=300 y2=10.7 />`）。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准；§170 – §174 五轮的 fix + docs 已提交（fix `4e6425f`、docs `0cf2027`）并 push，现共 63 条（`3bf1c4a..0cf2027`）、0 未 push（§0a 以后各节里 60 条那类旧计数以本节与 `git rev-list --count` 实况为准)。§175 轮(设置窗名单段 6px + 折行守卫 6px 补账 + 5 条守卫)的改动已写盘未 commit/push, 等放行(现网 exe 同样不含, 见下文现网状态)。
-- 体量（§175 轮）：`gpu_monitor.py` 3393 行、`gpu_tray.py` 2916 行、`tests/test_gpu_monitor.py` 13873 行、README 457 行、HANDOFF 8844 行（含 §175）。
+- 分支 `main`。**已 push**：§166 轮推 54 条（连同其 docs 提交 `66f04b1` 共 55 条）、§167 轮（第二写者）推 2 条，`3bf1c4a..02caf12` 共 57 条在 `origin/main`；§168 轮（第二写者）又推 1 条（`2d51419`）；§169 轮落 1 条 fix（`90e5084`）尚未 push，现共 59 条（`3bf1c4a..90e5084`）、未 push 1（本轮 docs 落地后为 2，push 后 `origin/main` 60 条、0 未 push）；release `v1.0.0` 已建，tag 仍指向 `fdea9ae`；release `v1.0.1` 已建（11-09，tag 指 `d097bf6`，即 §169 现网构建对应的源码树，<https://github.com/cpufreestyle/gpu-migrate/releases/tag/v1.0.1>）；§168 已把现网 exe 换成含 §155-§167 全部间距修复的新构建（活页阈值线实测 `<line class=thr x1=0 y1=10.7 x2=300 y2=10.7 />`）。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准；§170 – §174 五轮的 fix + docs 已提交（fix `4e6425f`、docs `0cf2027`）并 push，现共 65 条（`3bf1c4a..d87dcca`）、0 未 push（§0a 以后各节里 60 条那类旧计数以本节与 `git rev-list --count` 实况为准)。§175 轮(设置窗两个名单段 6px + 折行守卫 6px 补账 + 5 条守卫)的 fix `ed51b49` + docs `d87dcca` 已提交并 push(用户 11-09 放行), 现网 exe 也已同步(见下文现网状态)。
+- 体量（§175 轮）：`gpu_monitor.py` 3393 行、`gpu_tray.py` 2916 行、`tests/test_gpu_monitor.py` 13873 行、README 496 行、HANDOFF 8845 行（含 §175）。
 - 测试：**698 条**。§166 轮四种跑法实测（pytest 正序 `678 collected`，全量挂 2 条已知漂白、单独复跑全过，根因见 §166；`python -X utf8 tests/test_gpu_monitor.py` `Ran 678 tests ... OK`（40.2s）、`python -X utf8 -m unittest discover -s tests` `Ran 678`（45.7s，2 个 error 同为 `RegisterClassEx` 已知漂白）；整套倒序（含守卫自身）随上述各跑覆盖，倒序那条是仓库里的正式用例 `SuiteRunsInReverseOrder`（子进程按类名自排除防套娃），不再靠人记得手工跑）。§169 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（30.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（29.4s）；§170 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（31.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（30.7s），两种都带 `-B` 跑过一遍确认与 pyc 无关（见 §170 踩过的坑）；§171 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 685 tests ... OK`（30.7s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 685 tests ... OK`（32.5s），首次跑法一撞过一次 `WinError 1410` 已知漂白（Tk 建窗时序，复跑即绿，见 §171 踩过的坑）；§172 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 693 tests ... OK`（72.5s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 693`（72.7s，1 个 `RegisterClassEx` 已知漂白、单跑即过），本轮新增的 `DetailWrapWidth` 会真建一次详情窗（patch `pid_to_name`），两种跑法下都稳。§175 轮收尾复跑两种: `python -X utf8 -B tests/test_gpu_monitor.py` `Ran 698 tests ... OK`(48.4s)、`python -X utf8 -B -m unittest discover -s tests` `Ran 698 tests ... OK`(46.9s), 首跑各撞过一次 `WinError 1410` 已知漂白(复跑即绿, 见 §175 踩过的坑), 新类 `SettingsListKeyValueGap` 会真建设置窗、隔离 20 连跑全绿。**跑完整套后 7 个数据/日志文件逐字节不变**：`config.json` / `panel_ui.json` / `report.csv` / `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` / `gpu_monitor_error.log` —— 这句在 §111 时是假的，`tray_debug.log` 一直在被测试写穿，§113 才修真，§169 轮复跑实测仍旧不变（注意 `history.jsonl` 不在这 7 个里：活实例每 10s 往里追一行，拿它当"没变"的判据永远不成立，README 里那条旧声称只在没有活实例跑着的时候成立）。长行基线 §166 轮实测 `gpu_monitor.py 16 / gpu_tray.py 6 / tests 10`，§169 轮复测未变（后两个数比 §165 记录的 5/5 大，增量来自 §166 并入的第二写者内容，见 §166 踩过的坑；约定是别新增）。
-- 本文档 175 节、8844 行，最新节号 §175，且**节号有倒挂**（§108 排在 §105 前面，尾部 §92 在 §87 前面）。查某件事按节号搜（`grep -n "^## 105\."`），别按物理位置读；新轮次请续号并顺手确认没有比它更大的号。§173/§174/§175 三节文档本轮已补齐(§175 的代码+测试写盘未提交, 等放行; 现网 exe 仍不含 §175, 见下文现网状态)。
-- 现网状态：`GPUMigrate.exe --ensure` 父子对存活（11-09 03:34 换上的新实例，PID 28076/28164，§170-§174 落地后的同步轮；换前 36712/41736），看门狗 `GPUMigrateWatchdog` 每 2 分钟一次，面板 `127.0.0.1:8787` 正常（head 三条 meta 完整、无幽灵文本、阈值线 `x1=0 y1=10.7 x2=300 y2=10.7` 实测正常，迁移态列/汇总卡/火花线都在）。**现网 exe 是 11-09 02:55 重建的构建**（两个 spec 构建 + 冒烟全过，十二条字节码级断言全过——§166 阈值线/`_FORM_BLOCK_GAP`、§167 `_CTL_GAP`(因 §173 新增一处值列 padx，==2 改 ==3)、§169 `_DETAIL_BTN_PAD_Y=8`/两表单框无 expand/全模块 expand==3、§170 `th,td{padding:8px 10px;line-height:15px;`/`_ROW_H=32`、§171 viewport 完整/color-scheme 独立/无 `width=device-width,<meta` 粘团签名），含 §155-§174 全部间距修复（§170 Web 行高、§171 head、§172 折行注释/守卫、§173 详情窗键名列->值列 6px、§174 `#gpuinfo` 规则；**§175 不在其中**——写者该轮 03:00 起仍在收尾，落地后需再走一轮 build->验包->换实例），§109 的崩溃日志滚动、§110 的温度保住、PDH 展开上界这些老修复同样已在其中。`gpu_monitor_crash.log` 的性质见 §109 —— 它是原生故障现场记录，**不是**死亡证明，§105 里"0 字节 = 没崩"和"165 条 = 一直崩"两种读法都错。
+- 本文档 175 节、8845 行，最新节号 §175，且**节号有倒挂**（§108 排在 §105 前面，尾部 §92 在 §87 前面）。查某件事按节号搜（`grep -n "^## 105\."`），别按物理位置读；新轮次请续号并顺手确认没有比它更大的号。§173/§174/§175 三节文档本轮已补齐(§175 的代码+测试写盘未提交, 等放行; 现网 exe 仍不含 §175, 见下文现网状态)。
+- 现网状态：`GPUMigrate.exe --ensure` 父子对存活（11-09 04:11 换上的新实例，PID 28860/35560，§175 落地后的同步轮；换前 28076/28164），看门狗 `GPUMigrateWatchdog` 每 2 分钟一次，面板 `127.0.0.1:8787` 正常（head 三条 meta 完整、无幽灵文本、阈值线 `x1=0 y1=10.7 x2=300 y2=10.7` 实测正常，迁移态列/汇总卡/火花线都在）。**现网 exe 是 11-09 04:09 重建的构建**（两个 spec 构建 + 冒烟全过，十四条字节码级断言全过——§166 阈值线/`_FORM_BLOCK_GAP`、§167+§173 `_detail_build` 的 `LOAD_GLOBAL _CTL_GAP`==3(按钮行两处 + 值列一处)、§175 `_settings_build` 的 `LOAD_GLOBAL _CTL_GAP`==2(两个名单行值列, 改前 0 处)/模块级 `_DETAIL_WRAP_PX`=345(补账只改注释不改值)、§169 `_DETAIL_BTN_PAD_Y=8`/两表单框无 expand/全模块 expand==3、§170 `th,td{padding:8px 10px;line-height:15px;`/`_ROW_H=32`、§171 viewport 完整/color-scheme 独立/无 `width=device-width,<meta` 粘团签名），含 §155-§175 全部间距修复（§170 Web 行高、§171 head、§172 折行注释/守卫、§173 详情窗键名列->值列 6px、§174 `#gpuinfo` 规则、§175 设置窗两个名单段键名列->值列 6px + 折行守卫 6px 补账），§109 的崩溃日志滚动、§110 的温度保住、PDH 展开上界这些老修复同样已在其中。`gpu_monitor_crash.log` 的性质见 §109 —— 它是原生故障现场记录，**不是**死亡证明，§105 里"0 字节 = 没崩"和"165 条 = 一直崩"两种读法都错。
 
 ## 0a. 第一轮原文（历史，勿当作现状）
 
@@ -8455,7 +8455,7 @@ M4/M5 说明新守卫**不**负责按钮行 pady 的裸数字(既有守卫负责
   现在共用一条规则 —— 为 1px 拆规则不值, 记档。
 - §169 记的候选 C(`_DETAIL_WRAP_PX` 注释里"键名列 141"是假的, 实测 132px)仍未动。
 - ~~现网 exe(11-09 00:23 构建)**不含**本轮 Web 行高修复; 要同步需 build -> 字节码级验包 ->
-  换活实例(会打断实例, 需用户同意)。~~ **已完成(11-09 03:34 换活实例, PID 28076/28164; 02:55 构建含 §170-§174, §175 不在——写者该轮 03:00 起仍在收尾, 见 §0 现网状态)。**
+  换活实例(会打断实例, 需用户同意)。~~ **已完成(11-09 03:34 换活实例, PID 28076/28164; 02:55 构建含 §170-§174)。11-09 04:11 再换一次(PID 28860/35560, 04:09 构建含 §155-§175, 十四条断言全过, 见 §0 现网状态)。~~
 
 ### 用户决策待办
 
@@ -8813,6 +8813,7 @@ M4/M5 说明新守卫**不**负责按钮行 pady 的裸数字(既有守卫负责
 - 全量两种跑法(收尾复跑): `python -X utf8 -B tests/test_gpu_monitor.py` `Ran 698 tests ... OK`(48.4s)、`python -X utf8 -B -m unittest discover -s tests` `Ran 698 tests ... OK`(46.9s)。
 - 首跑漂白记录: 两种跑法的首跑各撞过一次 `WinError 1410`(Tk 建窗时序, 复跑即绿, §171 踩过的坑同款); 之后跑法一复跑 11 次、跑法二复跑 1 次全绿, 新类隔离 20 连跑全绿 —— 1410 是整套范围内的时序漂白, 不是新类引入的(§173 的类同样真建 Toplevel, 693 条时就有记录)。
 - 跑完整套后 7 个状态文件与跑前一致。
+- exe 级验包(11-09 04:09 构建, 提交后补做): 两个 spec 构建 + 冒烟全过, 十四条字节码级断言全过 —— §175 两条为 `_settings_build` 的 `LOAD_GLOBAL _CTL_GAP == 2`(改前 0 处; 交接摘要里预测的 ==3 不成立, 以实测为准)与模块级 `_DETAIL_WRAP_PX = 345`(补账只改注释、值不改); 04:11 经 swap_exe.ps1 + 看门狗换活实例(PID 28860/35560)后面板 200 实测: head 三条 meta 完整、阈值线 `x1=0 y1=10.7 x2=300 y2=10.7`、`#gpuinfo` 规则与 `th,td` 规则都在。
 
 ### 变异验证(6 条, 全红; 外加折行补账 3 条)
 
@@ -8833,12 +8834,12 @@ M4/M5 说明新守卫**不**负责按钮行 pady 的裸数字(既有守卫负责
 
 ### 顺带发现(未改, 记档)
 
-- 现网 exe(11-09 00:23 构建)不含 §170-§175 任何一轮; 同步需 build -> 字节码级验包 -> 换活实例, 需用户同意。
+- ~~现网 exe(11-09 00:23 构建)不含 §170-§175 任何一轮; 同步需 build -> 字节码级验包 -> 换活实例, 需用户同意。~~ **已完成(11-09 04:09 构建 + 04:11 换活实例, PID 28860/35560, 十四条断言全过, 含 §155-§175)。**
 - §173/§174 两轮的守卫本轮补跑了变异验证(上一轮的记录里没有), 结果全红, 记录补进 §173/§174 两节。
 - 反编译 AIDA64 Engineer 5.20 的压缩机仍未识别(试过 aPLib/LZ4/snappy/zlib/bz2/lzma/liblzf 与参数扫描): TFORM_* RCDATA 全是压缩流, 只认出"字面量直过 + 匹配编码"的 LZ 形状, 匹配码未破。**可选下一步**: 起 AIDA64 用 Win32 窗口枚举/UIA 量 Preferences 对话框真几何(pywin32 可用, 本机 PS 7.6.9)—— 需用户同意再动。
 
 ### 用户决策待办
 
-1. §175 的改动(gpu_tray.py 两处 padx + 注释、`DetailWrapWidth` 6px 补账、新守卫类 5 条)已写盘未 commit/push, 等放行。
-2. 现网同步(见顺带发现)。
+1. ~~§175 的改动(gpu_tray.py 两处 padx + 注释、`DetailWrapWidth` 6px 补账、新守卫类 5 条)已写盘未 commit/push, 等放行。~~ **已完成(11-09 用户放行: fix `ed51b49` + docs `d87dcca`, 698 条测试复跑全绿后提交并 push, `origin/main` 现 65 条)。**
+2. ~~现网同步(见顺带发现)。~~ **已完成(11-09 04:09 构建 -> 十四条字节码级断言 -> 04:11 换活实例, PID 28860/35560, 面板 200 实测正常)。**
 3. AIDA64 反编译的下一步(见顺带发现), 等用户决定。
