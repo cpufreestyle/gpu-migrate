@@ -7349,3 +7349,83 @@ Web 面板 `.card{padding:9px 16px}` 上下左右都是明写的 9/9/16/16, 而�
    筛选栏 34 -> 28、汇总卡 56 -> **66**、区块间距都看不到。不同步的话用户
    看不到这些优化。要同步需 build -> sync -> 重启托盘(会打断实例)。
 2. **39 条新提交未 push**, 与 origin/main 分叉。
+
+## 160. 续一百五十一：汇总卡横向 gap 是裸 8, 与 Web .cards{gap:8px} 之间没有守卫(布局)
+
+§159 扫出来但没处理的那批未命名间距字面量, 本轮取其中最值得动的一条:
+卡片与卡片之间的横向 gap。
+
+### 为什么是缺陷
+
+数值本身没错(托盘 8 == Web 8), 问题是**两边没有任何东西保证它们一致**:
+
+- `gpu_tray.py` 的 pack 那句写作 `padx=(0, 0 if i == last else 8)`, 既没有
+  常量也说不出来历。
+- 浏览器里 `.cards{display:flex;gap:8px}` 是明写的(gpu_monitor.py:1643)。
+- 标签间距(`_CARD_LABEL_GAP`)、上下内边距(`_CARD_PAD_Y`)、左右内边距
+  (`_CARD_PAD_X`)都各有跨面对照的守卫, 唯独横向 gap 这条一直没有 —— 整个
+  测试文件里搜不到 `.cards`。
+
+于是 Web 那边把 `.cards` 的 gap 一改, 托盘这边六张卡的疏密会悄悄分家, 而
+整套测试一条都不会红。这正是 §157 立的规矩要治的那类: "说不出名字的数测试
+算不出账"。
+
+### 改动
+
+- `gpu_tray.py`: 新增 `_CARD_GAP = 8`(注释写明与 Web `.cards{gap:8px}` 同数,
+  以及 AIDA64 按钮↔按钮 6px 这个同类参照), pack 那句的裸 8 换成 `_CARD_GAP`。
+- `tests/test_gpu_monitor.py`:
+  - 两处镜像同步: `else 8))` -> `else gt._CARD_GAP))`
+    (`TrayPanelStatusFloor` 里那条与 `TrayPanelCardGeometry._cards`)
+  - `TrayPanelCardGeometry` 新增两条守卫:
+    - `test_the_card_gap_matches_the_web_panel`: 从 `gm._PANEL_STYLE` 正则抠
+      `.cards{[^}]*gap:(\d+)px`, 断言与 `_CARD_GAP` 同数, 并钉住 pack 那句的
+      形状(`padx=(0, 0 if i == last else _CARD_GAP)` 必须出现在源码里)
+    - `test_the_card_gap_is_what_the_render_shows`: 真渲染量相邻两张卡的间隔
+      == `_CARD_GAP`(量的是"常量没有说谎")
+  - 类 docstring "三条分别守" -> "五条分别守"
+- `README.md`: 新增 §160 条目; 顺手把 §159 那条末尾的"补上三条"改成"补上三条
+  (§160 又添两条, 守的是横向 gap)" —— 不改的话那句话当场变成假话。
+
+### 验证结果
+
+- 两个 runner 各 **669 条全绿**(原 667 + 2 新)。
+- 变异验证 3 条全红(`.tmptest/_mut160.py`, 同时备份 gpu_tray.py 与
+  gpu_monitor.py, `finally` 里还原并 `os.remove`):
+  - `_CARD_GAP = 8 -> 6`: Web 对照守卫红(`8 != 6 : 托盘卡片间距 6px / Web 8px`)
+  - pack 那句退回裸 `8`: 形状守卫红(`padx=(0, 0 if i == last else _CARD_GAP)`
+    not found)
+  - Web `.cards` 的 `gap:8px` -> `gap:12px`: Web 对照守卫红(`12 != 8`)——
+    **这一条证明跨面对照真的通了**: 只改浏览器那边的数, 托盘测试也红
+- 已知覆盖边界与 §159 相同: 变异 2 只被静态形状守卫抓到, 真渲染那条抓不到
+  —— `_cards` 镜像自己复刻了一份布局, 它跟着常量走。
+
+### 踩过的坑
+
+- 类 docstring 锚点缩进是 4 空格不是 5(`三条分别守` 在 class docstring 里),
+  第一版补丁 assert 挂掉; 因为脚本先 assert 后写盘, 文件无损。
+- 新测试沿用现有写法 `io.open(...).read()` 不关文件, 会刷
+  `ResourceWarning: unclosed file`。现有那条
+  `test_the_card_vertical_padding_matches_the_web_panel` 一直这样, 不是本轮
+  引入的; 要收敛的话得连它一起改。
+
+### 剩下的候选(未动, 记档)
+
+- `cards.pack(..., pady=(8, _BLOCK_GAP))` 里那个裸 `8`(卡片区上边距), 而
+  Web 是 `.cards{margin:10px 0 12px}` —— 这一条**不只是没名字, 数值也对不上**
+  (托盘 8/4 vs Web 10/12), 是下一轮最值得做的一条
+- 筛选栏 `padx=6` / `padx=(6,0)` 共 4 处; 详情窗三按钮 `padx=6` 共 3 处;
+  弹泡 `padx=8, pady=6` 共 2 处; `avail = width - 16  # padx=8 两侧` 1 处
+- `test_the_card_text_still_fits_at_the_narrowest_window` 的镜像里还有一处
+  `pady=(8, 4)`
+- AIDA64 侧可作外部参照: 按钮↔按钮 gap 6px、窗体四边内边距 7px
+- aida64.ini 的 `[Generic]` 按界面分面设刷新率(SensorPage 3000 / GPUPage
+  3000 / SensorIcons 5000), 面板现在三个面共用一个频率
+
+### 用户决策待办
+
+1. 现网 exe 仍是旧构建(10-04), 默认窗口高度 630 -> 634 -> 644、表格行高
+   28 -> 32、设置窗 460x460 -> 460x520、详情窗 520x300 -> 520x320、筛选栏
+   34 -> 28、汇总卡 56 -> 66、卡片间距都看不到。不同步的话用户看不到这些
+   优化。要同步需 build -> sync -> 重启托盘(会打断实例)。
+2. 41 条新提交未 push, 与 origin/main 分叉。
