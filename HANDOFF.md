@@ -7687,3 +7687,98 @@ N/T 行」又写 `padx=(6, 0)`，两份叠成 12px; 详情窗三个按钮都写 
    34 -> 28、汇总卡 56 -> 66、卡片间距、控件间隙、状态行截断都看不到。要同步需
    build -> sync -> 重启托盘(会打断实例)。
 2. 46 条新提交未 push, 与 origin/main 分叉。
+
+## 164. 续一百五十五：两个对话框的外层内边距各写一套(12/8 vs 14/10), 收成 _DIALOG_PAD_X/_DIALOG_PAD_Y(布局)
+
+§163 扫出来但没处理的那批未命名间距字面量, 本轮取其中唯一还在**源码里**的几条:
+设置窗与详情窗的外层内边距。
+
+### 为什么是缺陷
+
+`gpu_tray.py` 里筛完 padx/pady 之后, 只剩这些裸数字:
+
+- 设置窗 `grid.pack(fill="both", expand=True, padx=12, pady=8)`
+- 设置窗 `saver.pack(pady=8)`
+- 详情窗 `frm.pack(fill="both", expand=True, padx=14, pady=10)`
+
+`git log -S` 查过: 三处都是同一个提交(`9bc4de0`, 最初那一版)带进来的,
+**没有任何理由**。两个对话框差 2px, 用户在设置窗与详情窗之间来回时看得见 ——
+左边缘不在同一条竖线上。而这三个数同时是两笔账的输入:
+
+- 设置窗 460x520 的纵向余量(注释里写着"加 grid 的 pady 8x2 与保存键 28 +
+  pady 8x2 = 484")
+- 详情窗右列的折行宽度(`avail = 窗宽 - 2*14 - 键名列 141`, 而
+  `_DETAIL_WRAP_PX = 345`, 原来只剩 6px 余量)
+
+裸数字 + 进账 = §157 立的规矩里最该办的那一类。
+
+### 改动
+
+- `gpu_tray.py`
+  - 新增 `_DIALOG_PAD_X = 12` / `_DIALOG_PAD_Y = 8`, 紧跟 `_FORM_ROW_PITCH`
+    (同一把尺的另一半: 行距管行内, 这个管窗边)。
+  - 取**设置窗那一套(较小的)**, 理由写进注释: 设置窗因此一个像素都不动, 只有
+    详情窗每边收 2px, 而它是吃宽度的那一个(要显示没空格的长路径), 收 2px 正好
+    多给它 4px 内容宽, 折行余量从 6px 涨到 10px。
+  - 三处 pack 全部改用常量; 设置窗纵向预算注释与详情窗 wraplength 注释里的账
+    同步更新(14x2/351 -> 12x2/355, 余量 6px -> 10px)。
+- `tests/test_gpu_monitor.py`
+  - 设置窗替身 `grid.pack(...)` 与 `btn.pack(pady=8)` 改用常量。
+  - 详情窗替身 `frm.pack(...)` 的 `padx=14, pady=10` 改用常量。
+  - 折行宽度那条账的 `avail = root.winfo_width() - 28 - col0` ->
+    `- 2 * self.tray._DIALOG_PAD_X - col0`(**28 是 2*14 的副本**)。
+  - 详情窗高度账 `budget8` / `budget9` 的两处 `2 * 10` ->
+    `2 * gt._DIALOG_PAD_Y`(**10 是 frm pady 单侧的副本**)。
+  - 顺手把 §163 扫出的三处镜像裸 `4` 接回 `gt._BLOCK_GAP`:
+    `test_the_card_text_still_fits_at_the_narrowest_window` 里两处
+    `pady=(gt._PANEL_PAD, 4)`、`test_the_filter_row_controls_share_one_baseline`
+    里一处 `pady=(0, 4)`。
+  - 新增 `TrayPanelStatusFloor.test_both_dialogs_share_one_outer_pad`: 静态钉两个
+    窗的 pack 形状与 `saver.pack`, 真渲染在 460x520 与 520x320 两个几何下量框架
+    偏移与内容宽度, 并钉住 12/8 这两个值。
+
+### 验证结果
+
+- 两个 runner 各 **674 条全绿**(原 673 + 1 新)。
+- 变异验证 8 条(`.tmptest/_mut164.py`, `finally` 还原):
+  - M1 设置窗 pack 退回裸 12/8: 红
+  - M2 详情窗 pack 退回裸 14/10: 红
+  - M3 `saver.pack` 退回裸 8: 红
+  - M4 `_DIALOG_PAD_X` 12 -> 20: 红(数值钉)
+  - M5 `_DIALOG_PAD_Y` 8 -> 10: 红(数值钉)
+  - M6 折行账镜像 `- 2*_DIALOG_PAD_X` -> `- 28`: 绿
+  - M7 高度账镜像 `2*_DIALOG_PAD_Y` -> `2*10`: 绿
+  - M8 卡片镜像 `gt._BLOCK_GAP` -> 裸 4: 绿
+  - M6/M7/M8 全绿是**预期的**: 当前数值下旧字面量与新算式等值, 镜像改动是卫生性
+    的。它们的价值在常量改动之后才现形(和 §163 的 M5/M6 同一形状)。
+
+### 踩过的坑
+
+- **PowerShell here-string 里写 python 补丁, 多行字符串必须每行各自闭合引号**。
+  第一版把 `"....取它\r\n" "....都不动"` 写成了跨物理行的单个字符串, 生成的测试
+  文件直接 SyntaxError(unterminated string literal)。剥离开来重写才对。
+- 注释里的空格数不能猜: `# 加 grid 的 pady 8x2` 实际是 `# ` 单空格, 我按同一段
+  里另一行的 `#   ` 三空格去匹配, 静默失败。**匹配注释前先 `repr()` 打一遍**。
+- §163 新加的守卫插在 `test_the_panel_pad_is_one_number_used_everywhere` 与
+  `test_the_filter_row_controls_share_one_baseline` 之间, 于是原来那个"spark_box
+  断言 + filter_row 定义"的锚点再也匹配不上。插新用例前先确认锚点邻居没被改动。
+
+### 顺带发现(未改, 记档)
+
+- 弹泡 `padx=8, pady=6` 共 2 处(gpu_tray.py 674 / 738, `_bind_tip` 与
+  `_bind_tree_tip` 各写一遍); 同两处还各有一个屏幕边距裸 `8`
+  (`if x + w + 8 > sw`)和一个裸 `4`(`winfo_rooty() + winfo_height() + 4`)。
+- `_DETAIL_BTN_PAD_Y` 的数值本身无外部参照, 未钉。
+- 弹泡/详情窗/设置窗这三处的数值都没有外部参照(Web 面板没有对应物, AIDA64 的
+  7px 是另一个窗体), 所以 `_DIALOG_PAD_X/Y` 的数值钉只能靠"取设置窗原有值"这个
+  理由撑着 —— 这是已知覆盖边界, 不是缺陷。
+- aida64.ini `[Generic]` 按界面分面设刷新率(SensorPage 3000 / GPUPage 3000 /
+  SensorIcons 5000), 面板三个面共用一个频率。
+
+### 用户决策待办
+
+1. 现网 exe 仍是旧构建(10-04), 默认窗口高度 630 -> 634 -> 644、表格行高
+   28 -> 32、设置窗 460x460 -> 460x520、详情窗 520x300 -> 520x320、筛选栏
+   34 -> 28、汇总卡 56 -> 66、卡片间距、控件间隙、状态行截断、对话框内边距
+   都看不到。要同步需 build -> sync -> 重启托盘(会打断实例)。
+2. 48 条新提交未 push, 与 origin/main 分叉。
