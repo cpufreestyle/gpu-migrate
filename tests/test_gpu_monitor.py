@@ -27,6 +27,7 @@ import time
 import types
 import unittest
 from collections import defaultdict
+from html.parser import HTMLParser
 from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -8498,57 +8499,366 @@ class DetailPrefRefresh(unittest.TestCase):
         self.assertIn("pref_label = lb", body)
 
 
-    def test_the_detail_wrap_fits_the_column_it_actually_gets(self):
-        u"""折行宽度必须窄于右列真能用的宽度。
+class DetailWrapWidth(unittest.TestCase):
+    u"""详情窗右列的折行宽度: 必须装进右列真能用的宽度。
 
-        520 宽的窗减掉 padx _DIALOG_PAD_Xx2、再减掉最宽那个键名列（"GPU%
-        / 核显% / 独显%" 实测 141px）之后，右列只剩 355px。wraplength
-        写成 380 时 Tk 不会替你收进窗内 —— 无空格的长路径（盘符目录
-        一路没空格的安装路径很常见）会整行画到窗户外，右沿被裁。
+    §172: 这条守卫原来量的不是"它实际得到的那一列"。520 宽的窗减掉
+    padx _DIALOG_PAD_Xx2 之后, 键名列多宽取决于字体: 真窗口的键名
+    Label 写着 font=_FONT_UI, 本机实测 132px(右列可用 364); 守卫的
+    替身没写 font, 量到的是默认 Tk 字体的 141px(右列可用 355)。
+    源码注释和守卫的文档串都拿 141/355 当"真能用的宽度" —— 真窗口
+    那份 364 从来没有任何测试碰过, 而"345 留 10px 余量"里的 10 只
+    在宽字体那份里成立(真窗口是 19)。现在两份都量: 真窗口直接建出
+    来量(键名/字体/窗宽任何一样变了, 量到的就是变之后的), 宽字体
+    替身保留作保守方向, 并钉住"替身确实更宽"; 另有一条 ast 守卫
+    盯着替身的键名列表不许和源码漂移。
+    """
+
+    KEYS = ["进程名:", "PID:", "完整路径:", "启动时间:", "当前所在:",
+            "GPU 首选项:", "GPU% / 核显% / 独显%:", "专用/共享内存:",
+            "注意:"]
+
+    def setUp(self):
+        import gpu_tray
+        self.tray = gpu_tray
+
+    def _source_keys(self):
+        u"""从 _detail_build 源码取出键名列表(含 gone 分支插的那行)。
+
+        替身镜像的键名是手抄的: 源码加了更长的键名而镜像不跟着改,
+        替身量到的 col0 就比真窗口窄 —— "保守预算"会悄悄变成乐观
+        预算。所以镜像与源码的键名列表必须同源, 这条就是那个提醒。
+        (顺序无所谓, 量的只是最宽的那一个; gone 那行源码插在最前,
+        这里排在末尾, 不影响 max。)
+        """
+        import textwrap
+        tree = ast.parse(textwrap.dedent(inspect.getsource(
+            self.tray.TrayApp._detail_build)))
+        keys, gone = [], None
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == "lines"
+                    and isinstance(node.value, ast.List)):
+                for elt in node.value.elts:
+                    if (isinstance(elt, ast.Tuple) and len(elt.elts) == 2
+                            and isinstance(elt.elts[0], ast.Constant)
+                            and isinstance(elt.elts[0].value, str)):
+                        keys.append(elt.elts[0].value)
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "insert"
+                    and isinstance(node.func.value, ast.Name)
+                    and node.func.value.id == "lines"
+                    and len(node.args) == 2
+                    and isinstance(node.args[1], ast.Tuple)
+                    and node.args[1].elts
+                    and isinstance(node.args[1].elts[0], ast.Constant)
+                    and isinstance(node.args[1].elts[0].value, str)):
+                gone = node.args[1].elts[0].value
+        if gone:
+            keys.append(gone)
+        return keys
+
+    def test_the_mirror_key_list_follows_the_source(self):
+        u"""替身的键名列表必须和 _detail_build 里那一份一致。"""
+        self.assertEqual([k + ":" for k in self._source_keys()], self.KEYS,
+                         "详情窗的键名列表变了, 这条守卫的替身没跟着变: "
+                         "宽字体那份量到的就不是同一批键名了")
+
+    def test_the_wrap_fits_the_column_it_actually_gets(self):
+        u"""折行宽度必须装进右列真能用的宽度, 宽字体那份也算一份。
+
+        520 宽窗 - padx _DIALOG_PAD_Xx2 之后: 真窗口的键名 Label 带
+        font=_FONT_UI, 本机实测 132px, 右列可用 364; 默认 Tk 字体量
+        同一批键名是 141px, 只剩 355。_DETAIL_WRAP_PX=345 两份都进
+        得去(余量 19 / 10), 窄的那份就是留给字体差异的余量 —— 换台
+        机器 _FONT_UI 的度量变了, 先报警的是它。写成 380 的话 Tk
+        不会替你收进窗内: 无空格的长路径(盘符目录一路没空格的安装
+        路径很常见)会整行画到窗户外, 右沿被裁。
         """
         import tkinter as _tk
         root = _tk.Tk()
-        # 尺寸从源码抓, 不写死: 写死过一次, 详情窗 300 -> 320 之后
-        # 这个替身还按 300 建, 量的是改之前的布局。窗高现在是
-        # "520x%d" % _DETAIL_MIN_H(按内容现算, 见 _detail_build 收尾),
-        # 这里取下限 —— 折行宽度只跟窗宽有关, 与窗高无关。
-        import re as _re
-        # 结尾的 \) 不能要: 窗高现在是 "520x%d" % _DETAIL_MIN_H,
-        # 引号后面跟的是格式化参数, 不是右括号。
-        geom = _re.search(r'root\.geometry\("(\d+)x[^"]*"',
-                          inspect.getsource(
-                              self.tray.TrayApp._detail_build))
-        self.assertIsNotNone(geom, "详情窗没写 geometry, 量不了")
-        root.geometry("%sx%d" % (geom.group(1),
-                                 self.tray._DETAIL_MIN_H))
         try:
-            frm = _tk.Frame(root)
-            # 与 _detail_build 同一套: 不 expand(§169), 理由见
-            # test_neither_dialog_form_frame_eats_the_button_gap。
-            frm.pack(fill="both",
-                      padx=self.tray._DIALOG_PAD_X,
+            # 按本机真装了的字体解析 _FONT_UI: 没有这一步, 量到的是
+            # 规格里的首选字族, 与真窗口未必同一份
+            self.tray._rebuild_fonts()
+            # 真窗口: 建出来量, 不靠替身
+            app = object.__new__(self.tray.TrayApp)
+            app._ui_root = root
+            app._ui_windows = 0
+            app.snapshot = {"util_by_pid": {1: 1.0},
+                            "pid_names": {1: "x"}}
+            app._pref_status = lambda _full: "x"
+            saved = self.tray.pid_to_name
+            self.tray.pid_to_name = lambda _pid: ("x", "C:/x.exe")
+            try:
+                app._detail_build(1, ["x", 1, "1%", "1%", "0%",
+                                      "0", "0", "x"])
+                for _ in range(4):
+                    root.update_idletasks()
+                root.update()
+                wins = [w for w in root.winfo_children()
+                        if isinstance(w, _tk.Toplevel)]
+                self.assertTrue(wins, "详情窗没建出来, 量不了")
+                win = wins[-1]
+                frm = next(
+                    c for c in win.winfo_children()
+                    if isinstance(c, _tk.Frame) and c.pack_info().get(
+                        "padx") == self.tray._DIALOG_PAD_X)
+                col0_real = max(
+                    c.winfo_reqwidth() for c in frm.winfo_children()
+                    if isinstance(c, _tk.Label)
+                    and c.grid_info().get("column") == 0)
+                width_real = win.winfo_width()
+            finally:
+                self.tray.pid_to_name = saved
+                for w in list(root.winfo_children()):
+                    if isinstance(w, _tk.Toplevel):
+                        w.destroy()
+            # 宽字体替身: 同一批键名, 不写 font=(默认 Tk 字体), 保守方向
+            frm2 = _tk.Frame(root)
+            frm2.pack(fill="both", padx=self.tray._DIALOG_PAD_X,
                       pady=self.tray._DIALOG_PAD_Y)
-            keys = ["进程名:", "PID:", "完整路径:", "启动时间:",
-                    "当前所在:", "GPU 首选项:",
-                    "GPU% / 核显% / 独显%:", "专用/共享内存:", "注意:"]
-            for i, k in enumerate(keys):
-                _tk.Label(frm, text=k, anchor="ne").grid(
-                    row=i, column=0, sticky="ne", pady=2)
-                _tk.Label(frm, text="x", anchor="w").grid(
-                    row=i, column=1, sticky="w", pady=2)
-            frm.columnconfigure(1, weight=1)
+            for i, k in enumerate(self.KEYS):
+                _tk.Label(frm2, text=k, anchor="ne").grid(
+                    row=i, column=0, sticky="ne")
+                _tk.Label(frm2, text="x", anchor="w").grid(
+                    row=i, column=1, sticky="w")
+            frm2.columnconfigure(1, weight=1)
             root.update()
-            col0 = max(_tk.Label(frm, text=k).winfo_reqwidth()
-                       for k in keys)
-            avail = (root.winfo_width() - 2 * self.tray._DIALOG_PAD_X
-                    - col0)
+            col0_wide = max(_tk.Label(frm2, text=k).winfo_reqwidth()
+                            for k in self.KEYS)
+            root.update_idletasks()
+            col0_wide = max(_tk.Label(frm2, text=k).winfo_reqwidth()
+                            for k in self.KEYS)
         finally:
             root.destroy()
-        self.assertGreater(avail, 0, "详情窗右列居然没有宽度")
+        avail_real = width_real - 2 * self.tray._DIALOG_PAD_X - col0_real
+        avail_wide = width_real - 2 * self.tray._DIALOG_PAD_X - col0_wide
+        self.assertGreater(avail_real, 0, "详情窗右列居然没有宽度")
         self.assertLessEqual(
-            self.tray._DETAIL_WRAP_PX, avail,
-            f"wraplength {self.tray._DETAIL_WRAP_PX} 比右列可用宽度"
-            f" {avail} 还大，长路径会画到窗户外")
+            self.tray._DETAIL_WRAP_PX, avail_real,
+            f"折行宽度 {self.tray._DETAIL_WRAP_PX} 比真窗口右列可用宽度"
+            f" {avail_real}(键名列 {col0_real})还大, 长路径会画到窗户外")
+        self.assertLessEqual(
+            self.tray._DETAIL_WRAP_PX, avail_wide,
+            f"折行宽度 {self.tray._DETAIL_WRAP_PX} 比宽字体右列可用宽度"
+            f" {avail_wide}(键名列 {col0_wide})还大, 换字体时长路径会画出窗外")
+        self.assertGreaterEqual(
+            col0_wide, col0_real,
+            f"宽字体替身({col0_wide})居然比真窗口({col0_real})还窄: "
+            "保守预算名不副实, 它拦不住任何东西")
+
+
+class DetailKeyValueGap(unittest.TestCase):
+    u"""详情窗"键名列 -> 值列"那 6px 横向间隙(§173)。
+
+    改之前 _detail_build 里两个 grid 调用一个 padx 都没写, 而键名列是
+    右对齐的(anchor="ne"), 列宽由最宽的键名"GPU% / 核显% / 独显%:"
+    撑满 —— 于是每一行键的冒号都正好落在列右缘, 值列左缘就是列右缘:
+    八行实测全是 0px, "进程名:" 和 "chrome.exe" 磨在一起。
+
+    为什么是缺陷而不是"紧凑":
+    - §162 立的规矩是"同一行相邻控件之间的横向间隙 = _CTL_GAP"。筛选栏
+      四项、详情窗底部三个按钮都有守卫盯着, 只有这两个对话框的 grid 列
+      从来没被这条规矩覆盖到。
+    - 同一个"键 -> 值"关系, 设置窗给出 27~43px(它的键左对齐, 短键后面
+      自然空得多), 详情窗给出 0px(键右对齐, 空的部分全落在键左边)——
+      用户在两个对话框之间来回时看得见这个差。
+    - 外部参照与 §162 同一份: 反编译 AIDA64 Engineer 5.20 的二进制
+      DFM 里, 按钮<->按钮横向 gap 6px、标签<->字段 5px, 没有任何一处
+      相邻控件是 0px 贴在一起的。
+
+    三层守卫:
+    1. 静态: ast 抠 _detail_build 里两个 grid 调用, 钉"padx 只在值列
+       上、值是 (_CTL_GAP, 0)"。每个间隙只许一个属主, 键名列那边也写
+       一个就叠成 12px(§162 筛选栏同款坑)。
+    2. 真渲染: 逐行量"键名列右缘 -> 值列左缘", 并钉键名列没被补丁撑宽、
+       窗宽没变。
+    3. 漂移: 把 _FONT_UI 换成宽一截的字体重建, 间隙仍须是 _CTL_GAP;
+       折行宽度预算还要减掉这 6px, 不然长路径会顶到值列右缘。
+    """
+
+    def setUp(self):
+        import gpu_tray
+        self.tray = gpu_tray
+
+    def _build_detail(self, font=None):
+        u"""真建一次详情窗, 返回 (root, win, frm)。
+
+        font 非空时临时换掉 _FONT_UI(宽字体替身), 用来证明间隙不随键名
+        宽度漂移。 finally 里连 pid_to_name 一起还原。
+        """
+        import tkinter as _tk
+        root = _tk.Tk()
+        saved = (self.tray._FONT_UI, self.tray._FONT_UI_BOLD,
+                 self.tray.pid_to_name)
+        if font is None:
+            self.tray._rebuild_fonts()
+        else:
+            self.tray._FONT_UI = font
+            self.tray._FONT_UI_BOLD = (font[0], font[1], "bold")
+        self.tray.pid_to_name = lambda _pid: ("x", "C:/x.exe")
+        try:
+            app = object.__new__(self.tray.TrayApp)
+            app._ui_root = root
+            app._ui_windows = 0
+            app.snapshot = {"util_by_pid": {1: 1.0},
+                            "pid_names": {1: "x"}}
+            app._pref_status = lambda _full: "x"
+            app._detail_build(1, ["x", 1, "1%", "1%", "0%",
+                                  "0", "0", "x"])
+            for _ in range(4):
+                root.update_idletasks()
+            root.update()
+            wins = [w for w in root.winfo_children()
+                    if isinstance(w, _tk.Toplevel)]
+            self.assertTrue(wins, "详情窗没建出来, 后面全是空转")
+            win = wins[-1]
+            frm = next(c for c in win.winfo_children()
+                       if isinstance(c, _tk.Frame)
+                       and c.pack_info().get("padx")
+                       == self.tray._DIALOG_PAD_X)
+        finally:
+            (self.tray._FONT_UI, self.tray._FONT_UI_BOLD,
+             self.tray.pid_to_name) = saved
+        return root, win, frm
+
+    def _grid_calls(self):
+        u"""_detail_build 里所有 .grid(...) 调用, 按 column 关键字分组。"""
+        import textwrap
+        tree = ast.parse(textwrap.dedent(inspect.getsource(
+            self.tray.TrayApp._detail_build)))
+        out = {}
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "grid"):
+                continue
+            col = None
+            for kw in node.keywords:
+                if (kw.arg == "column"
+                        and isinstance(kw.value, ast.Constant)):
+                    col = kw.value.value
+            if col is not None:
+                out.setdefault(col, []).append(node)
+        return out
+
+    def test_the_gap_has_exactly_one_owner(self):
+        u"""padx 必须只长在值列上, 且值是 (_CTL_GAP, 0)。
+
+        "每个间隙只许一个属主"是 §162 立的规矩: 筛选栏当年左右都写
+        padx=6, 同一个间隙被叠成 12px。这里反过来钉 —— 键名列那边一个
+        padx 都不许有, 值列必须声明自己左边那一份。
+        """
+        calls = self._grid_calls()
+        self.assertEqual(sorted(calls), [0, 1],
+                         "详情窗的 grid 列不是 0/1 两个: %s"
+                         % sorted(calls))
+        self.assertEqual(len(calls[0]), 1, "键名列的 grid 调用不唯一")
+        self.assertEqual(len(calls[1]), 1, "值列的 grid 调用不唯一")
+        key_kw = {kw.arg for kw in calls[0][0].keywords}
+        self.assertNotIn("padx", key_kw,
+                         "键名列也声明了 padx: 两边都写这 6px 就叠成 12px"
+                         "(§162 筛选栏同款坑)")
+        val_kw = {kw.arg: kw.value for kw in calls[1][0].keywords}
+        self.assertIn("padx", val_kw,
+                      "值列没声明 padx: 键名列右对齐、列宽由最宽的键撑满,"
+                      " 没有这 6px 冒号就贴在值上(改前八行实测全是 0)")
+        padx = val_kw["padx"]
+        self.assertTrue(isinstance(padx, ast.Tuple)
+                        and len(padx.elts) == 2,
+                        "值列的 padx 不是二元组: %r" % (padx,))
+        left, right = padx.elts
+        self.assertTrue(isinstance(left, ast.Name)
+                        and left.id == "_CTL_GAP",
+                        "值列 padx 的左值不是 _CTL_GAP: 横向间隙要跟"
+                        " §162 的 _CTL_GAP 同一个数")
+        self.assertTrue(isinstance(right, ast.Constant)
+                        and right.value == 0,
+                        "值列 padx 的右值不是 0: 只许声明左边那一份, "
+                        "写右边就贴不上了")
+
+    def _gaps(self, frm):
+        kids = frm.winfo_children()
+        self.assertEqual(len(kids) % 2, 0, "键/值不是成对的: %d 个" % len(kids))
+        out = []
+        for i in range(0, len(kids), 2):
+            k, v = kids[i], kids[i + 1]
+            self.assertEqual(k.grid_info().get("column"), 0,
+                             "第 %d 行第一个控件不在键名列" % (i // 2))
+            self.assertEqual(v.grid_info().get("column"), 1,
+                             "第 %d 行第二个控件不在值列" % (i // 2))
+            out.append(v.winfo_x() - (k.winfo_x() + k.winfo_width()))
+        return out
+
+    def test_every_row_has_the_same_key_to_value_gap(self):
+        u"""真渲染逐行量"键名列右缘 -> 值列左缘", 八行必须全是 _CTL_GAP。
+
+        改前八行全是 0px(最宽的键把键名列撑满, 右对齐的键冒号正好落在
+        列右缘)。这条还钉两件防"换个修法"的事: 键名列的实占宽度必须等于
+        它的请求宽度(证明 padx 没长到键身上), 窗宽必须还是 520(证明没有
+        靠改窗宽去腾出这 6px)。
+        """
+        root, win, frm = self._build_detail()
+        try:
+            gaps = self._gaps(frm)
+            self.assertTrue(gaps, "一行都没量到")
+            self.assertEqual(gaps, [self.tray._CTL_GAP] * len(gaps),
+                             "键名列 -> 值列的间隙不是清一色 %dpx: %s"
+                             % (self.tray._CTL_GAP, gaps))
+            for k in frm.winfo_children():
+                if k.grid_info().get("column") != 0:
+                    continue
+                self.assertEqual(k.winfo_width(), k.winfo_reqwidth(),
+                                 "键名列的实占宽度比请求宽度大: padx 长到键"
+                                 "身上了, 两边都写会叠成 12px")
+            self.assertEqual(win.winfo_width(), 520,
+                             "详情窗窗宽被改了: 这 6px 该从间隙里出, "
+                             "不该从窗宽里出")
+        finally:
+            root.destroy()
+
+    def test_the_gap_does_not_drift_with_the_font(self):
+        u"""换一套宽一截的字体重建, 间隙仍须是 _CTL_GAP。
+
+        间隙必须来自 padx 这个常量, 不能来自"当前键名列有多宽"这种会随
+        字体漂移的量。这条把 _FONT_UI 换成大字号的 Arial 再建一次窗:
+        键名列宽一截, 间隙一个像素都不许多。
+        """
+        root, _win, frm = self._build_detail(font=("Arial", 16))
+        try:
+            gaps = self._gaps(frm)
+            self.assertEqual(gaps, [self.tray._CTL_GAP] * len(gaps),
+                             "宽字体下键名列 -> 值列的间隙变了: %s"
+                             " (间隙不能随键名宽度漂移)" % gaps)
+        finally:
+            root.destroy()
+
+    def test_the_wrap_budget_pays_for_the_gap(self):
+        u"""折行宽度预算要减掉这 6px, 不然长路径会顶到值列右缘。
+
+        _DETAIL_WRAP_PX 是值 Label 的 wraplength。键名列右边多了 6px
+        间隙, 值列可用宽度就少 6px —— DetailWrapWidth 那条算的账是
+        "窗宽 - 两侧 _DIALOG_PAD_X - 键名列", 没减这 6px, 长路径会一直
+        涨到贴住列右缘。这里把减掉的 6px 补进账里。
+        """
+        root, win, frm = self._build_detail()
+        try:
+            col0 = max(c.winfo_width() for c in frm.winfo_children()
+                       if c.grid_info().get("column") == 0)
+            avail = (win.winfo_width() - 2 * self.tray._DIALOG_PAD_X
+                     - col0 - self.tray._CTL_GAP)
+            self.assertGreater(avail, 0, "值列居然没有可用宽度")
+            self.assertLessEqual(
+                self.tray._DETAIL_WRAP_PX, avail,
+                "折行宽度 %d 超过了值列扣除 6px 间隙后的可用宽度 %d"
+                "(键名列 %d): 长路径会顶到列右缘"
+                % (self.tray._DETAIL_WRAP_PX, avail, col0))
+        finally:
+            root.destroy()
+
 
 class TrayIconRedrawGuard(unittest.TestCase):
     """占用数字没变就别重设托盘图标: 每次设都重建(见 _refresh_title 的注释)。
@@ -8848,6 +9158,174 @@ class SparklineHtml(unittest.TestCase):
                 "history": self.POINTS}
         self.assertIn("vector-effect:non-scaling-stroke",
                       gm.panel_html(snap, {}))
+
+
+class _HeadParser(HTMLParser):
+    """收集 <head> 里的结构与 body 开头的事件, 不管树。"""
+
+    def __init__(self):
+        HTMLParser.__init__(self, convert_charrefs=True)
+        self.metas = []           # [属性对 list, ...] 保序, 不并重复键
+        self.html_attrs = None    # <html> 标签的属性对
+        self.head_tags = []       # head 区间里的 (标签, 属性对)
+        self.bare_head_text = []  # head 里 title/style/script 之外的裸文本
+        self.body_events = []     # body 之后的事件 ("start", tag)/("data", 文本)
+        self.in_head = False
+        self.in_body = False
+        self._skip = 0            # title/style/script 的内容不算裸文本
+
+    def handle_starttag(self, tag, attrs):
+        if self.html_attrs is None:
+            self.html_attrs = attrs
+        if self.in_head:
+            self.head_tags.append((tag, attrs))
+        if tag == "meta":
+            self.metas.append(attrs)
+        elif tag == "head":
+            self.in_head = True
+        elif tag in ("title", "style", "script"):
+            self._skip += 1
+        elif tag == "body":
+            self.in_body = True
+        elif self.in_body:
+            self.body_events.append(("start", tag))
+
+    def handle_endtag(self, tag):
+        if tag in ("title", "style", "script") and self._skip:
+            self._skip -= 1
+        elif tag == "head":
+            self.in_head = False
+        elif tag == "body":
+            self.in_body = False
+
+    def handle_data(self, data):
+        if self.in_head and not self._skip:
+            self.bare_head_text.append(data)
+        if self.in_body:
+            self.body_events.append(("data", data))
+
+
+class WebPanelHeadStructure(unittest.TestCase):
+    """面板 <head> 的结构: 三个 meta 一个都不能破, body 开口就是标题。
+
+    §171 的缺陷(全貌见 HANDOFF §171): color-scheme 那条 meta 被插进了
+    viewport 字符串中间, 拼出来是一团——
+
+        <meta name='viewport' content='width=device-width,<meta
+        name='color-scheme' content='light dark'>initial-scale=1'>
+
+    浏览器按标签解析, 读到的和源码写的完全不是一回事: viewport 的
+    content 到 "width=device-width,<meta name=" 就被引号闭合了, 于是
+    viewport 从未生效; 真正的 color-scheme meta 从来不存在; 尾巴上
+    "initial-scale=1'>" 是 head 里的裸文本, 浏览器把它挪到 body 开头,
+    整页被顶下去 21px。而子串断言对这一团全盲——"name='viewport'"
+    和 "width=device-width" 两个子串都还在(§147 那条就是这么绿过去的)。
+    所以这里用 html.parser 按浏览器的方式解析一遍, 盯结构不盯字符串。
+    """
+
+    POINTS = [(float(i), 5.0) for i in range(30)]
+
+    def _variants(self):
+        """head 与数据无关, 但每一种快照都得过同一条。
+
+        空历史/有历史/有温度/无阈值/暂停中: 变的都只是 body 里的东西,
+        head 这一行是模板里唯一不变的部分。
+        """
+        base = dict(ModeDisplay.SNAP)
+        yield "空快照", base
+        yield "有历史", {**base, "history": self.POINTS}
+        yield "有温度", {**base, "dgpu_temp": 61}
+        yield "无阈值", {k: v for k, v in base.items() if k != "threshold"}
+        yield "暂停中", {**base, "paused": True}
+
+    def _parse(self, snap):
+        parser = _HeadParser()
+        parser.feed(gm.panel_html(snap, {}))
+        parser.close()
+        return parser
+
+    def test_the_viewport_meta_is_one_intact_tag(self):
+        """viewport 的 content 必须原样是 width=device-width,initial-scale=1。
+
+        §171 之前它是 "width=device-width,<meta name=" —— 引号在
+        "<meta" 后面就闭合了, initial-scale 整个落在窗外。
+        """
+        for label, snap in self._variants():
+            with self.subTest(快照=label):
+                metas = self._parse(snap).metas
+                viewport = [a for a in metas
+                            if dict(a).get("name") == "viewport"]
+                self.assertEqual(len(viewport), 1,
+                                 "viewport meta 不是一个: %r" % (metas,))
+                content = dict(viewport[0]).get("content")
+                self.assertEqual(content, "width=device-width,initial-scale=1",
+                                 "viewport content 破了: %r" % (content,))
+
+    def test_the_color_scheme_meta_is_its_own_tag(self):
+        """color-scheme 得是独立的 meta, content 带着 light dark。
+
+        §171 之前它被吃进 viewport 的属性值里, 页面上一条都没有。
+        """
+        for label, snap in self._variants():
+            with self.subTest(快照=label):
+                metas = self._parse(snap).metas
+                scheme = [a for a in metas
+                          if dict(a).get("name") == "color-scheme"]
+                self.assertEqual(len(scheme), 1,
+                                 "color-scheme meta 不是一个: %r" % (metas,))
+                content = dict(scheme[0]).get("content")
+                self.assertEqual(content, "light dark",
+                                 "color-scheme content 破了: %r" % (content,))
+
+    def test_the_head_has_exactly_three_metas(self):
+        """charset / viewport / color-scheme, 多一个少一个都是 head 破了。
+
+        §171 之前只有两个: color-scheme 那条并进了 viewport 的标签里。
+        """
+        for label, snap in self._variants():
+            with self.subTest(快照=label):
+                names = [dict(a).get("name") for a in self._parse(snap).metas]
+                self.assertEqual(names, [None, "viewport", "color-scheme"],
+                                 "head 里的 meta 串不对: %r" % (names,))
+
+    def test_no_head_attribute_swallows_a_tag(self):
+        """属性值里出现 "<" 说明引号没闭合, 后面的标签被吃成了值的一部分。
+
+        §171 之前 viewport 的 content 就是 "<meta name=" 结尾的。
+        """
+        for label, snap in self._variants():
+            with self.subTest(快照=label):
+                for tag, attrs in self._parse(snap).head_tags:
+                    for key, value in attrs:
+                        self.assertNotIn(
+                            "<", value or "",
+                            "head 里 %s 的 %s 属性吞了标签: %r"
+                            % (tag, key, value))
+
+    def test_the_head_carries_no_stray_text(self):
+        """head 里 title/style 之外的裸文本, 浏览器会把它挪到 body 开头。
+
+        §171 的 "initial-scale=1'>" 就是这么漂上去的, 把整页顶低 21px
+        (h2 的 top 从 16 变成 37.43)。
+        """
+        for label, snap in self._variants():
+            with self.subTest(快照=label):
+                text = "".join(self._parse(snap).bare_head_text)
+                self.assertEqual(text.strip(), "",
+                                 "head 里有裸文本: %r" % (text,))
+
+    def test_the_body_opens_with_the_title(self):
+        """body 开口第一个事件就得是 <h2>, 前面不许有文本或别的标签。
+
+        这一条与上一条是同一个缺陷的两个观测面: 解析器看见裸文本在
+        head, 浏览器看见它在 body 开头。
+        """
+        for label, snap in self._variants():
+            with self.subTest(快照=label):
+                events = self._parse(snap).body_events
+                self.assertTrue(events, "body 里一个事件都没有")
+                self.assertEqual(events[0], ("start", "h2"),
+                                 "body 开头不是 h2: %r" % (events[:3],))
 
 
 class PanelHtmlProcessNames(unittest.TestCase):
@@ -9693,7 +10171,7 @@ class WebPanelLegibility(unittest.TestCase):
     COLORED = ("#hint", "#hidden", ".sparkempty", ".card span",
                ".sparkwrap .thr", ".sparkwrap .corner")
     SIZED = ("#hint", "#hidden", ".sparkempty", ".card span", "#conn",
-             ".sparkwrap span")
+             ".sparkwrap span", "#gpuinfo")
 
     def setUp(self):
         self.css = gm._PANEL_STYLE
@@ -9810,6 +10288,76 @@ class WebPanelLegibility(unittest.TestCase):
         self.assertEqual(bad, [],
                          "这些文字色在自家主题的底上不达 AA: %s" % bad)
 
+
+class WebPanelGpuInfoSpacing(unittest.TestCase):
+    u"""#gpuinfo 那两行(核显/独显)必须有自己的规则, 不许落在默认值上。
+
+    从前 _PANEL_STYLE 里没有 #gpuinfo 这条规则, <p id=gpuinfo> 整个吃
+    浏览器默认 <p> 样式: 字号 16px(面板其余文字 12/13px), 上下 margin
+    各 16px。真渲染实测(Chrome 开本地面板页量的)两处间隙全被默认
+    margin 折叠吞掉 —— #policy 底边 -> #gpuinfo 顶边 16px(设计意图
+    2px), #gpuinfo 底边 -> 卡片顶边 16px(.cards 写的 margin-top:10px
+    与默认 16px 相邻折叠取大者)。§160 记的"那个 10px 是从 #gpuinfo
+    底边量的"在那时是句假话: 量出来的是 16px。
+
+    外部参照同 §162: 反编译 AIDA64 Engineer 5.20 的二进制 DFM
+    (TFORM_DISKBENCH)里没有一处间距交给默认值 —— 标签<->字段 5px、
+    按钮<->按钮 6px、窗体内容区四边 7px, 全是明写的。默认值不可控:
+    换个浏览器/UA 样式表, 间隙与字号一起漂, 而没有任何测试量得到。
+    """
+
+    def test_the_gpu_info_line_declares_its_own_font_size(self):
+        u"""字号必须明写, 且与 #policy / 表格同档(13px)。
+
+        16px 是浏览器默认 <p> 字号, 比面板上任何一行正文都大一号 ——
+        这两行显卡名是"这台机器是谁"的正文, 不是标题, 也不是脚注。
+        """
+        self.assertIn("#gpuinfo{", gm._PANEL_STYLE,
+                      "#gpuinfo 没有规则: 又回到浏览器默认 <p> 样式"
+                      "(16px 字号 + 16px 上下 margin)")
+        block = _css_block(gm._PANEL_STYLE, "#gpuinfo")
+        m = re.search("font-size:([0-9]+)px", block)
+        self.assertIsNotNone(m, "#gpuinfo 的规则里没有字号")
+        self.assertEqual(int(m.group(1)), 13,
+                         "#gpuinfo 的字号该与 #policy / 表格同档(13px), "
+                         "现在 %s" % m.group(1))
+
+    def test_the_gpu_info_line_drops_the_default_paragraph_margins(self):
+        u"""margin 必须清零: 默认那 16px 会把面板的间距阶梯折叠成大数。
+
+        #policy 的 margin-bottom 是 2px, .cards 的 margin-top 是 10px,
+        两处都该按写了的数渲染; 夹在中间的默认 16px 取大者, 把 2 和
+        10 都吞成 16。简写值逐段查: "0 0" 这种等价写法算清零, 但任何
+        一个非零段都算犯规。
+        """
+        self.assertIn("#gpuinfo{", gm._PANEL_STYLE, "#gpuinfo 没有规则")
+        block = _css_block(gm._PANEL_STYLE, "#gpuinfo")
+        m = re.search("margin:([^;}]+)", block)
+        self.assertIsNotNone(m, "#gpuinfo 没写 margin: 浏览器默认 <p> 的 "
+                                "16px 上下 margin 会回来")
+        parts = m.group(1).split()
+        self.assertTrue(parts and all(x == "0" for x in parts),
+                        "#gpuinfo 的 margin 还有非零段 %r: 上下两处间隙会"
+                        "被折叠取大者" % (parts,))
+
+    def test_the_gap_below_the_gpu_info_belongs_to_the_cards_alone(self):
+        u"""#gpuinfo 不许声明上/下边距, 卡片上方那 10px 归 .cards 一个属主。
+
+        §162 立的规矩: 每个间隙只许有一个属主。#gpuinfo 写了
+        margin-top / margin-bottom 就会与邻居的 margin 折叠取大者 ——
+        写 6px 得 10px(碰巧看着对), 写 12px 得 12px(静默错), 而没有
+        任何测试量得到。这条把"不许写"钉死, 不是把"写几"钉死。
+        """
+        block = _css_block(gm._PANEL_STYLE, "#gpuinfo")
+        for side in ("margin-top", "margin-bottom"):
+            self.assertNotIn(side, block,
+                             "#gpuinfo 又声明 %s 了: 与邻居的 margin 折叠"
+                             "取大者, 间隙成未知数" % side)
+        cards = _css_block(gm._PANEL_STYLE, ".cards")
+        m = re.search("margin:([0-9]+)px 0 ([0-9]+)px", cards)
+        self.assertIsNotNone(m, ".cards 的 margin 不见了")
+        self.assertEqual(int(m.group(1)), 10,
+                         "卡片上方那 10px 是 #gpuinfo 底边量距的唯一属主")
 
 
 class TrayPaletteLegibility(unittest.TestCase):
@@ -10131,7 +10679,11 @@ class TrayPanelStatusFloor(unittest.TestCase):
         #conn / #gpuinfo 四段, 那个 10px 是从 #gpuinfo 底边量的; 托盘的汇总
         卡是第一个区块, 顶上就是窗口上沿。两个数量的参照物不同, 对不上是应
         该的 —— §160 里"托盘 8/4 vs Web 10/12, 数值也对不上"那句是错的, 本节
-        改正。
+        改正。(§174 补: "从 #gpuinfo 底边量"这句话在 §174 前也不成立 ——
+        #gpuinfo 当时一条规则都没有, 浏览器默认 <p> 的 16px 下 margin 与
+        .cards 的 10px 相邻折叠取大者, 真渲染量出来是 16px。补了
+        #gpuinfo{font-size:13px;margin:0} 之后那 10px 才真的是从 gpuinfo
+        底边量的, 见 WebPanelGpuInfoSpacing。)
         """
         import tkinter as _tk
         import gpu_tray as gt
@@ -10756,9 +11308,16 @@ class TrayPanelStatusFloor(unittest.TestCase):
         # 说明第一个按钮又把左边的孤儿 padx 写回来了(§167 修的就是这个),
         # 少一处说明某个间隙掉成 0。这一处是防"只改替身"的那一层: 下面
         # 真渲染量的是替身的几何, 替身与源码漂开了, 只有这个数字还咬得住。
-        self.assertEqual(dcode.count("padx=(_CTL_GAP, 0)"), 2,
+        # 只数按钮行那三段, 不数整个函数: §173 给"键名列 -> 值列"那一列
+        # 也声明了一份 padx=(_CTL_GAP, 0)(归 DetailKeyValueGap 管), 它
+        # 在第一个按钮之前, 整个函数数下来会多那一处。
+        segs = dcode.split("tk.Button(btns, text=")[1:]
+        self.assertEqual(len(segs), 3,
+                         "详情窗按钮行该有三个按钮, 实际 %d 个" % len(segs))
+        self.assertEqual("".join(segs).count("padx=(_CTL_GAP, 0)"), 2,
                          "详情窗三个按钮该有两处 padx=(_CTL_GAP, 0), "
-                         "实际 %d 处" % dcode.count("padx=(_CTL_GAP, 0)"))
+                         "实际 %d 处"
+                         % "".join(segs).count("padx=(_CTL_GAP, 0)"))
         self.assertIn("btns.pack(pady=_DETAIL_BTN_PAD_Y)", body,
                       "详情窗按钮行的上下留白又是裸数字: 它进窗高账, "
                       "该用 _DETAIL_BTN_PAD_Y")
@@ -10767,9 +11326,6 @@ class TrayPanelStatusFloor(unittest.TestCase):
         # 替身的几何, 替身与源码漂开了只有这一层还咬得住, 所以三个按钮的
         # pack 各自钉形状: 第一个不许出现 padx, 后两个必须是
         # padx=(_CTL_GAP, 0) 这一个形状。
-        segs = dcode.split("tk.Button(btns, text=")[1:]
-        self.assertEqual(len(segs), 3,
-                         "详情窗按钮行该有三个按钮, 实际 %d 个" % len(segs))
         for idx, seg in enumerate(segs):
             stmt = seg.split("tk.Button(btns, text=")[0]
             call = stmt[stmt.index(".pack("):]
@@ -11241,31 +11797,63 @@ class TrayPanelStatusFloor(unittest.TestCase):
         for text in ("1040x700+10+10", "1200x900+0+0"):
             self.assertEqual(gt._onscreen_geometry(text, 1512, 949), text)
 
-    def test_the_table_row_inner_padding_matches_the_web_panel(self):
-        u"""表格行内文字上下留白, 托盘和 Web 得一样。
+    def test_the_table_row_box_matches_the_web_panel(self):
+        u"""表格行的整个盒子 —— 行高与行内留白 —— 托盘和 Web 得同一个数。
 
-        行距不是只有"区块之间"那一层: 一行 28px 里文字占 16px(字号 9 的
-        linespace), 剩下 12px 是上下各 6px 的呼吸。Web 侧 td 是
-        padding:6px 10px + border-bottom:1px, 行盒 15.6px, 算出来
-        12.4px —— 两边都是 6px, 这一条要有人盯着。
+        §153 把托盘 rowheight 从 28 提到 32(文字上下各 8px), Web 侧
+        td 还是 padding:6px + 自然行盒, 12 vs 16 分家 4px。更糟的是盯
+        着这件事的守卫自己拿写死的 28 在算托盘那份, 托盘真改成 32 之后
+        它照样绿: 两边都错, 错得一样。所以两边都从现行来源现取, 一个
+        字面量都不留(16 是唯一的例外, 理由见下面第三条)。
+
+        三层, 缺一层就有漏网:
+        1. 静态: th,td 规则只许一条带 padding(深色档只覆盖边框色), 多一
+           条少一条都说明规则被拆坏, 留白没法对账; 块里必须同时有
+           padding 与 line-height, 少后者行高就退化成浏览器自然行盒,
+           随 fallback 字体漂移, 不再是钉死的 32。
+        2. 等式: 托盘侧读 _ROW_H, Web 侧从抠出来的块算留白(padding_y
+           *2)与行盒(padding_y*2 + line-height + border 1px)。留白相等、
+           行盒 == _ROW_H, 两个都断言。
+        3. linespace 16 是唯一保留的字面量: 单测里没有 Tk 根窗口,
+           tkfont.Font 会抛 RuntimeError。16 是表格字体 _FONT_UI(Segoe
+           UI Variable Text 9)的实测值; TkDefaultFont 的 17 是另一套字体,
+           表格不用它, 别"顺手"改成 17。
+
+        改后的账: padding 8*2 + line-height 15 + border 1 = 32 = _ROW_H,
+        留白 32 - 16 = 16 = 8*2, 两个面同一个数。
 
         表头高度不在此列: 表头由 Treeview.Heading 的 padding 纵向值
         线性决定(实测 22 + 2*padding_y, padding=(6,5) 时是 32px),
-        而 Web 的 th 是 28.6px。这不是常数能对齐的, 硬凑只会把数据
-        行数挤掉 —— §141 记的“表头定死 38px、padding 改动无效”
-        是错的, 那次量的不是 clam 主题生效后的值。
+        而 Web 的 th 实测 31px(border-collapse 把 th|td 之间那条 1px
+        对半劈, th 只落下半条, 圆整比 td 少 1px)。这不是常数能对齐
+        的, 硬凑只会把数据行数挤掉。
         """
         import gpu_tray as gt
-        # 字号 9 的 linespace 实测 16px(见 _STATUS_H 注释), 这里不建
-        # Tk 根窗口: 单测里没有 root, tkfont.Font 会抛 RuntimeError。
+        import gpu_monitor as gm
         ls = 16
-        tray_inner = 28 - ls
-        # Web: td padding 6px*2 + 行盒(13px*1.2) + border 1px
-        web_row = 6 * 2 + round(13 * 1.2) + 1
-        web_inner = web_row - round(13 * 1.2) - 1
+        tray_inner = gt._ROW_H - ls
+        # 静态一层: 带 padding 的 th,td 规则只许一条
+        blocks = [b for b in re.findall(r"th,td\{[^}]*\}", gm._PANEL_STYLE)
+                  if "padding:" in b]
+        self.assertEqual(len(blocks), 1,
+                         "带 padding 的 th,td 规则不是一条: %r" % (blocks,))
+        block = blocks[0]
+        pad = re.search(r"padding:(\d+)px", block)
+        self.assertIsNotNone(pad, "th,td 的 padding 不见了")
+        lh = re.search(r"line-height:(\d+)px", block)
+        self.assertIsNotNone(lh,
+                             "th,td 的 line-height 不见了: 行高会退化成浏"
+                             "览器自然行盒, 随字体漂移")
+        web_inner = float(pad.group(1)) * 2
         self.assertEqual(tray_inner, web_inner,
-                         "托盘行内留白 %dpx / Web %dpx: 表格密度两种手感"
-                         % (tray_inner, web_inner))
+                         "托盘行内留白 %dpx / Web %spx: 表格密度两种手感"
+                         % (tray_inner, pad.group(1)))
+        web_box = int(pad.group(1)) * 2 + int(lh.group(1)) + 1
+        self.assertEqual(gt._ROW_H, web_box,
+                         "托盘行盒 %dpx / Web %dpx: 托盘 rowheight 与 Web "
+                         "的 padding+line-height+border 不是同一个盒子"
+                         % (gt._ROW_H, web_box))
+
 
 
     def test_the_card_label_gap_matches_the_web_panel(self):

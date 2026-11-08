@@ -316,10 +316,13 @@ _STATUS_H = 52
 # 改正)。
 _PANEL_PAD = 8
 
-# 表格行高。字号 9 的 linespace 是 17px, 28px 行高只给文字上下各
-# 5.5px 留白; Win11 Fluent 的表格行在这个字号下宽得多, 而托盘
-# 这张表是要盯着看的 —— 提到 32, 文字上下各 7.5px, 和任务管理器
-# 列表一个密度。代价是纵向预算: 12 行从 336 涨到 384(+48),
+# 表格行高。表格字体(_FONT_UI, Segoe UI Variable Text 9)的
+# linespace 实测 16px, 28px 行高只给文字上下各 6px 留白; Win11
+# Fluent 的表格行在这个字号下宽得多, 而托盘这张表是要盯着看的
+# —— 提到 32, 文字上下各 8px, 和任务管理器列表一个密度。(17px
+# 那个数是 TkDefaultFont/Microsoft YaHei UI 的 linespace, 表格
+# 不用它; §153 当时量错了字体, 留白数跟着差了 0.5px。)
+# 代价是纵向预算: 12 行从 336 涨到 384(+48),
 # _PANEL_MIN_H 跟着提到 630, 否则 pack 会反过来把趋势图和底部
 # 状态行压扁。窗口位置不变(_onscreen_geometry 只提高度不动
 # 位置), 768 高屏幕上 y=55 时底部到 685, 距屏底还有 83px。
@@ -1062,7 +1065,8 @@ def _parse_geometry(text):
 # 线性决定: 实测 22 + 2 * padding_y, padding=(6,5) 时是 32px。
 # (§141 记的“表头定死 38px、padding 改动无效”是错的: 那次量的
 #  是 clam 主题没生效时的默认值。改 padding 表头高度会跟着变。)
-# Web 的 th 是 28.6px, 差 3.4px —— ttk 布局的底噪, 不追。
+# Web 的 th 实测 31px(§170 起 padding 8 + line-height 15 + 半条 border),
+# 差 1px —— ttk 布局的底噪, 不追。
 _TREE_HEAD_H = 32
 # 表头的 padding(横向, 纵向)。纵向这个数就是表头高度的一半来源:
 # 实测表头高 = 22 + 2 * _HEAD_PAD_Y, 所以改它等于改 _TREE_HEAD_H,
@@ -2521,14 +2525,33 @@ class TrayApp:
                          font=_FONT_UI).grid(
                     row=i, column=0, sticky="ne", ipady=det_ipady)
                 # wraplength 不能比右列真能用的宽度大: 520 宽窗减掉
-                # padx _DIALOG_PAD_Xx2 与键名列 141 之后只剩 355, 写
-                # 380 的话 Tk 直接把这一行画到窗户外(它只保证折到
-                # wraplength, 不保证折得进窗)。345 留 10px 余量给字体
-                # 差异。
+                # padx _DIALOG_PAD_Xx2 之后, 键名列多宽看字体 —— 本行
+                # Label 带 font=_FONT_UI, 实测 132, 右列可用 364; 换
+                # 成更宽的字体(默认 Tk 字体量同一批键名是 141)只剩
+                # 355。345 两份预算都进得去(余量 19 / 10), 窄的那份
+                # 就是留给字体差异的余量: 换台机器 _FONT_UI 的度量变
+                # 了, 先报警的是它。写 380 的话 Tk 直接把这一行画到
+                # 窗户外(它只保证折到 wraplength, 不保证折得进窗)。
+                # 键名列 -> 值列这 6px 是 §173 补上的。原来一个 padx 都
+                # 没写, 而键名列是右对齐的(anchor="ne"), 列宽由最宽的
+                # 那个键("GPU% / 核显% / 独显%:")撑满 —— 于是每一行键的
+                # 冒号都正好落在列右缘, 值列左缘就是列右缘, 视觉间隙
+                # 0px: "进程名:" 与 "chrome.exe" 磨在一起(实测改前
+                # 八行全是 0)。§162 立的规矩是"同一行相邻控件之间的横向
+                # 间隙 = _CTL_GAP", 可那两个对话框的 grid 列从头到尾没
+                # 被这条规矩覆盖到: 设置窗的键是左对齐的, 短键后面自然空
+                # 27~43px, 一眼看不出有问题; 详情窗的键右对齐, 空的部分
+                # 全落在键的左边, 右边正好贴死。
+                # 外部参照与 §162 同一份: 反编译 AIDA64 Engineer 5.20 的
+                # 二进制 DFM 里, 按钮<->按钮横向 gap 6px、标签<->字段 5px,
+                # 没有任何一处相邻控件是 0px 贴在一起的。
+                # padx 声明在值列自己身上(只管左边那一份), 键名列不写:
+                # 每个间隙只许一个属主, 两边都写就叠成 12px(§162 同款坑)。
                 lb = tk.Label(frm, text=v, anchor="w",
                               wraplength=_DETAIL_WRAP_PX,
                               justify="left", font=_FONT_UI)
-                lb.grid(row=i, column=1, sticky="w", ipady=det_ipady)
+                lb.grid(row=i, column=1, sticky="w", ipady=det_ipady,
+                        padx=(_CTL_GAP, 0))
                 if k == "GPU 首选项":
                     pref_label = lb
             frm.columnconfigure(1, weight=1)

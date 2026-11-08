@@ -1646,6 +1646,21 @@ _PANEL_STYLE = (
     "color:#1a1a1a;margin:0;padding:16px 20px}"
     "h2{font-size:16px;margin:0 0 8px;font-weight:600;color:#1a1a1a}"
     f".policy{{color:{_PANEL_ACCENT_PRESS};margin:0 0 2px;font-size:13px}}"
+    # 核显/独显那两行。这条规则从前不存在, #gpuinfo 整个落在浏览器
+    # 默认 <p> 样式上: 字号 16px(面板其余文字 12/13px), 上下 margin 各
+    # 16px。真渲染实测(Chrome 开本地面板页量的)两处间隙全被默认 margin
+    # 折叠吞掉: #policy 底边 -> #gpuinfo 顶边 16px(意图是 #policy 自己
+    # 的 2px), #gpuinfo 底边 -> 卡片顶边 16px(.cards 写的
+    # margin-top:10px 与默认 16px 相邻折叠取大者)。§160 测试注释里
+    # "那个 10px 是从 #gpuinfo 底边量的"在那时是不成立的。
+    # 外部参照同 §162: 反编译 AIDA64 Engineer 5.20 的二进制 DFM
+    # (TFORM_DISKBENCH)里没有一处间距交给默认值 —— 标签<->字段 5px、
+    # 按钮<->按钮 6px、窗体内容区四边 7px, 全是明写的。
+    # 字号取 13px, 与 #policy / 表格同档: 这两行是"这台机器是谁"的正
+    # 文, 不是 #hint 那种脚注。颜色不写, 继承 body(两套主题都已过 AA)。
+    # 下边距同样不写: 卡片上方那 10px 归 .cards 一个属主 —— 两边都写
+    # 就叠成 16px(§162 每个间隙只许一个属主)。
+    "#gpuinfo{font-size:13px;margin:0}"
     ".cards{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 12px}"
     ".card{background:#ffffff;border:1px solid #e4e4e4;border-radius:8px;"
     "padding:9px 16px;min-width:104px}"
@@ -1657,7 +1672,21 @@ _PANEL_STYLE = (
     f"#q:focus{{border-color:{_PANEL_ACCENT};outline:none}}"
     "table{border-collapse:collapse;width:100%;font-size:13px;"
     "font-variant-numeric:tabular-nums}"
-    "th,td{padding:6px 10px;border-bottom:1px solid #ebebeb;"
+    # 表格行的盒子与托盘表格行逐像素对齐: 托盘 rowheight=_ROW_H=32,
+    # 行内留白 = 32 - linespace(表格字体 _FONT_UI, Segoe UI Variable
+    # Text 9, 实测 16) = 16px(上下各 8)。padding 6px 是 rowheight 还
+    # 是 28 的时代: §153 把托盘提到 32(留白 16)之后 Web 没跟上, 12 vs
+    # 16 分家 4px, 而盯着这件事的守卫当时拿写死的 28 在算, 照样绿。
+    # 现在 padding 8 + line-height 15 + border 1 = 32, 行高与留白两个
+    # 数都对上; th 实测 31px(offsetHeight, rect 31.3 —— border-collapse
+    # 把 th|td 之间那条 1px 对半劈, th 只落下半条, 圆整比 td 少 1px),
+    # 与托盘表头 _TREE_HEAD_H=32 差 1px(旧值 28.6 时差 3.4px), 不从
+    # 这里硬凑。
+    # line-height 写死而不靠自然行盒: 13px Segoe UI 的自然行盒实测
+    # 17.26px, 且 fallback 到别的字体时会变; 写死之后行高在任何机器上
+    # 都是 32, 与 Tk 的 rowheight 一样不随字体漂移。
+    "th,td{padding:8px 10px;line-height:15px;"
+    "border-bottom:1px solid #ebebeb;"
     "text-align:right;white-space:nowrap}"
     "th{background:#f9f9f9;color:#5d5d5d;font-weight:600}"
     "td.n,th.n{text-align:left}"
@@ -1959,9 +1988,8 @@ def panel_html(snap, names):
     # 会被它们当成格式化指令, 报 "unsupported format character"
     return (
         "<html lang='zh-CN'><head><meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width,"
-    "<meta name='color-scheme' content='light dark'>"
-        "initial-scale=1'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<meta name='color-scheme' content='light dark'>"
         "<title>GPU 监控</title>"
         f"<style>{_PANEL_STYLE}</style></head><body>"
         "<h2>GPU 监控</h2>"
