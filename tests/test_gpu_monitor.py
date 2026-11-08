@@ -3368,8 +3368,8 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
     def _build(self, geom, pitch, texth):
         u"""按设置窗真实的那套参数重建一个同款窗。
 
-        pad 由 gpu_tray._row_pad 现算, 不在这里写死: 写死过一次,
-        源码改了测试还按老值建, 绿灯常亮什么也没守。
+        ipady 由 gpu_tray._row_ipady 现算, 不在这里写死: 写死过
+        一次, 源码改了测试还按老值建, 绿灯常亮什么也没守。
         """
         import tkinter as _tk
         import gpu_tray as gt
@@ -3381,31 +3381,34 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
                   "温度提醒 °C", "采样周期 秒", "Web 端口(0关)"]
         cbs = ["自动重启迁移的进程", "迁移前弹窗确认",
                "低负载自动切回核显", "启用内置排除名单"]
-        # 与 _settings_build 同一套: Label 行和勾选行各按自己的控件
-        # 高度算 pad, 名单 Text 行用裸 2(它比 pitch 还高, pad 是 0)
-        lbl_pad = gt._row_pad(gt._ctl_h(grid, _tk.Label, text="x",
-                                          anchor="w"))
-        cb_pad = gt._row_pad(gt._ctl_h(grid, _tk.Checkbutton, text="x"))
+        # 与 _settings_build 同一套: 目标行高写在控件的 ipady 上,
+        # 不给 grid pady。每种控件按自己的自然高度算。
+        lbl_ipady = gt._row_ipady(gt._ctl_h(grid, _tk.Label, text="x",
+                                             anchor="w"))
+        entry_ipady = gt._row_ipady(gt._ctl_h(grid, _tk.Entry, width=10))
+        cb_ipady = gt._row_ipady(gt._ctl_h(grid, _tk.Checkbutton,
+                                           text="x"))
         r = 0
         for lb in labels:
             _tk.Label(grid, text=lb, anchor="w").grid(
-                row=r, column=0, sticky="w", pady=lbl_pad)
+                row=r, column=0, sticky="w", ipady=lbl_ipady)
             _tk.Entry(grid, width=10).grid(
-                row=r, column=1, sticky="w", pady=lbl_pad)
+                row=r, column=1, sticky="w", ipady=entry_ipady)
             r += 1
         for i, t in enumerate(cbs):
             _tk.Checkbutton(grid, text=t, variable=_tk.BooleanVar()).grid(
-                row=r + i, column=0, columnspan=2, sticky="w", pady=cb_pad)
+                row=r + i, column=0, columnspan=2, sticky="w",
+                ipady=cb_ipady)
         r2 = r + 4
         _tk.Label(grid, text="游戏名单(每行一个)", anchor="w").grid(
-            row=r2, column=0, sticky="nw", pady=2)
+            row=r2, column=0, sticky="nw", ipady=lbl_ipady)
         _tk.Text(grid, width=30, height=texth).grid(
-            row=r2, column=1, sticky="w", pady=2)
+            row=r2, column=1, sticky="w")
         r3 = r2 + 5
         _tk.Label(grid, text="排除名单(每行一个)", anchor="w").grid(
-            row=r3, column=0, sticky="nw", pady=2)
+            row=r3, column=0, sticky="nw", ipady=lbl_ipady)
         _tk.Text(grid, width=30, height=texth).grid(
-            row=r3, column=1, sticky="w", pady=2)
+            row=r3, column=1, sticky="w")
         btn = _tk.Button(root, text="保存 (热重载立即生效)")
         btn.pack(pady=8)
         root.update()
@@ -3424,7 +3427,7 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
         self.assertIsNotNone(geom, "设置窗没写 geometry, 量不了")
         th = re.search(r'tk\.Text\(grid, width=30, height=(\d+)\)', body)
         self.assertIsNotNone(th, "名单 Text 的高度不是字面量, 量不了")
-        # 行距不再抓字面量 pady: 它现在是 _row_pad(...) 按控件高度
+        # 行距不再抓字面量 pady: 它现在是 _row_ipady(...) 按控件高度
         # 算的, 源码里没有数字可抓。抓常量本身, 替身用同一个函数
         # 重算 —— 两边各算各的话守的是改之前的布局。
         self.assertTrue(hasattr(gt, "_FORM_ROW_PITCH"),
@@ -9931,13 +9934,18 @@ class TrayPanelStatusFloor(unittest.TestCase):
                       "趋势图没用 _PANEL_PAD")
 
     def test_the_filter_row_controls_share_one_baseline(self):
-        u"""筛选栏里输入框与两个按钮的底边必须对齐。
+        u"""筛选栏里五个控件的底边必须对齐。
 
-        Tk 的 pack 默认按各自请求高度顶对齐: 按钮请求 30px、Entry
-        只请求 21px —— 不带 fill="y" 的话实测输入框 y=4/h=21(底 25),
-        按钮 y=0/h=30(底 30), 一行看着是歪的, 输入框比按钮矮一截。
-        这条按 _panel_build 同样的 pack 方式真渲染出来量。
+        Tk 的 pack 默认按各自请求高度顶对齐: 按钮请求 28px、Entry
+        只请求 21px、Label 更矮(22px) —— 不带 fill="y"/ipady 的话
+        实测 Label 底边 22、输入框底边 25、按钮底边 28, 一行看着
+        是歪的。这条按 _panel_build 同样的 pack 方式真渲染出来量。
+
+        五个控件都要进来, 两个 Label 尤其: §155 只盯 entry/pin/srt
+        三个, 漏掉左边的"筛选:"和右边的"显示 N/T 行", 它们底边
+        停在 25, 比按钮矮 3px —— 那一行依旧是歪的, 只是没人量。
         """
+        import re as _re
         import tkinter as _tk
         import gpu_tray as gt
         body = inspect.getsource(gt.TrayApp._panel_build)
@@ -9945,28 +9953,72 @@ class TrayPanelStatusFloor(unittest.TestCase):
         self.assertTrue(fill_y,
                       "筛选输入框没有 fill=\"y\": 它比按钮矮 9px, "
                       "底边差 5px, 这一行是歪的")
+        # 两个 Label 必须带 ipady: 这一行的行高由按钮/Entry 定
+        # (28px), Label 既没有 fill 也不带 ipady 就停在 22px, 底边
+        # 差 6px。hint.pack 跨两行, 且参数里有 padx=(6, 0) 这种
+        # 一层嵌套括号, 所以用"括号配一层"的正则取完整调用 ——
+        # [^()] 吃不掉括号, 由 \([^()]*\) 这一支专门吃一层。
+        pack_re = _re.compile(r"(\w+)\.pack\("
+                              r"((?:[^()]|\([^()]*\))*)\)", _re.S)
+        packs = {}
+        for m in pack_re.finditer(body):
+            packs.setdefault(m.group(1), []).append(m.group(2))
+        for name in ("_filter_hint", "hint"):
+            self.assertIn(name, packs,
+                          "筛选栏找不到 %s.pack: 源码改名了?" % name)
+            for args in packs[name]:
+                self.assertIn("ipady=", args,
+                              "筛选栏的 %s 没带 ipady: 它比 Entry/按钮 "
+                              "矮, 底边不齐(§155 漏量的就是这两个)" % name)
+                # (?<![a-z_]) 防止 ipady= 里的 pady= 子串误判
+                self.assertIsNone(_re.search(r'(?<![a-z_])pady=', args),
+                                  "筛选栏的 %s 在用 pady: pady 的行距 "
+                                  "依赖邻居, 与设置窗/详情窗的 ipady "
+                                  "不是同一招" % name)
         root = _tk.Tk()
         try:
             root.geometry("1046x590")
+            # 必须先把运行期字体装上: _ctl_h 量的是**当前字体**下的
+            # 自然高度, 默认字体下 Label 23 / 按钮 30, 而 _FONT_UI 下
+            # 是 22 / 28 —— 拿默认字体的数去算 ipady, 补出来是 29,
+            # 与真实面板差 1px, 这条用例就守了个假象。
+            gt._rebuild_fonts()
+            gt._apply_fluent_theme()
             fbar = _tk.Frame(root)
             fbar.pack(fill="x", padx=gt._PANEL_PAD, pady=(0, 4))
-            _tk.Label(fbar, text="筛选进程名或 PID").pack(side="left")
-            entry = _tk.Entry(fbar, width=24)
+            # 与源码逐字同一个算法(连 font= 都带上): 行高由按钮/Entry
+            # 定, Label 用 ipady 补齐。ipady 是单侧值, 上下各加一次。
+            fbar_ipady = (max(gt._ctl_h(fbar, _tk.Button,
+                                      text="置顶: 开", font=gt._FONT_UI),
+                                 gt._ctl_h(fbar, _tk.Entry, width=24,
+                                          font=gt._FONT_NUM))
+                          - gt._ctl_h(fbar, _tk.Label, text="x",
+                                     font=gt._FONT_UI)) // 2
+            lead = _tk.Label(fbar, text="筛选进程名或 PID",
+                             font=gt._FONT_UI)
+            lead.pack(side="left", ipady=fbar_ipady)
+            entry = _tk.Entry(fbar, width=24, font=gt._FONT_NUM)
             entry.pack(side="left", padx=6, fill="y")
-            hint = _tk.Label(fbar, text="", anchor="w")
-            hint.pack(side="right", fill="x", expand=True, padx=(6, 0))
-            pin = _tk.Button(fbar, text="置顶: 开")
+            hint = _tk.Label(fbar, text="", anchor="w",
+                             font=gt._FONT_UI)
+            hint.pack(side="right", fill="x", expand=True, padx=(6, 0),
+                      ipady=fbar_ipady)
+            pin = _tk.Button(fbar, text="置顶: 开", font=gt._FONT_UI)
             pin.pack(side="right", padx=(6, 0))
-            srt = _tk.Button(fbar, text="复原排序")
+            srt = _tk.Button(fbar, text="复原排序", font=gt._FONT_UI)
             srt.pack(side="right", padx=(6, 0))
             root.update()
             bottoms = {w.winfo_y() + w.winfo_height()
-                       for w in (entry, pin, srt)}
+                       for w in (lead, entry, hint, pin, srt)}
             self.assertEqual(len(bottoms), 1,
                              f"底边不齐: {sorted(bottoms)}")
-            self.assertEqual(entry.winfo_height(), pin.winfo_height(),
-                             "输入框与按钮不同高: %d vs %d"
-                             % (entry.winfo_height(), pin.winfo_height()))
+            heights = {w.winfo_height()
+                       for w in (lead, entry, hint, pin, srt)}
+            self.assertEqual(len(heights), 1,
+                             f"五个控件不同高: {sorted(heights)}")
+            self.assertEqual(fbar.winfo_height(), lead.winfo_height(),
+                             "筛选栏比自己的控件还高: %d vs %d"
+                             % (fbar.winfo_height(), lead.winfo_height()))
         finally:
             root.destroy()
 
@@ -10040,12 +10092,59 @@ class TrayPanelStatusFloor(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_form_rows_carry_their_pitch_on_the_widget(self):
+        u"""表单行的目标高度必须写在控件的 ipady 上, 不是 grid pady。
+
+        pady 方案有个算不出来的地方: grid 的行距 = 上一行 pady 下 +
+        下一行 pady 上。控件高不一时这个和给不出统一值 —— §155 按
+        控件各算一份 pad, 输入行 -> 勾选行那道交界仍然是 29px, 比两边
+        窄 2px。ipady 长在控件自己身上, 行高不依赖邻居, 交界处也不差。
+
+        这条把"每个 grid 控件都带 ipady、且不带 pady"钉死: 谁把
+        ipady 改回 pady, 当场红。
+        """
+        import re as _re
+        import gpu_tray as gt
+        body = inspect.getsource(gt.TrayApp._settings_build)
+        # 按 .grid( 切, 再用括号配对取出完整调用。正则不行: 它会被
+        # 内层括号提前截断, 量到的是半个调用。
+        calls = []
+        for chunk in body.split(".grid(")[1:]:
+            depth, buf = 1, []
+            for ch in chunk:
+                if ch == "(":
+                    depth += 1
+                elif ch == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+                buf.append(ch)
+            calls.append("".join(buf))
+        self.assertTrue(calls, "设置窗里一个 grid 调用都没找到?")
+        # 名单 Text 是例外: 它比 pitch 还高, ipady 为 0, 什么都不带
+        bare = [c for c in calls
+                if "column=" in c and "ipady=" not in c]
+        self.assertEqual(len(bare), 2,
+                         "不带 ipady 的 grid 调用应该是两个名单 Text,"
+                         "实际 %d 个: %s"
+                         % (len(bare), [c.strip()[:40] for c in bare]))
+        for c in calls:
+            if "column=" not in c or c in bare:
+                continue
+            self.assertIn("ipady=", c,
+                          "设置窗有 grid 调用没带 ipady: %r" % c[:60])
+            # (?<![a-z_]) 防止 ipady= 里的 pady= 子串误判
+            self.assertIsNone(_re.search(r'(?<![a-z_])pady=', c),
+                              "设置窗有 grid 调用还在用 pady: %r —— "
+                              "pady 的行距依赖邻居, 交界处会差 2px"
+                              % c[:60])
+
     def test_the_three_windows_share_one_row_pitch(self):
         u"""主面板表格、设置窗、详情窗的行距必须是同一个数。
 
-        三个窗口原来是三套值: 主面板表格 28px、设置窗输入行 25px
-        (裸 pady=2 + Entry 21)、详情窗 27px(裸 pady=2 + Label 23)
-        —— 用户在三个窗之间来回切, 疏密感对不上, 而代码里没有任何
+        三个窗口原来是四套值: 主面板表格 28px、设置窗输入行 25px
+        (裸 pady=2 + Entry 21)、设置窗勾选行 31px、详情窗 27px ——
+        用户在三个窗之间来回切, 疏密感对不上, 而代码里没有任何
         东西保证它们一致。_FORM_ROW_PITCH 就是那把统一的尺。
         """
         import tkinter as _tk
@@ -10054,34 +10153,35 @@ class TrayPanelStatusFloor(unittest.TestCase):
         try:
             gt._rebuild_fonts()
             gt._apply_fluent_theme()
-            # 1. 常量本身: 必须是正奇数, 否则 (P-23) 与 (P-27) 里
-            #    有一个是奇数, _row_pad 只能四舍五入, 行距立刻不齐
             pitch = gt._FORM_ROW_PITCH
+            # 1. 常量本身: 正奇数。(P-23) 与 (P-27) 都是偶数时两种
+            #    控件才都补得出整数 ipady; 取偶数有一个要向下取整,
+            #    行距立刻差 1px。
             self.assertGreater(pitch, 0, "_FORM_ROW_PITCH 要是正数")
             self.assertEqual(pitch % 2, 1,
                              "_FORM_ROW_PITCH %d 是偶数: Label 23 和 "
-                             "Checkbutton 27 补不出整数 pad, 行距会 "
-                             "四舍五入成两个值" % pitch)
-            # 2. _row_pad 对每种控件都给整数且上下相等
+                             "Checkbutton 27 补不出整数 ipady" % pitch)
+            # 2. _row_ipady 对每种控件都给整数, 且 2*ipady + 控件高
+            #    正好等于 pitch
             for name, h in (("Label", 23), ("Entry", 21),
                             ("Checkbutton", 27)):
-                pad = gt._row_pad(h)
-                self.assertEqual(pad[0], pad[1],
-                                 "%s 行的 pad 上下不对称(%s): "
-                                 "相邻行的 pady 相加会在两个值之间跳"
-                                 % (name, pad))
-                self.assertEqual(pad[0] * 2 + h, pitch,
-                                 "%s 行(高 %d)配 pad %s 行距是 %d, "
+                ipady = gt._row_ipady(h)
+                self.assertIsInstance(ipady, int,
+                                     "%s 的 ipady 不是整数" % name)
+                self.assertEqual(ipady * 2 + h, pitch,
+                                 "%s 行(高 %d)配 ipady %d 行距是 %d, "
                                  "不是 _FORM_ROW_PITCH %d"
-                                 % (name, h, pad, pad[0] * 2 + h, pitch))
-            # 3. 控件比目标行距高时不许给出负数 pad
-            self.assertEqual(gt._row_pad(43), (0, 0),
+                                 % (name, h, ipady, ipady * 2 + h, pitch))
+            # 3. 控件比目标行距高时 ipady 必须是 0(不是负数)
+            self.assertEqual(gt._row_ipady(43), 0,
                              "比 _FORM_ROW_PITCH 高的控件(名单 Text) "
-                             "pad 必须是 0")
+                             "ipady 必须是 0")
+            self.assertEqual(gt._row_ipady(pitch), 0,
+                             "正好等高的控件不该再加 ipady")
             # 4. 主面板表格行高必须和它同一个密度(差 1px 是底噪:
             #    表格行高由文字留白定(32 = 17 linespace + 上下各 7.5),
-            #    而 _FORM_ROW_PITCH 要迁就 Label 23 / Checkbutton 27
-            #    的整数 pad, 只能取奇数 31)
+            #    而 _FORM_ROW_PITCH 取奇数 31 才能让两种控件都补出
+            #    整数 ipady)
             self.assertLessEqual(abs(gt._ROW_H - pitch), 1,
                                  "主面板表格行高 %d 与 _FORM_ROW_PITCH "
                                  "%d 差 %dpx: 三个窗口还是两种密度"

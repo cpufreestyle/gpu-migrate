@@ -294,9 +294,9 @@ _ROW_H = 32
 # 名单 Text 43), 同一个 2 给出的行距是 25 / 27 / 31 / 47 四种 ——
 # 设置窗输入行 25px、勾选行 31px 差 6px, 详情窗又是 27px,
 # 加上主面板表格 32px, 四个数字四种密度。
-# 现在按目标行距反推每一行的 pad(见 _row_pad), 统一到 31。
+# 现在按目标行距反推每一行的 ipady(见 _row_ipady), 统一到 31。
 # 取奇数 31 而不是 32: Label 23 与 Checkbutton 27 都是奇数高,
-# (31-23) 和 (31-27) 才是偶数, 两种控件都补得出整数 pad;
+# (31-23) 和 (31-27) 才是偶数, 两种控件都补得出整数 ipady;
 # 取 32 时有一个要四舍五入, 行距立刻裂成两个值。
 # 与主面板表格行高 _ROW_H=32 差 1px —— 那个数由文字留白定
 # (17px linespace + 上下各 7.5), 动它会挤文字, 所以这里迁就它。
@@ -478,7 +478,7 @@ _TEXT_PX_FONT = [None]
 def _ctl_h(master, cls, **kw):
     u"""控件在**当前字体/主题**下的自然高度。
 
-    _row_pad 要按控件高度反推行距, 而控件没建出来之前量不到 ——
+    _row_ipady 要按控件高度反推行距, 而控件没建出来之前量不到 ——
     winfo_reqheight 得有一个真窗口。这里在调用方给的 master 上建一个
     量完就收掉, 不进事件循环也不显示。
 
@@ -496,31 +496,28 @@ def _ctl_h(master, cls, **kw):
     w.destroy()
     return h
 
-def _row_pad(widget_h):
-    u"""控件自然高度 -> 这一行上下各留多少, 行距才够 _FORM_ROW_PITCH。
+def _row_ipady(widget_h):
+    u"""控件自然高度 -> grid 的 ipady, 让这一行正好 _FORM_ROW_PITCH 高。
 
-    pady 写成同一个数(以前是 2)在控件高度不一时给不出统一行距:
-    Label 23、Entry 21、Checkbutton 27 加同一个 2 之后, 量出来的
-    行距是 27 / 25 / 31 三种, 一列格子疏密不匀。
+    行距对不上是因为控件自然高度各不一样(Label 23 / Entry 21 /
+    Checkbutton 27 / 名单 Text 43), 而以前给 grid 的是裸 pady=2。
 
-    这里按控件自身高度反推: 上下各补 (_FORM_ROW_PITCH - 高) 的一半,
-    同一种控件拿到的 pad 相同, 行距因此一致。
+    pady 不行、必须用 ipady: grid 里相邻两行的间距 = 上一行的 pady
+    下 + 下一行的 pady 上。控件高不一时这个和算不出来统一值 ——
+    实测按控件各算一份 pad 之后, 输入行 -> 勾选行那道交界仍然是
+    29px, 比两边都窄 2px(§155 的遗留粗糙点)。
 
-    注意 grid 里相邻两行的间距 = 上一行的 pady 下 + 下一行的 pady 上,
-    所以 pad 必须上下对称(相等): 给成 (5,4) 这种不对称值时, 交界
-    处的和会在两个数之间跳(实测输入行 -> 勾选行在 29 与 33 之间
-    交替)。跨控件的那一道交界仍然差 2px —— 23 与 27 差 4px,
-    这是整数像素下的最好结果; _FORM_ROW_PITCH 取奇数 31 正是为了
-    让 (31-23) 和 (31-27) 都是偶数, 两种控件都不用四舍五入。
+    ipady 是控件自己的内边距, 长在控件身上: Entry 21 + ipady 5 =
+    31px, Checkbutton 27 + ipady 2 = 31px。行高因此由控件直接
+    决定, 不依赖邻居, 交界处也不会差。文字仍在控件里居中。
 
     控件本身就比目标行距高时(名单 Text 三行 43px)返回 0 ——
-    压不动, 也不该压。
+    压不动, 也不该压; 那一行由控件自己的高度说话。
     """
     slack = _FORM_ROW_PITCH - int(widget_h)
     if slack <= 0:
-        return (0, 0)
-    half = slack // 2
-    return (half, half)
+        return 0
+    return slack // 2
 
 
 def _fit_text(text, avail_px):
@@ -1244,20 +1241,24 @@ class TrayApp:
             grid = tk.Frame(root)
             grid.pack(fill="both", expand=True, padx=12, pady=8)
 
-            # 全窗共用一个行距补丁: 控件高不一时(Label 23 / Entry 21 /
-            # Checkbutton 27), 每行各算各的话相邻两行的 pady 相加仍然
-            # 对不齐 —— 量出来的行距会在 30/31/32 之间跳。按全窗最高
-            # 的控件(Label)算一份, 所有行共用。
-            _form_pad = _row_pad(_ctl_h(grid, tk.Label, text="x",
-                                        anchor="w"))
+            # 行的目标高度直接写在控件上(ipady), 不给 grid pady:
+            # grid 的行距 = 上一行 pady 下 + 下一行 pady 上, 控件高
+            # 不一时这个和算不出统一值(§155 实测交界处仍是 29px)。
+            # ipady 长在控件自己身上: Label 23+4、Entry 21+5、
+            # Checkbutton 27+2 都正好 31px, 行高不依赖邻居。
+            # 每个控件按自己的高度算 —— 用同一份会让矮的控件差一截
+            # (Entry 吃 Label 的 4 只有 29px)。
+            _lbl_ipady = _row_ipady(_ctl_h(grid, tk.Label, text="x",
+                                           anchor="w"))
+            _entry_ipady = _row_ipady(_ctl_h(grid, tk.Entry, width=10))
             def add_entry(label, key, width=10):
                 lb = tk.Label(grid, text=label, anchor="w")
                 lb.grid(row=len(rows), column=0, sticky="w",
-                        pady=_form_pad)
+                        ipady=_lbl_ipady)
                 var = tk.StringVar(value=str(cfg.get(key, "")))
                 e = tk.Entry(grid, textvariable=var, width=width)
                 e.grid(row=len(rows), column=1, sticky="w",
-                        pady=_form_pad)
+                        ipady=_entry_ipady)
                 # Enter 直接保存: 六个格子 Tab 走完再摸鼠标去点那个按钮,
                 # 键盘用户的手要在键盘和鼠标之间来回搬一趟。save 定义在
                 # 下面, lambda 调用时才查名, 赶得上(与面板 refresh 同款)。
@@ -1282,28 +1283,24 @@ class TrayApp:
                     ("低负载自动切回核显", v_pa), ("启用内置排除名单", v_ed))):
                 cb = tk.Checkbutton(grid, text=text, variable=var)
                 cb.grid(row=r + i, column=0, columnspan=2, sticky="w",
-                        # 勾选行用自己的 pad: Checkbutton 27px 与 Label
-                        # 23px 差 4px, 共用一份 pad 的话这一行的行距
-                        # 会是 35px, 比输入行宽出 4px。
-                        pady=_row_pad(_ctl_h(grid, tk.Checkbutton,
-                                        text=text)))
+                        ipady=_row_ipady(_ctl_h(grid, tk.Checkbutton,
+                                              text=text)))
 
             # 名单段: Label 与 Text 同行, 而 Text 三行就有 43px ——
-            # 比 _FORM_ROW_PITCH 还高, _row_pad 会给 (0,0), 这一行
-            # 的行距就是 Text 自己的高度。这是有意的: 三行文本压到
-            # 32px 会读不成行, 而它上面那个 Label 只占 23px,
-            # 顶对齐(sticky="nw")跟着 Text 的顶边走, 不会歪。
+            # 比 _FORM_ROW_PITCH 还高, _row_ipady 给 0, 这一行由 Text
+            # 自己的高度说话。这是有意的: 三行文本压到 31px 会读不成行。
+            # Label 照样吃自己的 ipady, 与 Text 顶对齐(sticky="nw")。
             r2 = r + 4
             tk.Label(grid, text="游戏名单(每行一个)", anchor="w").grid(
-                row=r2, column=0, sticky="nw", pady=2)
+                row=r2, column=0, sticky="nw", ipady=_lbl_ipady)
             t_games = tk.Text(grid, width=30, height=3)
-            t_games.grid(row=r2, column=1, sticky="w", pady=2)
+            t_games.grid(row=r2, column=1, sticky="w")
             t_games.insert("1.0", "\n".join(cfg.get("game_processes", [])))
             r2 += 5
             tk.Label(grid, text="排除名单(每行一个)", anchor="w").grid(
-                row=r2, column=0, sticky="nw", pady=2)
+                row=r2, column=0, sticky="nw", ipady=_lbl_ipady)
             t_excl = tk.Text(grid, width=30, height=3)
-            t_excl.grid(row=r2, column=1, sticky="w", pady=2)
+            t_excl.grid(row=r2, column=1, sticky="w")
             t_excl.insert("1.0", "\n".join(cfg.get("exclude_processes", [])))
 
             def save():
@@ -1815,9 +1812,21 @@ class TrayApp:
             fbar = tk.Frame(root, bg=_BG)
             fbar.pack(fill="x", padx=_PANEL_PAD,
                        pady=(0, _BLOCK_GAP))
+            # 这一行的行高由按钮定(28px, 最高的控件), Entry 靠
+            # fill="y" 被拉齐, 而 Label 没有 fill —— 它按自己的 22px
+            # 顶对齐, 底边停在 25, 比 Entry/按钮矮 3px, 一行看着是歪的。
+            # 用 ipady 把 Label 补到行高: 与设置窗/详情窗同一招
+            # (见 _row_ipady), 长在控件自己身上, 不依赖邻居。
+            # ipady 是**单侧**内边距, 上下各加一次: 补 3 才让 22 长到 28。
+            _fbar_ipady = (max(_ctl_h(fbar, tk.Button, text="置顶: 开",
+                                      font=_FONT_UI),
+                                 _ctl_h(fbar, tk.Entry, width=24,
+                                      font=_FONT_NUM))
+                           - _ctl_h(fbar, tk.Label, text="x",
+                                    font=_FONT_UI)) // 2
             _filter_hint = tk.Label(fbar, text=_FILTER_HINT, bg=_BG,
                                     fg=_MUTED, font=_FONT_UI)
-            _filter_hint.pack(side="left")
+            _filter_hint.pack(side="left", ipady=_fbar_ipady)
             fvar = tk.StringVar(value=self.filter_text)
             entry = tk.Entry(fbar, textvariable=fvar, width=24, relief="flat",
                              bg=_PANEL_BG, fg=_FG, insertbackground=_FG,
@@ -1876,7 +1885,10 @@ class TrayApp:
             _sort_btn_label()
             # 在两个按钮之后 pack: side=right 组的最前一个 + expand=True,
             # 空间一紧先压它, 按钮的请求宽度始终被满足。
-            hint.pack(side="right", fill="x", expand=True, padx=(6, 0))
+            # ipady 与左边的"筛选:"同一个数: 两个 Label 都要补到行高,
+            # 不然底边比 Entry/按钮矮 3px。
+            hint.pack(side="right", fill="x", expand=True, padx=(6, 0),
+                      ipady=_fbar_ipady)
 
             tree = ttk.Treeview(root, columns=cols, show="headings", height=12)
             for cid, text in _COL_LABELS.items():
@@ -2324,11 +2336,11 @@ class TrayApp:
             # 也是裸 pady=2, Label 23px 加 2 是 27px 行距, 比设置窗
             # 输入行的 25px 宽、比主面板表格的 32px 窄 —— 三个窗口
             # 三种疏密。
-            det_pad = _row_pad(_ctl_h(frm, tk.Label, text="x",
-                                        anchor="ne"))
+            det_ipady = _row_ipady(_ctl_h(frm, tk.Label, text="x",
+                                           anchor="ne"))
             for i, (k, v) in enumerate(lines):
                 tk.Label(frm, text=k + ":", anchor="ne", fg=_MUTED).grid(
-                    row=i, column=0, sticky="ne", pady=det_pad)
+                    row=i, column=0, sticky="ne", ipady=det_ipady)
                 # wraplength 不能比右列真能用的宽度大: 520 宽窗减掉
                 # padx 14x2 与键名列 141 之后只剩 351, 写 380 的话
                 # Tk 直接把这一行画到窗户外(它只保证折到 wraplength,
@@ -2336,7 +2348,7 @@ class TrayApp:
                 lb = tk.Label(frm, text=v, anchor="w",
                               wraplength=_DETAIL_WRAP_PX,
                               justify="left")
-                lb.grid(row=i, column=1, sticky="w", pady=det_pad)
+                lb.grid(row=i, column=1, sticky="w", ipady=det_ipady)
                 if k == "GPU 首选项":
                     pref_label = lb
             frm.columnconfigure(1, weight=1)
