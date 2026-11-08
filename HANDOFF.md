@@ -7212,3 +7212,140 @@ Frame + Label(不建 Toplevel)怎么跑都不崩。用 `noupdate` / `nobuild` /
    筛选栏 34 -> 28、区块间距都看不到。不同步的话用户看不到这些优化。
    要同步需 build -> sync -> 重启托盘(会打断实例)。
 2. 36 条新提交未 push, 与 origin/main 分叉。
+
+## 159. 续一百五十：汇总卡纵向内边距 5/3 不对称, "总纵向 padding 恒定"装置把 9 吃成 5/3(布局)
+
+用户本轮给的新材料: `[$rea-decompiler](...) 用反编译收费的项目来优化我们的项目。`
+
+### 反编译选型与结论
+
+本机唯一相关的**付费**硬件监控产品是 AIDA64 Engineer 5.20.3445 Beta
+(FinalWire Ltd.), 位于 `D:\green\_硬件检测aida64engineer\`(目录里有
+license.txt / pkey.txt / 序列号.txt, 确认是付费产品)。`rea --version` =
+`rea 1.0.0`, CLI 用法 `rea <file>`, 报告写在目标旁边(`re-<name>.md` + `.pdf`),
+本轮报告落在 `.tmptest/rea/`。
+
+- `aida64.exe` 4.0MB 被 **UPX 加壳**(UPX0/UPX1/.rsrc, `UPX!` 1 处), 窗体
+  数据压在压缩流里, `TFORM_*` 名字以 UTF-16LE 存在 `.rsrc` —— 解不出几何。
+- `aida_uires.dll` 3.6MB 未加壳, 但只有 426 个 RCDATA(GAUGE 224 / IMAGE 158 /
+  GAUGEICON 42 / DVCLAL / PACKAGEINFO), **没有窗体**。
+- 突破口是 `aida_diskbench.dll`(1.1MB, **未加壳**), 含 `TFORM_DISKBENCH`,
+  file offset `0x10e1fc`, size 32770。
+
+**二进制 DFM 格式已完全解开**: `TPF0` 签名后是扁平序列, 每个对象
+`[namelen:u8][classname][namelen:u8][objname]`, 随后属性
+`[namelen][name][valuetype][value]`; `vaSet`(11) 以 `0x00` 收尾, 对象属性
+列表也以 `0x00` 收尾。`TValueType`: 0 vaNull / 1 vaList / 2 vaInt8 /
+3 vaInt16 / 4 vaInt32 / 5 vaExtended / 6 vaString / 7 vaIdent / 8 vaFalse /
+9 vaTrue / 10 vaBinary / 11 vaSet / 12 vaLString / 13 vaNil /
+14 vaCollection / 15 vaSingle / 16 vaCurrency / 17 vaDate / 18 vaWString /
+19 vaInt64 / 20 vaUTF8String。解析器在 `.tmptest/rea/_dfm4.py`。
+
+量到的 AIDA64 几何(本机, 96 DPI, `MS Sans Serif` 11px, TextHeight=13):
+
+| 项 | 值 |
+|---|---|
+| 窗体 ClientWidth/Height | 790 / 503 |
+| 内容区四边内边距 | **统一 7px**(TabControl Left=7 Top=7), 没有哪一边另算 |
+| TLabel 自然高 | 13 |
+| TEdit 自然高 | 21 |
+| TButton 自然高 | 23 |
+| 按钮↔按钮横向 gap | **6px**(Button_Start 7..82, Button_Stop 88) |
+| 标签→数值 gap / 数值→下一标签 gap | 5 / 9(不对齐, 但在**控件之间**, 不在框内) |
+| 右栏 8 组 label+edit pitch | 48 |
+
+### 为什么是缺陷
+
+Web 面板 `.card{padding:9px 16px}` 上下左右都是明写的 9/9/16/16, 而托盘这边
+标签离卡顶 5px、数值离卡底 3px: 同一张卡两种留白, 加起来 8 比浏览器里少 10px。
+更糟的是**代码注释说早就按 9px 对齐了** —— `_CARD_PAD_X` 上方写着"上下那半边
+早就按 9px 对齐了", 而数值那行实际是 `pady=(0, 5 - _CARD_LABEL_GAP)`: 一个
+"总纵向 padding 恒为 8"的装置, 它把 9 这个意图吃成了 5/3。而且改
+`_CARD_LABEL_GAP` 会让不对称加剧(改成 3 就变 5/2)。
+
+### 改动
+
+**决议: A 案 + 去掉"总纵向 padding 恒定"装置。**
+
+- `gpu_tray.py`:
+  - 新增 `_CARD_PAD_Y = 9`(汇总卡纵向内边距, 上下同一个数, 对齐 Web 的
+    上 9 / 下 9)与 `_CARD_H = 66`(= 2px highlight 边框 + 2x9 + 标签 22 +
+    间距 2 + 数值 22), 后者只服务于 `_PANEL_MIN_H` 的账面
+  - `pady=(5, _CARD_LABEL_GAP)` -> `pady=(_CARD_PAD_Y, _CARD_LABEL_GAP)`
+  - `pady=(0, 5 - _CARD_LABEL_GAP)` -> `pady=(0, _CARD_PAD_Y)`
+  - `_PANEL_MIN_H` 634 -> **644**(账面 630 -> 640, 实测恒差 4px)
+  - 修掉两处说谎注释: `_CARD_PAD_X` 上方那句, 以及测试里同样的假话
+- `tests/test_gpu_monitor.py`:
+  - 两处 `8 + 56 + gt._BLOCK_GAP` -> `8 + gt._CARD_H + gt._BLOCK_GAP`
+    (`_budget()` 与 `test_the_row_height_and_the_window_floor_move_together`)
+  - `for h in (56, 28)` -> `for h in (gt._CARD_H, 28)`
+  - 两处硬编码 `"1046x634+55+55"` -> `"1046x644+55+55"`
+  - `test_the_card_label_gap_matches_the_web_panel` /
+    `test_the_card_side_padding_matches_the_web_panel` 的 docstring 假话
+    已改真; `pady=(5, ...)` 断言串同步
+  - `test_the_card_text_still_fits_at_the_narrowest_window` 的真渲染镜像
+    同步(里面有一处**漏了 `gt.` 前缀**导致 NameError, 已修)
+  - **新增 `class TrayPanelCardGeometry`**(插在 `class NormalizePerAdapter`
+    之前), 3 条守卫:
+    - `test_the_card_vertical_padding_matches_the_web_panel`: 从
+      `gm._PANEL_STYLE` 正则抠 `.card{...padding:(\d+)px (\d+)px`, 断言上
+      内边距 == `_CARD_PAD_Y`、左右 == `_CARD_PAD_X`, 且源码里必须出现
+      `pady=(_CARD_PAD_Y, _CARD_LABEL_GAP)` 与 `pady=(0, _CARD_PAD_Y)`
+      两种形状
+    - `test_the_card_padding_is_symmetric_top_and_bottom`: 真渲染
+      (`tk.Tk()`, **必须 `root.update()`**, `update_idletasks()` 量出来
+      `winfo_y()` 是 0), 断言上内边距 == 下内边距 == `1 + _CARD_PAD_Y`、
+      标签与数值 gap == `_CARD_LABEL_GAP`
+    - `test_the_card_height_matches_its_parts`: 断言 `cell.winfo_height()`
+      == 按部件算出的值 **且** == `_CARD_H`
+  - 辅助 `_cards(self, root, rows)` 按 `_panel_build` 同样 pack 方式搭卡
+- `README.md`: 在"窗口太矮时趋势图不再被压成一条线"那条后面插入 §159 说明
+  (含 AIDA64 反编译依据)
+
+### 验证结果
+
+- 两个 runner 各 **667 条全绿**(原 664 + 3 新)。
+- 变异验证 3 条全红(`.tmptest/_mut159.py`, 备份/还原自
+  `.tmptest/_gpu_tray159.bak`, `finally` 里还原并 `os.remove`):
+  - `_CARD_PAD_Y = 9 -> 5`: 高度守卫 + Web 对照守卫红(`9 != 5` / `58 != 66`)
+  - 底部 pady 改回 `_CARD_PAD_Y - _CARD_LABEL_GAP`: 形状守卫红
+    (`pady=(0, _CARD_PAD_Y)` 找不到)
+  - `_CARD_H = 66 -> 56`: 高度守卫红(`66 != 56`)
+- **已知覆盖边界**: 变异 2 只被**静态形状守卫**抓到, 没被真渲染守卫抓到 ——
+  真渲染测试自己复刻了一份布局, 不改 `gpu_tray.py` 的 pack 行。
+
+### 踩过的坑
+
+- 换行符(本轮又踩一次): 读文件用 `newline=""` 时文本**已经含 `\r\n`**,
+  此时再 `.replace("\n", "\r\n")` 会把每一行变成 `\r\r\n`, 整个文件显示为
+  全量 diff(gpu_tray.py 5456 行、tests 24065 行全变)。已
+  `git checkout -- <file>` 还原重做。**正确写法**: 读 `newline=""` 后写回时
+  **不做 replace**, 插入新文本块时只对**新块**做。每次写完自检
+  `assert "\r\r\n" not in txt`。
+- 变异脚本里 `subprocess` 要读 **stderr**(unittest 报告走 stderr), 只读
+  stdout 会拿到空摘要。
+
+### 顺带发现(未改, 记档)
+
+§157 立的规矩是"说不出名字的数测试算不出账", 这些未命名间距字面量可作为
+下一轮候选:
+
+- `gpu_tray.py` 卡片间横向 gap 裸 `8`(与 Web `.cards{gap:8px}` 同值, 无常量
+  无测试)
+- 筛选栏 `padx=6` / `padx=(6,0)` 共 4 处; 详情窗三按钮 `padx=6` 共 3 处;
+  弹泡 `padx=8, pady=6` 共 2 处; `avail = width - 16  # padx=8 两侧` 1 处
+- AIDA64 侧可作外部参照: 按钮↔按钮 gap 6px、窗体四边内边距 7px
+
+另有两条**不是缺口**, 别再当问题报: `app.ico` 已有 7 档尺寸(16..256);
+`_bold_font` 已有字体回退链。`aida64.ini` 的 `[Generic]` 有
+`HWMonUpdateFreqSensorPage=3000` / `HWMonUpdateFreqGPUPage=3000` /
+`HWMonUpdateFreqSensorIcons=5000`(**按界面分面设不同刷新率**)—— 面板现在
+三个面共用一个刷新频率, 这可作为下一轮候选。
+
+### 用户决策待办
+
+1. 现网 exe 仍是旧构建(10-04), 且默认窗口高度 630 -> 634 -> **644**、表格
+   行高 28 -> 32、设置窗 460x460 -> 460x520、详情窗 520x300 -> 520x320、
+   筛选栏 34 -> 28、汇总卡 56 -> **66**、区块间距都看不到。不同步的话用户
+   看不到这些优化。要同步需 build -> sync -> 重启托盘(会打断实例)。
+2. **39 条新提交未 push**, 与 origin/main 分叉。
