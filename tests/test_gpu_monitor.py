@@ -8512,6 +8512,14 @@ class DetailWrapWidth(unittest.TestCase):
     来量(键名/字体/窗宽任何一样变了, 量到的就是变之后的), 宽字体
     替身保留作保守方向, 并钉住"替身确实更宽"; 另有一条 ast 守卫
     盯着替身的键名列表不许和源码漂移。
+    §175(补 §173 的账): §173 给值 Label 补了左边 6px 间隙, 折行
+    能用的宽度比列宽少 6px —— 358 / 349, 余量 13 / 4。这条守卫
+    当时的算式没减这 6px(拿列宽当可用宽度), 是个被掩着的 6px 乐
+    观: 把 _DETAIL_WRAP_PX 提到 360, 旧算式 360<=364 放行, 而真
+    窗口 358 已经装不下。§173 的 DetailKeyValueGap 用减掉 6px 的
+    算式盯着同一个预算, 所以 345 的现值两边都过得去; 但两把尺必
+    须同一口径, 否则哪天只留一把就会漏。现在两条算式都减
+    _CTL_GAP。
     """
 
     KEYS = ["进程名:", "PID:", "完整路径:", "启动时间:", "当前所在:",
@@ -8571,7 +8579,8 @@ class DetailWrapWidth(unittest.TestCase):
 
         520 宽窗 - padx _DIALOG_PAD_Xx2 之后: 真窗口的键名 Label 带
         font=_FONT_UI, 本机实测 132px, 右列可用 364; 默认 Tk 字体量
-        同一批键名是 141px, 只剩 355。_DETAIL_WRAP_PX=345 两份都进
+        同一批键名是 141px, 只剩 355。_DETAIL_WRAP_PX=345 值 Label 左边还有 §173 的 6px
+        间隙, 折行能用的是 358 / 349。两份都进
         得去(余量 19 / 10), 窄的那份就是留给字体差异的余量 —— 换台
         机器 _FONT_UI 的度量变了, 先报警的是它。写成 380 的话 Tk
         不会替你收进窗内: 无空格的长路径(盘符目录一路没空格的安装
@@ -8634,8 +8643,12 @@ class DetailWrapWidth(unittest.TestCase):
                             for k in self.KEYS)
         finally:
             root.destroy()
-        avail_real = width_real - 2 * self.tray._DIALOG_PAD_X - col0_real
-        avail_wide = width_real - 2 * self.tray._DIALOG_PAD_X - col0_wide
+        # 减 _CTL_GAP(§175): 值 Label 自己左边有 §173 补的 6px 间隙,
+        # 折行能用的宽度比列宽少 6px —— 拿列宽当可用宽度会 6px 乐观。
+        avail_real = (width_real - 2 * self.tray._DIALOG_PAD_X
+                      - col0_real - self.tray._CTL_GAP)
+        avail_wide = (width_real - 2 * self.tray._DIALOG_PAD_X
+                      - col0_wide - self.tray._CTL_GAP)
         self.assertGreater(avail_real, 0, "详情窗右列居然没有宽度")
         self.assertLessEqual(
             self.tray._DETAIL_WRAP_PX, avail_real,
@@ -8858,6 +8871,301 @@ class DetailKeyValueGap(unittest.TestCase):
                 % (self.tray._DETAIL_WRAP_PX, avail, col0))
         finally:
             root.destroy()
+
+
+class SettingsListKeyValueGap(unittest.TestCase):
+    u"""设置窗两个名单段的"键名列 -> 值列"那 6px 横向间隙(§175)。
+
+    改之前 _settings_build 里这两个 grid 调用一个 padx 都没写, 而键名列是
+    左对齐的(sticky="nw"), 列宽由最宽的键名"游戏名单(每行一个)"(实测
+    110px)撑满 —— 于是这两行的键名右缘正好落在列右缘, 值列左缘就是列
+    右缘: 改前实测两行全是 0px, "游戏名单(每行一个)"与 Text 框磨在
+    一起。
+
+    为什么是缺陷而不是"紧凑":
+    - §162 立的规矩是"同一行相邻控件之间的横向间隙 = _CTL_GAP"。筛选栏
+      四项、详情窗底部三个按钮、详情窗键名列 -> 值列(§173)都有守卫盯着,
+      只有设置窗这两行从来没被这条规矩覆盖到。
+    - 上面六个输入行看着没磨在一起, 是因为它们的键名短(67~83px), 后面
+      自然空 27~43px —— 同一处代码两种结果, 靠的是键名字数巧合, 不是
+      设计。哪天键名长一点, 这六行也会磨在一起。
+    - 外部参照与 §162 同一份: 反编译 AIDA64 Engineer 5.20 的二进制
+      DFM 里, 按钮<->按钮横向 gap 6px、标签<->字段 5px, 没有任何一处
+      相邻控件是 0px 贴在一起的。
+
+    三层守卫:
+    1. 静态: ast 抠 _settings_build 里所有 grid 调用的 padx 关键字,
+       钉"全窗恰好两个 padx, 都长在名单 Text 上, 值是 (_CTL_GAP, 0)"。
+       每个间隙只许一个属主: 键名列那边也写一个就叠成 12px(§162 筛选栏
+       同款坑)。
+    2. 真渲染: 逐行量"键名列右缘 -> 值列左缘", 含 Text 的两行必须正好是
+       _CTL_GAP; 六个输入行的间隙必须 >= _CTL_GAP; 顺带钉键名列实占宽度
+       没被补丁撑宽、表单内容没超出窗宽。
+    3. 漂移: 把 _FONT_UI 换成宽一截的字体重建, 两行间隙仍须是
+       _CTL_GAP —— 间隙来自常量, 不来自"当前键名列有多宽"这种会随字体
+       漂移的量。
+
+    与 §173 的 DetailKeyValueGap 是同一处毛病、同一把尺: 那边详情窗八行
+    0px, 这边设置窗两行 0px, 修法都是"padx 声明在值列自己身上"。
+    """
+
+    def setUp(self):
+        import gpu_tray
+        self.tray = gpu_tray
+
+    def _build(self, font=None):
+        u"""真建一次设置窗, 返回 (root, win, frm)。
+
+        font 非空时临时换掉 _FONT_UI(宽字体替身), 用来证明间隙不随键名
+        宽度漂移。 config.json 写在临时目录里(addCleanup 收尸), 字体在
+        finally 里还原。不调 _apply_fluent_theme(): 它内部会再跑一次
+        _rebuild_fonts(), 把替身字体冲掉(§173 的同类 helper 同款取舍)。
+        """
+        import json as _json
+        import tkinter as _tk
+        tmp = tempfile.mkdtemp(prefix="gpumig_p175_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        cfg = os.path.join(tmp, "config.json")
+        with io.open(cfg, "w", encoding="utf-8") as fh:
+            _json.dump({"threshold_percent": 40,
+                        "game_processes": ["game.exe"],
+                        "exclude_processes": ["chat.exe"]}, fh)
+        root = _tk.Tk()
+        saved = self.tray._FONT_UI
+        try:
+            if font is None:
+                self.tray._rebuild_fonts()
+            else:
+                self.tray._FONT_UI = font
+            app = object.__new__(self.tray.TrayApp)
+            app._ui_root = root
+            app._ui_windows = 0
+            app._settings_open = False
+            app.config_path = cfg
+            app._settings_build()
+            for _ in range(6):
+                root.update_idletasks()
+            root.update()
+            wins = [w for w in root.winfo_children()
+                    if isinstance(w, _tk.Toplevel)]
+            self.assertTrue(wins, "设置窗没建出来, 后面全是空转")
+            win = wins[-1]
+            frm = next(c for c in win.winfo_children()
+                       if isinstance(c, _tk.Frame)
+                       and c.pack_info().get("padx")
+                       == self.tray._DIALOG_PAD_X)
+        finally:
+            self.tray._FONT_UI = saved
+        return root, win, frm
+
+    def _rows(self, frm):
+        u"""表单框里的控件按行分组: {row: [控件...]}, 每行按 column 排序。"""
+        rows = {}
+        for c in frm.winfo_children():
+            info = c.grid_info()
+            if not info:
+                continue
+            rows.setdefault(info.get("row"), []).append(c)
+        for r in rows:
+            rows[r].sort(key=lambda c: c.grid_info().get("column") or 0)
+        return rows
+
+    def _gap(self, a, b):
+        u"""b 的左缘减 a 的右缘: 同一行相邻控件的视觉间隙。"""
+        return b.winfo_x() - (a.winfo_x() + a.winfo_width())
+
+    def _grid_padx(self, fn):
+        u"""fn 源码里所有 .grid(...) 调用的 padx: [(目标名, ast 节点)]。"""
+        import textwrap
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        out = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "grid"):
+                continue
+            target = node.func.value
+            name = getattr(target, "id", None) or getattr(target, "attr", "")
+            for kw in node.keywords:
+                if kw.arg == "padx":
+                    out.append((name, kw.value))
+        return out
+
+    def test_the_two_list_rows_declare_the_gap_on_the_value_column(self):
+        u"""静态: 全窗恰好两个 padx, 都长在名单 Text 上, 值是 (_CTL_GAP, 0)。
+
+        钉三件事: padx 的总数(多一个就是有人往键名列或输入行上写, 少一个
+        就是有一行退回到 0px); 属主(只许长在 t_games/t_excl 身上, 每个
+        间隙只许一个属主); 取值(左 _CTL_GAP 右 0, 与 §162 筛选栏、§173
+        详情窗同一把尺)。
+        """
+        padx = self._grid_padx(self.tray.TrayApp._settings_build)
+        self.assertEqual([n for n, _ in padx], ["t_games", "t_excl"],
+                         "设置窗 grid 的 padx 不是恰好长在两个名单 Text 上: "
+                         "%s" % [n for n, _ in padx])
+        for name, node in padx:
+            self.assertTrue(isinstance(node, ast.Tuple)
+                            and len(node.elts) == 2,
+                            "%s 的 padx 不是二元组: %r" % (name, node))
+            left, right = node.elts
+            self.assertTrue(isinstance(left, ast.Name)
+                            and left.id == "_CTL_GAP",
+                            "%s 的 padx 左值不是 _CTL_GAP: 横向间隙要跟 "
+                            "§162 的 _CTL_GAP 同一个数" % name)
+            self.assertTrue(isinstance(right, ast.Constant)
+                            and right.value == 0,
+                            "%s 的 padx 右值不是 0: 只许声明左边那一份, "
+                            "写右边就贴不上了" % name)
+
+    def test_the_list_rows_measure_the_gap_in_a_real_window(self):
+        u"""真渲染: 名单两行的值列左缘 = 键名列宽 + _CTL_GAP。
+
+        改前两行实测 0px(键名列 110px 撑满列宽, 右缘落在列右缘, 值列左缘
+        就是列右缘)。这条还钉五件防"换个修法"的事: 含 Text 的行恰好两行;
+        键名列左缘贴在表单框左缘、实占宽度不超请求宽度(padx 不许长到键
+        身上, 左边那份是孤儿); 全窗最小间隙正好 _CTL_GAP(最宽键名那一行
+        列宽余量为 0, 间隙必须正好落在常量上, 写 5 或写 7 都红); 输入行
+        间隙 >= _CTL_GAP; 表单内容不超出窗宽、窗宽还是 460(证明没有靠改
+        窗宽腾这 6px)。
+        """
+        import tkinter as _tk
+        root, win, frm = self._build()
+        try:
+            rows = self._rows(frm)
+            col0 = max(kids[0].winfo_width() for kids in rows.values()
+                       if len(kids) > 1)
+            texts, entries, others, gaps = [], 0, [], []
+            for r in sorted(rows):
+                kids = rows[r]
+                if len(kids) < 2:
+                    continue
+                a, b = kids[0], kids[1]
+                gaps.append(self._gap(a, b))
+                self.assertEqual(a.winfo_x(), 0,
+                                 "第 %d 行键名列左缘 %dpx: 它的左边没有邻居, "
+                                 "这一份是孤儿 padx(§162 筛选栏同款坑)"
+                                 % (r, a.winfo_x()))
+                self.assertEqual(a.winfo_width(), a.winfo_reqwidth(),
+                                 "第 %d 行键名列实占宽度比请求宽度大: padx "
+                                 "长到键身上了" % r)
+                if any(isinstance(c, _tk.Text) for c in kids):
+                    texts.append(r)
+                    self.assertEqual(
+                        b.winfo_x(), col0 + self.tray._CTL_GAP,
+                        "第 %d 行值列左缘 %d, 而键名列宽 %d + _CTL_GAP %d "
+                        "= %d: 这 6px 没长在值列左边(改前两行实测 0px)"
+                        % (r, b.winfo_x(), col0, self.tray._CTL_GAP,
+                           col0 + self.tray._CTL_GAP))
+                elif all(isinstance(c, _tk.Entry) for c in kids[1:]):
+                    entries += 1
+                    self.assertGreaterEqual(
+                        self._gap(a, b), self.tray._CTL_GAP,
+                        "第 %d 行输入框与键名之间只差 %dpx: 输入行的键名短, "
+                        "这个间隙是键名字数凑出来的, 不是声明出来的"
+                        % (r, self._gap(a, b)))
+                else:
+                    others.append(r)
+            self.assertEqual(len(texts), 2,
+                             "含 Text 的行不是两行: %s" % texts)
+            self.assertEqual(entries, 6, "输入行不是六行: %d" % entries)
+            self.assertEqual(others, [], "有没预料到的行: %s" % others)
+            self.assertEqual(min(gaps), self.tray._CTL_GAP,
+                             "全窗最小间隙 %dpx, 不是 _CTL_GAP %d: 最宽键名"
+                             "那一行列宽余量为 0, 间隙必须正好落在常量上"
+                             % (min(gaps), self.tray._CTL_GAP))
+            avail = win.winfo_width() - 2 * self.tray._DIALOG_PAD_X
+            self.assertLessEqual(
+                frm.winfo_reqwidth(), avail,
+                "表单内容宽 %d 超出窗内可用宽度 %d: 这 6px 是从间隙里出的, "
+                "不该把内容顶到窗外" % (frm.winfo_reqwidth(), avail))
+            self.assertEqual(win.winfo_width(), 460,
+                             "设置窗窗宽被改了: %d" % win.winfo_width())
+        finally:
+            root.destroy()
+
+    def test_the_gap_does_not_drift_with_the_font(self):
+        u"""换一套宽一截的字体重建, 补丁仍须正好是 _CTL_GAP。
+
+        左对齐的键名列有个天生属性: 值列左缘 = 键名列宽 + padx, 而视觉
+        间隙 = padx + 列宽余量(该行键名比最宽键名窄多少)。大字体下最宽的
+        键名会换人: 默认字体下是"游戏名单(每行一个)"110px, 16 号 Arial
+        下换成"排除名单(每行一个)"195px, 游戏名单那行的间隙于是从 6 变成
+        7 —— 差的 1px 是列宽余量, 不是补丁漂移。所以这条钉分解式: 两个
+        名单行的值列左缘必须正好等于「键名列宽 + _CTL_GAP」, 与字体无关;
+        写死字面量、或者把间隙寄托在"当前键名列有多宽"上, 这条红。
+        """
+        import tkinter as _tk
+        root, _win, frm = self._build(font=("Arial", 16))
+        try:
+            rows = self._rows(frm)
+            col0 = max(kids[0].winfo_width() for kids in rows.values()
+                       if len(kids) > 1)
+            hit = 0
+            for r in sorted(rows):
+                kids = rows[r]
+                if len(kids) < 2:
+                    continue
+                if not any(isinstance(c, _tk.Text) for c in kids):
+                    continue
+                hit += 1
+                self.assertEqual(
+                    kids[1].winfo_x(), col0 + self.tray._CTL_GAP,
+                    "大字体下第 %d 行值列左缘 %d, 而键名列宽 %d + "
+                    "_CTL_GAP %d = %d: 间隙不能随键名宽度漂移"
+                    % (r, kids[1].winfo_x(), col0, self.tray._CTL_GAP,
+                       col0 + self.tray._CTL_GAP))
+                self.assertGreaterEqual(
+                    self._gap(kids[0], kids[1]), self.tray._CTL_GAP,
+                    "大字体下第 %d 行键名列 -> 值列只差 %dpx"
+                    % (r, self._gap(kids[0], kids[1])))
+            self.assertEqual(hit, 2, "含 Text 的行不是两行: %d" % hit)
+        finally:
+            root.destroy()
+
+    def test_no_row_in_the_settings_window_touches(self):
+        u"""全窗每一行: 相邻控件的间隙不许小于 _CTL_GAP。
+
+        这条是兜底: 不管行里是 Entry、Text 还是将来新加的控件, 哪一行磨
+        在一起当场红, 报出(行号, 左控件类, 右控件类, 间隙)。§173 在详情
+        窗立了同一条, 两个对话框从此用同一把尺。
+        """
+        root, _win, frm = self._build()
+        try:
+            rows = self._rows(frm)
+            touched = []
+            for r in sorted(rows):
+                kids = rows[r]
+                for a, b in zip(kids, kids[1:]):
+                    gap = self._gap(a, b)
+                    if gap < self.tray._CTL_GAP:
+                        touched.append((r, a.winfo_class(),
+                                        b.winfo_class(), gap))
+            self.assertEqual(touched, [],
+                             "有行的相邻控件间隙不足 %dpx: %s"
+                             % (self.tray._CTL_GAP, touched))
+        finally:
+            root.destroy()
+
+    def test_both_dialogs_declare_the_same_gap(self):
+        u"""设置窗与详情窗的 grid padx 必须都来自 _CTL_GAP。
+
+        用户在两个对话框之间来回切, "键名列 -> 值列"是同一种东西, 间隙必须
+        是同一个数。这条把两个 _build 函数里的每个 grid padx 都抠出来:
+        哪边写成字面量 6、哪边多写一个、哪边少写一个, 当场红。
+        """
+        cases = (("设置窗", self.tray.TrayApp._settings_build, 2),
+                 ("详情窗", self.tray.TrayApp._detail_build, 1))
+        for name, fn, want in cases:
+            padx = self._grid_padx(fn)
+            self.assertEqual(len(padx), want,
+                             "%s 的 grid padx 数量是 %d, 应该是 %d: %s"
+                             % (name, len(padx), want,
+                                [n for n, _ in padx]))
+            for target, node in padx:
+                self.assertIn("_CTL_GAP", ast.dump(node),
+                              "%s %s 的 padx 没来自 _CTL_GAP: %r —— 两个"
+                              "对话框的键 -> 值间隙要同一个数, 写成字面量"
+                              "就会各自漂移" % (name, target, node))
 
 
 class TrayIconRedrawGuard(unittest.TestCase):

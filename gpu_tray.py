@@ -1439,7 +1439,21 @@ class TrayApp:
                      font=_FONT_UI).grid(
                 row=r2, column=0, sticky="nw", ipady=_lbl_ipady)
             t_games = tk.Text(grid, width=30, height=3, font=_FONT_UI)
-            t_games.grid(row=r2, column=1, sticky="w")
+            # 键名列 -> 值列这 6px 是 §175 补上的: 与详情窗 §173 是同一处
+            # 毛病、同一把尺(_CTL_GAP)。改之前这两行一个 padx 都没写,
+            # 而键名列是左对齐的, 列宽由最宽的键名"游戏名单(每行一个)"
+            # (实测 110px)撑满 —— 于是这两行的键名右缘正好落在列右缘,
+            # 值列左缘就是列右缘, 视觉间隙 0px, "游戏名单(每行一个)"与
+            # Text 框磨在一起(实测两行全是 0)。上面六个输入行看着没问题是
+            # 因为它们的键名短(67~83px), 后面自然空 27~43px —— 同一处
+            # 代码两种结果, 靠的是键名字数巧合, 不是设计。
+            # 外部参照与 §162 同一份: 反编译 AIDA64 Engineer 5.20 的二进制
+            # DFM 里, 按钮<->按钮横向 gap 6px、标签<->字段 5px, 没有一处
+            # 相邻控件是 0px 贴在一起的。
+            # padx 声明在值列自己身上(只管左边那一份), 键名列不写: 每个
+            # 间隙只许一个属主, 两边都写就叠成 12px(§162 同款坑)。
+            t_games.grid(row=r2, column=1, sticky="w",
+                         padx=(_CTL_GAP, 0))
             t_games.insert("1.0", "\n".join(cfg.get("game_processes", [])))
             r2 += 1
             grid.rowconfigure(r2, minsize=_FORM_BLOCK_GAP)
@@ -1448,7 +1462,21 @@ class TrayApp:
                      font=_FONT_UI).grid(
                 row=r2, column=0, sticky="nw", ipady=_lbl_ipady)
             t_excl = tk.Text(grid, width=30, height=3, font=_FONT_UI)
-            t_excl.grid(row=r2, column=1, sticky="w")
+            # 键名列 -> 值列这 6px 是 §175 补上的: 与详情窗 §173 是同一处
+            # 毛病、同一把尺(_CTL_GAP)。改之前这两行一个 padx 都没写,
+            # 而键名列是左对齐的, 列宽由最宽的键名"游戏名单(每行一个)"
+            # (实测 110px)撑满 —— 于是这两行的键名右缘正好落在列右缘,
+            # 值列左缘就是列右缘, 视觉间隙 0px, "游戏名单(每行一个)"与
+            # Text 框磨在一起(实测两行全是 0)。上面六个输入行看着没问题是
+            # 因为它们的键名短(67~83px), 后面自然空 27~43px —— 同一处
+            # 代码两种结果, 靠的是键名字数巧合, 不是设计。
+            # 外部参照与 §162 同一份: 反编译 AIDA64 Engineer 5.20 的二进制
+            # DFM 里, 按钮<->按钮横向 gap 6px、标签<->字段 5px, 没有一处
+            # 相邻控件是 0px 贴在一起的。
+            # padx 声明在值列自己身上(只管左边那一份), 键名列不写: 每个
+            # 间隙只许一个属主, 两边都写就叠成 12px(§162 同款坑)。
+            t_excl.grid(row=r2, column=1, sticky="w",
+                         padx=(_CTL_GAP, 0))
             t_excl.insert("1.0", "\n".join(cfg.get("exclude_processes", [])))
 
             def save():
@@ -2528,10 +2556,12 @@ class TrayApp:
                 # padx _DIALOG_PAD_Xx2 之后, 键名列多宽看字体 —— 本行
                 # Label 带 font=_FONT_UI, 实测 132, 右列可用 364; 换
                 # 成更宽的字体(默认 Tk 字体量同一批键名是 141)只剩
-                # 355。345 两份预算都进得去(余量 19 / 10), 窄的那份
-                # 就是留给字体差异的余量: 换台机器 _FONT_UI 的度量变
-                # 了, 先报警的是它。写 380 的话 Tk 直接把这一行画到
-                # 窗户外(它只保证折到 wraplength, 不保证折得进窗)。
+                # 355。值 Label 自己左边还有 §173 补的 6px 间隙
+                # (padx=(_CTL_GAP, 0)), 折行真正能用的宽度是 358 /
+                # 349: 345 两份都进得去(余量 13 / 4), 窄的那份就是
+                # 留给字体差异的余量: 换台机器 _FONT_UI 的度量变了,
+                # 先报警的是它。写 380 的话 Tk 直接把这一行画到窗外
+                # (它只保证折到 wraplength, 不保证折得进窗)。
                 # 键名列 -> 值列这 6px 是 §173 补上的。原来一个 padx 都
                 # 没写, 而键名列是右对齐的(anchor="ne"), 列宽由最宽的
                 # 那个键("GPU% / 核显% / 独显%:")撑满 —— 于是每一行键的
