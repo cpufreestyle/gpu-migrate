@@ -640,6 +640,13 @@ def _text_px(text):
 
 
 _TIP_WRAP_PX = 320          # 弹泡内容折行宽度, 比面板还宽就没意义了
+# 弹泡内容的内边距, 以及它离宿主控件/屏幕右缘的间隙。汇总卡 tooltip
+# 与表头列头 tooltip 是同一套视觉, 却各写了一份裸数字(8/6/4/8):
+# 两处副本早就漂开也不会有人发现, 因为没有一条守卫同时看这两份。
+_TIP_PAD_X = 8              # 弹泡内容左右内边距
+_TIP_PAD_Y = 6              # 弹泡内容上下内边距
+_TIP_GAP_Y = 4              # 弹泡与所属控件之间的纵向间隙
+_TIP_EDGE_GAP = 8           # 弹泡离屏幕右缘的最小间隙
 _DETAIL_WRAP_PX = 345        # 详情窗右列折行宽度, 见 _detail_build 注释
 # 详情窗窗高下限: 8 行的常规形态。gone 分支多插一行, 窗高改成按内容
 # 现算(见 _detail_build 收尾), 这个数只是"常规形态别比现在更矮"。
@@ -685,17 +692,19 @@ def _bind_tip(widget, text):
             win.configure(bg=_LINE)
             lab = tk.Label(win, text=text, bg=_PANEL_BG, fg=_FG,
                            font=_FONT_UI, justify="left",
-                           wraplength=_TIP_WRAP_PX, padx=8, pady=6)
+                           wraplength=_TIP_WRAP_PX,
+                           padx=_TIP_PAD_X, pady=_TIP_PAD_Y)
             lab.pack()
             widget.update_idletasks()
             x = widget.winfo_rootx()
-            y = widget.winfo_rooty() + widget.winfo_height() + 4
+            y = (widget.winfo_rooty() + widget.winfo_height()
+                 + _TIP_GAP_Y)
             # 弹泡超出屏幕右缘时收回内侧: 汇总卡在窗口右侧, 面板又常
             # 常贴着屏幕右边放, 不收敛的话 tooltip 整个开在视口外。
             w = win.winfo_reqwidth()
             sw = win.winfo_screenwidth()
-            if x + w + 8 > sw:
-                x = max(0, sw - w - 8)
+            if x + w + _TIP_EDGE_GAP > sw:
+                x = max(0, sw - w - _TIP_EDGE_GAP)
             win.wm_geometry("+%d+%d" % (x, y))
         except Exception:
             _hide()
@@ -749,14 +758,15 @@ def _bind_tree_tip(tree, col, text):
             win.configure(bg=_LINE)
             tk.Label(win, text=text, bg=_PANEL_BG, fg=_FG,
                      font=_FONT_UI, justify="left",
-                     wraplength=_TIP_WRAP_PX, padx=8, pady=6).pack()
+                     wraplength=_TIP_WRAP_PX,
+                     padx=_TIP_PAD_X, pady=_TIP_PAD_Y).pack()
             # 列头没有现成 bbox: 取列在表内的 x 偏移, y 贴表格顶边。
             x = tree.winfo_rootx() + (tree.column(col, "width") or 0)
             y = tree.winfo_rooty()
             w = win.winfo_reqwidth()
             sw = win.winfo_screenwidth()
-            if x + w + 8 > sw:
-                x = max(0, sw - w - 8)
+            if x + w + _TIP_EDGE_GAP > sw:
+                x = max(0, sw - w - _TIP_EDGE_GAP)
             win.wm_geometry("+%d+%d" % (x, y))
         except Exception:
             _hide()

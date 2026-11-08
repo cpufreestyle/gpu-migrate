@@ -10162,6 +10162,111 @@ class TrayPanelStatusFloor(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_the_two_tooltips_share_one_pad_and_gap(self):
+        u"""汇总卡 tooltip 与表头列头 tooltip 的内边距和间隙必须同一套常量。
+
+        两处 _show 是同一套视觉的两份实现(_bind_tip 给汇总卡,
+        _bind_tree_tip 给表头列头), 却各写了一份裸数字 8/6/4/8。
+        副本漂开没有任何人会发现: 没有任何一条守卫同时看这两份, 而
+        它们在屏幕上是同一个东西 —— 用户不会因为悬停的是表格列头
+        就接受一个更胖、离控件更远的弹泡。
+
+        抽常量而不是让两处写同一个数: 弹泡这四个数在行距这一轮已经
+        跟着调过几处, 两处硬写同一个数等于把同一件事说两遍, 下次改
+        一定只改一边。
+
+        静态钉两份实现各自接回常量; 真渲染钉常量对 Label 尺寸的真实
+        贡献。后者用差分量而不是绝对量: tk.Label 自带 bd=2 的边框项,
+        绝对量里混着它; 而 _text_px 量出来的字宽与 Label 内部量法
+        差 4px(实测 84 vs 88), 拿它直接对 Label 尺寸会假红。
+        """
+        import tkinter as _tk
+        import gpu_tray as gt
+        # 数值也钉。这四个数没有外部参照(反编译 AIDA64 那张图没量
+        # tooltip), 理由是"同一个组件的两份实现必须同一个数": 改它
+        # 就是重新决定弹泡的疏密, 不能是随手一敲。
+        self.assertEqual(gt._TIP_PAD_X, 8,
+                         "_TIP_PAD_X=%d: 弹泡内容左右内边距, 两处实现"
+                         "共用这一个数" % gt._TIP_PAD_X)
+        self.assertEqual(gt._TIP_PAD_Y, 6,
+                         "_TIP_PAD_Y=%d: 同上" % gt._TIP_PAD_Y)
+        self.assertEqual(gt._TIP_GAP_Y, 4,
+                         "_TIP_GAP_Y=%d: 弹泡与宿主控件的纵向间隙,"
+                         "同一个数" % gt._TIP_GAP_Y)
+        self.assertEqual(gt._TIP_EDGE_GAP, 8,
+                         "_TIP_EDGE_GAP=%d: 弹泡离屏幕右缘的最小"
+                         "间隙, 同一个数" % gt._TIP_EDGE_GAP)
+        # 每处只查自己的: 合起来查的话, 其中一处退回裸数字会被另一处
+        # 掩盖过去。_bind_tip 与 _bind_tree_tip 是模块级函数。
+        for name, fn in (("_bind_tip", gt._bind_tip),
+                         ("_bind_tree_tip", gt._bind_tree_tip)):
+            body = inspect.getsource(fn)
+            self.assertIn("padx=_TIP_PAD_X, pady=_TIP_PAD_Y", body,
+                          "%s 的弹泡又是裸数字, 或者又和另一处不是"
+                          "同一套" % name)
+            self.assertEqual(
+                body.count("_TIP_EDGE_GAP"), 2,
+                "%s 里 _TIP_EDGE_GAP 出现 %d 次: 右缘收敛是判断一次"
+                "加回填一次, 少一次说明有一半退回裸数字了"
+                % (name, body.count("_TIP_EDGE_GAP")))
+        btip = inspect.getsource(gt._bind_tip)
+        self.assertIn("+ _TIP_GAP_Y", btip,
+                      "弹泡与汇总卡的纵向间隙又是裸数字")
+        # 列头 tooltip 的 y 贴表格顶边, 它悬在表头正上方, 加了间隙
+        # 就会掉到第一行数据上去 —— 这个差异是设计, 不许被"统一"掉。
+        self.assertNotIn("_TIP_GAP_Y", inspect.getsource(gt._bind_tree_tip),
+                        "列头 tooltip 不该有纵向间隙: 它的 y 贴表格顶边,"
+                        "加了间隙弹泡会掉到第一行数据上")
+        # 真渲染: 同一个文本/字体/折行宽度下, 有内边距的 Label 比
+        # padx=0,pady=0 的宽 2*_TIP_PAD_X、高 2*_TIP_PAD_Y。短/中/长
+        # 三档都量: 长文本下会折行, 只量短文本的话折行路径没人管。
+        root = _tk.Tk()
+        try:
+            gt._rebuild_fonts()
+            gt._apply_fluent_theme()
+            for text in (u"短", u"占用取最忙进程; 显存取跨适配器求和",
+                         u"很长的悬停解释文本" * 6):
+                bare = _tk.Label(root, text=text, bg=gt._PANEL_BG,
+                                 fg=gt._FG, font=gt._FONT_UI,
+                                 justify="left",
+                                 wraplength=gt._TIP_WRAP_PX,
+                                 padx=0, pady=0)
+                pad = _tk.Label(root, text=text, bg=gt._PANEL_BG,
+                                fg=gt._FG, font=gt._FONT_UI,
+                                justify="left",
+                                wraplength=gt._TIP_WRAP_PX,
+                                padx=gt._TIP_PAD_X, pady=gt._TIP_PAD_Y)
+                root.update()
+                self.assertEqual(
+                    pad.winfo_reqwidth() - bare.winfo_reqwidth(),
+                    2 * gt._TIP_PAD_X,
+                    "%r: 内边距对宽度的贡献 %dpx, 而 "
+                    "2*_TIP_PAD_X=%d"
+                    % (text[:12],
+                       pad.winfo_reqwidth() - bare.winfo_reqwidth(),
+                       2 * gt._TIP_PAD_X))
+                self.assertEqual(
+                    pad.winfo_reqheight() - bare.winfo_reqheight(),
+                    2 * gt._TIP_PAD_Y,
+                    "%r: 内边距对高度的贡献 %dpx, 而 "
+                    "2*_TIP_PAD_Y=%d"
+                    % (text[:12],
+                       pad.winfo_reqheight() - bare.winfo_reqheight(),
+                       2 * gt._TIP_PAD_Y))
+                # 折行上限: 弹泡最宽就是折行宽度加左右内边距, 超出
+                # 说明 wraplength 与内边距脱钩了。
+                self.assertLessEqual(
+                    pad.winfo_reqwidth(),
+                    gt._TIP_WRAP_PX + 2 * gt._TIP_PAD_X,
+                    "%r: 弹泡宽 %dpx, 超过折行宽度加两侧内边距的 "
+                    "%dpx: wraplength 与 _TIP_PAD_X 脱钩了"
+                    % (text[:12], pad.winfo_reqwidth(),
+                       gt._TIP_WRAP_PX + 2 * gt._TIP_PAD_X))
+                bare.destroy()
+                pad.destroy()
+        finally:
+            root.destroy()
+
     def test_the_filter_row_controls_share_one_baseline(self):
         u"""筛选栏里五个控件的底边必须对齐。
 
