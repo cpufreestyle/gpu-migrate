@@ -4,11 +4,11 @@
 
 ## 0. 现状快照（2026-10-03 第三轮重写；下面 §1–§7 是**第一轮**的原样记录，只作历史）
 
-- 分支 `main`。**已 push**：§166 轮推 54 条（连同其 docs 提交 `66f04b1` 共 55 条）、§167 轮（第二写者）推 2 条，`3bf1c4a..02caf12` 共 57 条在 `origin/main`；§168 轮（第二写者）又推 1 条（`2d51419`）；§169 轮落 1 条 fix（`90e5084`）尚未 push，现共 59 条（`3bf1c4a..90e5084`）、未 push 1（本轮 docs 落地后为 2，push 后 `origin/main` 60 条、0 未 push）；release `v1.0.0` 已建，tag 仍指向 `fdea9ae`；§168 已把现网 exe 换成含 §155-§167 全部间距修复的新构建（活页阈值线实测 `<line class=thr x1=0 y1=10.7 x2=300 y2=10.7 />`）。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准。
-- 体量（§169 轮）：`gpu_monitor.py` 3365 行、`gpu_tray.py` 2862 行、`tests/test_gpu_monitor.py` 12976 行、README 424 行、HANDOFF 8342 行（含 §169）。
-- 测试：**679 条**。§166 轮四种跑法实测（pytest 正序 `678 collected`，全量挂 2 条已知漂白、单独复跑全过，根因见 §166；`python -X utf8 tests/test_gpu_monitor.py` `Ran 678 tests ... OK`（40.2s）、`python -X utf8 -m unittest discover -s tests` `Ran 678`（45.7s，2 个 error 同为 `RegisterClassEx` 已知漂白）；整套倒序（含守卫自身）随上述各跑覆盖，倒序那条是仓库里的正式用例 `SuiteRunsInReverseOrder`（子进程按类名自排除防套娃），不再靠人记得手工跑）。§169 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（30.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（29.4s）。**跑完整套后 7 个数据/日志文件逐字节不变**：`config.json` / `panel_ui.json` / `report.csv` / `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` / `gpu_monitor_error.log` —— 这句在 §111 时是假的，`tray_debug.log` 一直在被测试写穿，§113 才修真，§169 轮复跑实测仍旧不变（注意 `history.jsonl` 不在这 7 个里：活实例每 10s 往里追一行，拿它当"没变"的判据永远不成立，README 里那条旧声称只在没有活实例跑着的时候成立）。长行基线 §166 轮实测 `gpu_monitor.py 16 / gpu_tray.py 6 / tests 10`，§169 轮复测未变（后两个数比 §165 记录的 5/5 大，增量来自 §166 并入的第二写者内容，见 §166 踩过的坑；约定是别新增）。
-- 本文档 169 节、8342 行，最新节号 §169，且**节号有倒挂**（§108 排在 §105 前面，尾部 §92 在 §87 前面）。查某件事按节号搜（`grep -n "^## 105\."`），别按物理位置读；新轮次请续号并顺手确认没有比它更大的号。
-- 现网状态：`GPUMigrate.exe --ensure` 父子对存活（11-09 00:25 换上的新实例，PID 36712/41736，§169 落地后的同步轮），看门狗 `GPUMigrateWatchdog` 每 2 分钟一次，面板 `127.0.0.1:8787` 正常。**现网 exe 是 11-09 00:23 重建的构建**（两个 spec 构建 + 冒烟全过，七项字节码级断言全过），含 §155-§169 全部间距修复，§109 的崩溃日志滚动、§110 的温度保住、PDH 展开上界这些老修复同样已在其中。`gpu_monitor_crash.log` 的性质见 §109 —— 它是原生故障现场记录，**不是**死亡证明，§105 里"0 字节 = 没崩"和"165 条 = 一直崩"两种读法都错。
+- 分支 `main`。**已 push**：§166 轮推 54 条（连同其 docs 提交 `66f04b1` 共 55 条）、§167 轮（第二写者）推 2 条，`3bf1c4a..02caf12` 共 57 条在 `origin/main`；§168 轮（第二写者）又推 1 条（`2d51419`）；§169 轮落 1 条 fix（`90e5084`）尚未 push，现共 59 条（`3bf1c4a..90e5084`）、未 push 1（本轮 docs 落地后为 2，push 后 `origin/main` 60 条、0 未 push）；release `v1.0.0` 已建，tag 仍指向 `fdea9ae`；§168 已把现网 exe 换成含 §155-§167 全部间距修复的新构建（活页阈值线实测 `<line class=thr x1=0 y1=10.7 x2=300 y2=10.7 />`）。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准；§170 / §171 / §172 三轮的 fix + docs 改动已写盘未 commit/push，提交后回填本行的 SHA 与未 push 计数。
+- 体量（§172 轮）：`gpu_monitor.py` 3378 行、`gpu_tray.py` 2870 行、`tests/test_gpu_monitor.py` 13280 行、README 457 行、HANDOFF 8676 行（含 §172）。
+- 测试：**686 条**。§166 轮四种跑法实测（pytest 正序 `678 collected`，全量挂 2 条已知漂白、单独复跑全过，根因见 §166；`python -X utf8 tests/test_gpu_monitor.py` `Ran 678 tests ... OK`（40.2s）、`python -X utf8 -m unittest discover -s tests` `Ran 678`（45.7s，2 个 error 同为 `RegisterClassEx` 已知漂白）；整套倒序（含守卫自身）随上述各跑覆盖，倒序那条是仓库里的正式用例 `SuiteRunsInReverseOrder`（子进程按类名自排除防套娃），不再靠人记得手工跑）。§169 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（30.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（29.4s）；§170 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（31.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（30.7s），两种都带 `-B` 跑过一遍确认与 pyc 无关（见 §170 踩过的坑）；§171 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 685 tests ... OK`（30.7s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 685 tests ... OK`（32.5s），首次跑法一撞过一次 `WinError 1410` 已知漂白（Tk 建窗时序，复跑即绿，见 §171 踩过的坑）；§172 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 686 tests ... OK`（30.8s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 686`（31.7s），本轮新增的 `DetailWrapWidth` 会真建一次详情窗（patch `pid_to_name`），两种跑法下都稳。**跑完整套后 7 个数据/日志文件逐字节不变**：`config.json` / `panel_ui.json` / `report.csv` / `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` / `gpu_monitor_error.log` —— 这句在 §111 时是假的，`tray_debug.log` 一直在被测试写穿，§113 才修真，§169 轮复跑实测仍旧不变（注意 `history.jsonl` 不在这 7 个里：活实例每 10s 往里追一行，拿它当"没变"的判据永远不成立，README 里那条旧声称只在没有活实例跑着的时候成立）。长行基线 §166 轮实测 `gpu_monitor.py 16 / gpu_tray.py 6 / tests 10`，§169 轮复测未变（后两个数比 §165 记录的 5/5 大，增量来自 §166 并入的第二写者内容，见 §166 踩过的坑；约定是别新增）。
+- 本文档 172 节、8676 行，最新节号 §172，且**节号有倒挂**（§108 排在 §105 前面，尾部 §92 在 §87 前面）。查某件事按节号搜（`grep -n "^## 105\."`），别按物理位置读；新轮次请续号并顺手确认没有比它更大的号。
+- 现网状态：`GPUMigrate.exe --ensure` 父子对存活（11-09 00:25 换上的新实例，PID 36712/41736，§169 落地后的同步轮），看门狗 `GPUMigrateWatchdog` 每 2 分钟一次，面板 `127.0.0.1:8787` 正常。**现网 exe 是 11-09 00:23 重建的构建**（两个 spec 构建 + 冒烟全过，七项字节码级断言全过），含 §155-§169 全部间距修复（**§170 的 Web 行高修复、§171 的 head 修复、§172 的折行注释/守卫都不在其中**，同步见 §172 待办），§109 的崩溃日志滚动、§110 的温度保住、PDH 展开上界这些老修复同样已在其中。`gpu_monitor_crash.log` 的性质见 §109 —— 它是原生故障现场记录，**不是**死亡证明，§105 里"0 字节 = 没崩"和"165 条 = 一直崩"两种读法都错。
 
 ## 0a. 第一轮原文（历史，勿当作现状）
 
@@ -8345,3 +8345,332 @@ M4/M5 说明新守卫**不**负责按钮行 pady 的裸数字(既有守卫负责
    LOAD_CONST; KW_NAMES 是元组常量, 验包遍历必须下沉到元组叶子里, 否则
    "无 expand" 那条断言是空转的。
 2. §167 候选 C 仍未动(见上)。
+## 170. 续一百六十九：Web 表格行还是 29px, 托盘 32px —— §153 提行高时 Web 没跟上, 而守卫拿写死的 28 在算(布局/跨面)
+
+### 为什么是缺陷
+
+§153 把托盘表格行高从 28 提到 32(文字上下留白 6 -> 8px), Web 面板的 td 却
+原封不动: `padding:6px 10px` + 自然行盒, 浏览器实测行高 29.85px、行内留白
+12px。同一个"表格行", 两个面差 3px 行高、4px 留白 —— 用户在托盘与浏览器之间
+切的时候疏密感对不上, 而这件事自 §153 起躺了一百多轮没人发现, 因为盯着它的
+守卫自己拿写死的 28 在算托盘侧:
+
+    §141 立契约时: tray_inner = 28 - 16(两个字面量), web 侧 6*2 + round(13*1.2) + 1
+    §153 改常量后: _ROW_H 变成 32, 守卫里的 28 没跟着改 -> 等式照样成立, 绿
+
+与 §147/§153 记过的是同一类病(间距常量改了、测试里的字面量不跟着变), 本轮是又一例。
+所以修法不是把 28 改成 32 —— 是让等式两边都从现行来源算, 写字面量的一方从此不存在。
+
+### 改动
+
+- gpu_monitor.py: `th,td` 规则 `padding:6px 10px` ->
+  `padding:8px 10px;line-height:15px`, 行盒 = 8 + 15 + 8 + border-bottom 1
+  = 32, 与托盘 `rowheight=_ROW_H=32` 相等; 行内留白两边都是 16px。
+  `line-height` 写死而不靠自然行盒: 13px Segoe UI 的自然行盒实测 17.26px,
+  fallback 到别的字体时会变; 写死之后行高在任何机器上都是 32, 与 Tk 的
+  rowheight 一样不随字体漂移。
+- gpu_tray.py: `_ROW_H` 注释里"字号 9 的 linespace 是 17px、28px 行高留白 5.5px、提到 32
+  留白 7.5px"量的是 TkDefaultFont(Microsoft YaHei UI); 表格实际用 `_FONT_UI`(Segoe UI
+  Variable Text 9), 实测 linespace 16, 留白数是 6px/8px。§153 当时量错了字体, 留白数跟着
+  差了 0.5px, 注释本轮改正。
+- tests/test_gpu_monitor.py: 守卫改名重写,
+  `test_the_table_row_inner_padding_matches_the_web_panel`
+  -> `test_the_table_row_box_matches_the_web_panel`, 从"只对行内留白"
+  升级成"对整个行盒"(行高 + 留白, 两边都从现行来源算)。
+- 三处测量纠正(都是本轮实测, 不是推的): th 不是 32 是 31; `_TREE_HEAD_H` 注释里"Web 的 th
+  是 28.6px, 差 3.4px"更新为 31px/差 1px; 文档串里"th 跟着变 32"同改。
+
+### 守卫怎么写的
+
+三层, 缺一层就有漏网:
+
+1. **静态**(防"规则被拆坏"和"悄悄去掉 line-height"): 从 `gm._PANEL_STYLE` 正则抠出所有
+   `th,td{...}` 块, 断言带 padding 的**只有一个**(深色档只覆盖边框色; 多一个少一个都说明
+   规则被拆坏, 留白没法对账); 块里必须同时有 `padding:` 和 `line-height:`, 少后者就红 ——
+   行高会随 fallback 字体漂移, 不再是钉死的 32。
+2. **等式**(防字面量漂移, 本轮的全部意义): 托盘侧 `gt._ROW_H - 16`, Web 侧从抠出来的
+   `padding` 算留白(`padding_y * 2`)、算行高(`padding_y * 2 + line-height + 1`);
+   断言留白相等、行高 == `_ROW_H`。两边都不出现字面量, 所以 W6(把托盘侧退回写死
+   的 28)立刻红。
+3. **linespace 16 是唯一保留的字面量**, 因为单测里没有 Tk 根窗口,
+   `tkfont.Font` 会抛 RuntimeError; 16 是 `_FONT_UI` 的实测值, 文档串写清它是哪
+   个字体的数(TkDefaultFont 的 17 是另一套字体, 表格不用它), 免得下一个人再把它
+   "顺手"改成 17。
+
+既有断言全部自动跟随: `test_the_window_floor_covers_the_table_header` 那组
+(`_TREE_HEAD_H == 22 + 2*_HEAD_PAD_Y`、实测表头高)不因本轮放松; `_PANEL_MIN_H` 的
+纵向预算账面用的一直是 `_ROW_H` 常量本身, 不涉及 Web 侧。
+
+### 验证结果
+
+- 探针(独立进程, 真渲染): `_FONT_UI`(Segoe UI Variable Text 9) linespace **16**,
+  TkDefaultFont(Microsoft YaHei UI) 17, `_FONT_NUM`(Consolas 12) 19; 真 Treeview
+  rowheight=32、heading_h=32、row pitch 32。
+- 浏览器实测(静态 HTML, DPR 1.68): 改前 td 高 29.85px / offsetHeight 30 / 留白 12, th 30;
+  改后 td 31.59 / 32 / 16, th 31。td 的 32 与托盘 rowheight 32 相等; th 31 与
+  `_TREE_HEAD_H=32` 差 1px(border-collapse 把 th|td 之间那条 1px 对半劈, th 只落下半条,
+  圆整比 td 少 1), 比改之前的 28.6/差 3.4px 近, 不从这条硬凑。
+- 全量: `python -X utf8 tests/test_gpu_monitor.py` -> Ran 679 tests ... OK
+  (31.7s); `python -X utf8 -m unittest discover -s tests` -> Ran 679 ... OK
+  (30.7s)。679 = 原 679: 守卫是改名重写, 不增条数。
+
+### 变异验证(7 条, 全红)
+
+脚本 C:\Users\qm081\AppData\Local\Temp\gpumig_p170\mutate170.py,
+每条先备份、改完还原, 结束报 restore byte-identical: True。子进程带
+`PYTHONDONTWRITEBYTECODE=1` + `-B`、还原后 sleep 1.2s(原因见踩过的坑)。
+
+- W1 Web padding 8 -> 6(§153 之前的旧值) -> 新守卫(留白等式)。
+- W2 去掉 line-height -> 新守卫(静态: line-height 不许缺)。
+- W3 line-height 15 -> 17(行高 34) -> 新守卫(行高等式)。
+- W4 padding 8 -> 7(留白 14) -> 新守卫(留白等式)。
+- W5 _ROW_H 32 -> 28(Web 不跟着变) -> 新守卫(留白 + 行高两个等式)。
+- W6 守卫退化成 §153 当时的旧写法(托盘侧写死 28) -> 新守卫。**这条就是本轮的意义**: 旧写法
+  正是靠这个漏洞绿了一百多轮。
+- W7 守卫把 Web 留白写死 12 -> 新守卫。
+
+### 踩过的坑
+
+- **变异脚本的"还原"与 pyc 的同一秒竞态(本轮最陡的一个坑)**: 第一版
+  mutate170.py 每条变异改完立刻还原, 而 Python 的 pyc 校验头只存**整秒**
+  mtime —— 变异+还原+跑都在同一秒内完成时, 还原后的文件会被判为"没变", 子进程
+  加载的是**变异版字节码**。表现很阴: 7 条变异全红(真阳性), 收尾 baseline 却报
+  FAILED, 紧接着手动跑的全量套件也 FAILED(failures=1), 而单独复跑守卫又是 OK
+  —— 三个结果互相矛盾, 最容易误判成"守卫 flaky"然后去改守卫。修法: 子进程
+  `PYTHONDONTWRITEBYTECODE=1` + `-B`, 还原后 sleep 1.2s; 复跑后首尾 baseline
+  全 OK、全量两种跑法 679 OK, 与单个守卫结论一致。**教训: 变异脚本的"还原字节
+  一致"只证明文件内容, 不证明下一个进程加载的是什么。**
+  `python -c` 的双引号会被外层 PowerShell 吞掉; gpu_tray.py / gpu_monitor.py / tests 盘上是
+  CRLF(i/lf w/crlf), 按行替换后断言 crlf 数 == lf 数; README / HANDOFF 是纯 LF, 另用一套。
+- th 的 31 vs 32: 文档串第一版写"th 跟着变 32", 浏览器实测 offsetHeight 是 31(rect 31.3)。
+  按本仓库"说的必须是量到的同一个东西"的规矩, 源码注释、测试文档串、`_TREE_HEAD_H` 注释三处
+  一起改正, 并把成因(border-collapse 对半劈)写进注释, 不然下一个人还会"顺手"把它凑成 32。
+
+### 顺带发现(未改, 记档)
+
+- 托盘表头 `_TREE_HEAD_H=32` 与 Web th 31 差 1px: th 高度由 ttk 线性关系(22 + 2*_HEAD_PAD_Y)
+  定, Web 侧要凑这 1px 得给 th 单开一条规则(单独 padding-top 或 line-height), 而 th 与 td
+  现在共用一条规则 —— 为 1px 拆规则不值, 记档。
+- §169 记的候选 C(`_DETAIL_WRAP_PX` 注释里"键名列 141"是假的, 实测 132px)仍未动。
+- 现网 exe(11-09 00:23 构建)**不含**本轮 Web 行高修复; 要同步需 build -> 字节码级验包 ->
+  换活实例(会打断实例, 需用户同意)。
+
+### 用户决策待办
+
+1. 本轮 fix + docs 改动已写盘未 commit/push, 等放行; 提交后回填 §0 快照的 SHA 与未 push 计数。
+2. 现网同步(见上)。
+3. §167 候选 C / §169 候选仍未动。
+
+## 171. 续一百七十：Web 面板 head 破损 —— f443408 把 color-scheme meta 插进 viewport 字符串中间, 两条 meta 粘成一团, 幽灵文本把整页顶下去 21px
+
+### 为什么是缺陷
+
+`panel_html` 模板(gpu_monitor.py, 改动前 1975-1978 行)长这样:
+
+    "<html lang='zh-CN'><head><meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,"
+    "<meta name='color-scheme' content='light dark'>"
+    "initial-scale=1'>"
+
+第二三行是 f443408(加深色模式)插进来的, 插在了 viewport 那个字符串的**中间**。
+四个字符串拼起来, 浏览器按标签解析, 读到的是:
+
+    <meta name='viewport' content='width=device-width,<meta name='color-scheme' content='light dark'>initial-scale=1'>
+
+一条 meta, 而不是两条。现网 http://127.0.0.1:8787/ 实测同样中招(源码与活实例一致),
+浏览器自己序列化出来的那条是 `<meta name="viewport" content="width=device-width,&lt;meta name=" color-scheme'="">`。
+后果三条:
+
+1. viewport 的 content 到 "width=device-width,<meta name=" 就被引号闭合了 —— **viewport 从未生效**,
+   手机浏览器会按 980px 版面渲染再整体缩小(§147 立这条 meta 防的就是这个);
+2. **color-scheme meta 从来不存在** —— 深色模式声明是空的, f443408 想做的事一条都没落地;
+3. 尾巴上 "initial-scale=1'>" 是 head 里的裸文本, 规范把 head 里的裸文本挪到 body 开头 ——
+   页面顶部多出一行幽灵文本, 整页被顶下去 21px(现网 h2 的 top 实测 37.43, 应为 16)。
+
+而盯着 viewport 的守卫(§147 立的 `WebPanelResponsive.test_the_panel_declares_a_viewport_for_phones`)
+是两个子串断言: `assertIn("name='viewport'", html)` + `assertIn("width=device-width", html)` ——
+破损形态下两个子串都还在, 照样绿。本轮加了对照实验证实这个盲区(见变异验证节)。
+
+### 改动
+
+- gpu_monitor.py: 模板三行并两行, viewport 的 content 自己闭合, color-scheme 独立成行:
+
+      "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<meta name='color-scheme' content='light dark'>"
+
+  顺手修中间行那个怪的 4 空格缩进(其余行都是 8)。
+- tests/test_gpu_monitor.py: 新增 `_HeadParser`(html.parser 收集器) + `WebPanelHeadStructure`
+  6 条用例; 顶部导入 `from html.parser import HTMLParser`。纯标准库, 解析级, 不起浏览器。
+
+### 守卫怎么写的
+
+子串断言对"引号没闭合"全盲, 所以换成**按浏览器的方式解析**: `html.parser` 解析
+`panel_html` 的输出, 盯结构不盯字符串。六条:
+
+1. viewport 的 content 原样等于 `width=device-width,initial-scale=1`(精确等式, 不是 in);
+2. color-scheme 是独立的 meta, content 等于 `light dark`;
+3. head 里恰好 3 条 meta, 名字序列 `[None, "viewport", "color-scheme"]`(charset 那条没有 name 属性);
+4. head 里任何属性值不许含 `<` —— 引号没闭合时, 后面的标签会被吃成值的一部分;
+5. head 里不许有 title/style/script 之外的裸文本 —— 这就是幽灵文本的判据;
+6. body 开口第一个事件就是 `("start", "h2")`, 前面不许有文本或别的标签。
+
+第 5、6 条是同一个缺陷的两个观测面: 解析器看见裸文本在 head 里, 浏览器看见它在 body 开头。
+每条用例都过 5 种快照变体(空历史/有历史/有温度/无阈值/暂停中)的 subTest —— head 与数据无关,
+但每种快照都得过同一条, 防的是"某个分支把 head 也顺手改了"。
+
+### 验证结果
+
+- 新守卫 6 条 OK(0.023s)。
+- 浏览器真渲染复验: 重生成 HTML -> node http 服务(127.0.0.1:8974) -> playwright 实测:
+  viewport content == `width=device-width,initial-scale=1`、color-scheme == `light dark`、
+  meta 3 条、body 第一个元素是 h2(前面无文本节点)、全文无 initial-scale 幽灵文本;
+  h2 的 `getBoundingClientRect().top` = 15.997(16)。截图存 `gpumig_p171\web_panel_fixed.png`。
+  console 只有一条 favicon 404(服务没供图标, 无关)。
+- 全量两种跑法: `python -X utf8 -B tests/test_gpu_monitor.py` `Ran 685 tests ... OK`(30.7s)、
+  `python -X utf8 -B -m unittest discover -s tests` `Ran 685 tests ... OK`(32.5s)。
+  首次跑法一撞过一次 `OSError: [WinError 1410] 类已存在`(TraySingleInterpreter 建窗,
+  RegisterClass 时序), 复跑全绿 —— 与本次改动无关(改动不碰 Tk), 与 §166 记的
+  RegisterClassEx 已知漂白同源。
+- 跑完整套后 5 个可哈希的状态文件逐字节不变, config.json 仍不存在,
+  gpu_monitor_crash.log 仍被活实例锁着(与跑前同一状态)。
+
+### 变异验证(6 条, 全红; 外加 1 条对照)
+
+- W1 模板改回破损形态 -> 新守卫(5 条红: viewport content / color-scheme / meta 串 / 属性吞标签 / head 裸文本)。
+- W2 删掉 color-scheme 整行 -> 新守卫(color-scheme + meta 串两条红)。
+- W3 viewport 去掉 initial-scale -> 新守卫(viewport content 红)。
+- W4 viewport 多加 maximum-scale -> 新守卫(viewport content 红, 精确等式)。
+- W5 color-scheme 只留 light -> 新守卫(color-scheme content 红)。
+- W6 body 开头插裸文本 "x" -> 新守卫(body 开口是 h2 红)。
+- **对照实验(不是红, 是证实盲区)**: 拿 §147 那条子串守卫跑破损模板 —— **绿**。
+  两个子串都在, 这就是它能绿一百多轮的原因, 也是本轮把守卫换成解析级的理由。
+- baseline 前后各跑一次全 OK; 子进程 `-B` + `PYTHONDONTWRITEBYTECODE=1`, 每次还原后
+  sleep 1.2s(§170 的 pyc 同一秒竞态)。脚本 `gpumig_p171\mutate171.py`。
+
+### 踩过的坑
+
+- 变异脚本第一版用 bytes 字面量装变异串, 直接 SyntaxError:
+  "bytes can only contain ASCII literal characters" —— 模板里有中文("GPU 监控")。
+  改成 str, 比较/写入前才 encode。
+- CRLF 文件按行替换后断言 crlf 数 == lf 数: 这次三行并两行, LF 3379 -> 3378, CRLF 同步。
+- 首次全量撞 WinError 1410(见验证结果节), 复跑即绿; 记录在此, 免得下轮误判成"守卫 flaky"。
+
+### 顺带发现(未改, 记档)
+
+- Web `#q` 输入框到表格 0px vs 托盘 4px: §147 明确记录"节奏接近"是有意决策, 本轮核对后仍不动。
+- §169 记的候选 C(`_DETAIL_WRAP_PX` 注释里"键名列 141"是假的, 实测 132px)仍未动。
+- 现网 exe(11-09 00:23 构建)**不含** §170 的 Web 行高修复, 也不含本轮 head 修复; 同步需
+  build -> 字节码级验包 -> 换活实例(会打断实例, 需用户同意)。
+
+### 用户决策待办
+
+1. §170 + §171 两轮的 fix + docs 改动已写盘未 commit/push, 等放行; 提交后回填 §0 快照的
+   SHA 与未 push 计数。
+2. 现网同步(见上)。
+3. §167 候选 C / §169 候选仍未动。
+
+## 172. 续一百七十一：详情窗折行宽度的注释拿宽字体的测量当真窗口的数字 —— 真窗口那份预算从来没有任何测试碰过(布局/文档)
+
+### 为什么是缺陷
+
+§169 记下的候选 C, 本轮闭环(`_DETAIL_WRAP_PX` 注释与守卫文档串说着同一个
+混版本的数)。`_detail_build` 里 wraplength 的注释原文:
+
+    520 宽窗减掉 padx _DIALOG_PAD_Xx2 与键名列 141 之后只剩 355 ...
+    345 留 10px 余量给字体差异。
+
+守卫 `test_the_detail_wrap_fits_the_column_it_actually_gets` 的文档串说着同一个
+数("最宽那个键名列实测 141px ... 右列只剩 355px")。真渲染实测(探针
+`gpumig_p172\probe_detail.py`, 本机):
+
+- 真窗口的键名 Label 写着 `font=_FONT_UI`, 键名列实测 **132px**, 右列可用
+  **364px** —— 345 的余量是 19, 不是注释写的 10;
+- 141/355 是**默认 Tk 字体**量同一批键名的数(守卫的替身没写 `font=`)。
+
+也就是同一个窗有两份右列预算: 注释和守卫文档说着小的那份(355), 大的那份
+(364)没有任何测试碰过, 而"留 10px 余量"里的 10 只在宽字体那份里成立。拿着
+141 当"真能用的宽度"的读者, 自己量真窗口会得到 132/364, 对不上账 —— §169
+当时就是这么撞上的。更实际的风险: 守卫量的是替身(手抄的键名列表 + 另一种
+字体), 源码把键名改长、或给键名换个宽字体, 替身不跟着变, 守卫照样绿, 而真
+窗口的长路径已经画到窗户外。对照实验证实了这条盲区(见变异验证节)。
+
+### 改动
+
+- gpu_tray.py: 注释重写, 两份预算分开说 —— 本行 Label 带 `font=_FONT_UI`
+  实测 132/右列可用 364; 换成更宽的字体(默认 Tk 字体量同一批键名是 141)只剩
+  355; 345 两份预算都进得去(余量 19 / 10), 窄的那份就是留给字体差异的余量,
+  换台机器 `_FONT_UI` 的度量变了, 先报警的是它。`_DETAIL_WRAP_PX` 的值不动:
+  364 与 355 两份预算都支持 345, 没有要改的证据。
+- tests/test_gpu_monitor.py: 旧的那条守卫从 `DetailPrefRefresh` 里搬出, 重写
+  成新类 `DetailWrapWidth` 两条:
+  1. `test_the_wrap_fits_the_column_it_actually_gets` —— **真窗口直接建出来
+     量**(patch `pid_to_name`、替身 `_pref_status`、真快照, 走完整的
+     `_detail_build`): 量真窗口的键名列与窗宽、宽字体替身的键名列, 三条断言:
+     折行宽度 <= 真窗口可用、<= 宽字体可用、宽字体键名列 >= 真窗口键名列
+     (钉死保守预算名不副实时拦不住任何东西)。
+  2. `test_the_mirror_key_list_follows_the_source` —— ast 从 `_detail_build`
+     源码取键名列表(含 gone 分支 `insert` 的那行), 与替身手抄的列表比对:
+     源码加长键名而镜像不跟着改, 当场红。
+
+### 守卫怎么写的
+
+三层, 缺一层就有漏网:
+
+1. **真窗口实测**(防"键名/字体/窗宽变了没人知道"): 不靠替身, 建出来量。
+2. **宽字体替身**(保守方向): 保留原守卫的口径, 但现在明确它是"宽字体那份",
+   并且有断言钉住它确实更宽。
+3. **静态 ast**(防镜像漂移): 替身键名列表与源码同源。
+
+只有替身 -> M3 那条盲区(旧守卫就是这么绿的); 只有真窗口 -> 换机器字体变宽时
+没有提前量; 没有 ast -> 镜像漂移会悄悄把保守预算变成乐观预算。
+
+### 验证结果
+
+- 新守卫 2 条 OK; 真窗口实测键名列 132/右列可用 364, 宽字体替身 141/355,
+  与改后注释写的数一致。
+- 全量两种跑法: `python -X utf8 -B tests/test_gpu_monitor.py`
+  `Ran 686 tests ... OK`(30.8s)、`python -X utf8 -B -m unittest discover -s tests`
+  `Ran 686`(31.7s)。
+- 跑完整套后 7 个状态文件与跑前一致。
+
+### 变异验证(5 条, 全红; 外加 1 条对照)
+
+- M1 折行 345->360(真窗口 364 装得下, 宽字体 355 装不下) -> 红(宽字体那条:
+  "360 not less than or equal to 355")。**这条证明两份预算是分开断言的**:
+  真窗口那份没红。
+- M2 折行 345->366(真窗口也装不下) -> 红(真窗口那条: 364)。
+- M3 源码键名加长("独显%" 后多 "/温度:") -> 红(ast + 真窗口两条: 键名列
+  132 -> 170, 可用 326)。
+- M4 替身键名列表删掉最宽那条 -> 红(ast + conservatism 两条: 替身 86 < 真 132)。
+- M5 键名 Label 换宽字体(`_FONT_UI` -> `_FONT_NUM`) -> 红(真窗口那条: 键名列 187)。
+- **对照实验(不是红, 是证实盲区)**: 旧守卫(硬编码键名 + 不写 font + 不建真窗)
+  x M3 -> **绿**。键名加长后真窗口的长路径已经装不下(345 > 326), 旧守卫照着
+  141/355 照样绿 —— 这就是本轮把守卫换成"建出来量"的理由。
+- baseline 前后各跑一次全 OK; 子进程 `-B` + `PYTHONDONTWRITEBYTECODE=1`, 还原后
+  sleep 1.2s。脚本 `gpumig_p172\mutate172.py`。
+
+### 踩过的坑
+
+- `inspect.getsource` 拿到的方法源码带类缩进, 直接 `ast.parse` 报
+  IndentationError —— 先 `textwrap.dedent`。既有那条守卫只拿 getsource 做子串
+  查找, 没这道坎。
+- M5 第一版锚点 `font=_FONT_UI).grid(` 在 gpu_tray.py 里有 3 处
+  (`_settings_build` 两处 + 详情窗一处), 变异脚本报"锚点不唯一"—— 带 25 空格
+  缩进的整行才唯一。锚点计数这道工序又救了一次。
+
+### 顺带发现(未改, 记档)
+
+- Web `#q` -> 表格 0px vs 托盘 4px: §147 的有意决策, 仍不动。
+- 详情窗常规形态 reqheight 332(长路径折行占两行时, 316 + 16), gone 分支 380
+  —— 都在"窗高按内容现算"的设计里, 不是缺陷。
+- §167 候选 B/C/D: B(详情窗按钮行间隙 14 vs 16)已由 §169 闭环, C 本轮闭环,
+  D(汇总卡间隙)已核过没问题 —— **记档的候选至此全部清空**, 下一轮要重新审计。
+- 现网 exe(11-09 00:23 构建)**不含** §170/§171/§172 的修复; 同步需 build ->
+  字节码级验包 -> 换活实例(会打断实例, 需用户同意)。
+
+### 用户决策待办
+
+1. §170 + §171 + §172 三轮的 fix + docs 改动已写盘未 commit/push, 等放行;
+   提交后回填 §0 快照的 SHA 与未 push 计数。
+2. 现网同步(见上)。
+3. 记档候选已清空(见顺带发现), 下一轮从新审计开始。
