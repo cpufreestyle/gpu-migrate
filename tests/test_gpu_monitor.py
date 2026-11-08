@@ -3380,7 +3380,8 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
         gt._rebuild_fonts()
         root.geometry(geom)
         grid = _tk.Frame(root)
-        grid.pack(fill="both", expand=True, padx=12, pady=8)
+        grid.pack(fill="both", expand=True,
+                  padx=gt._DIALOG_PAD_X, pady=gt._DIALOG_PAD_Y)
         labels = ["迁移阈值 %", "显存阈值 MiB", "电池阈值 %",
                   "温度提醒 °C", "采样周期 秒", "Web 端口(0关)"]
         cbs = ["自动重启迁移的进程", "迁移前弹窗确认",
@@ -3420,7 +3421,7 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
             row=r3, column=1, sticky="w")
         btn = _tk.Button(root, text="保存 (热重载立即生效)",
                          font=gt._FONT_UI)
-        btn.pack(pady=8)
+        btn.pack(pady=gt._DIALOG_PAD_Y)
         root.update()
         return root, grid, btn
 
@@ -8343,8 +8344,8 @@ class DetailPrefRefresh(unittest.TestCase):
     def test_the_detail_wrap_fits_the_column_it_actually_gets(self):
         u"""折行宽度必须窄于右列真能用的宽度。
 
-        520 宽的窗减掉 padx 14x2、再减掉最宽那个键名列（"GPU% /
-        核显% / 独显%" 实测 141px）之后，右列只剩 351px。wraplength
+        520 宽的窗减掉 padx _DIALOG_PAD_Xx2、再减掉最宽那个键名列（"GPU%
+        / 核显% / 独显%" 实测 141px）之后，右列只剩 355px。wraplength
         写成 380 时 Tk 不会替你收进窗内 —— 无空格的长路径（盘符目录
         一路没空格的安装路径很常见）会整行画到窗户外，右沿被裁。
         """
@@ -8365,7 +8366,9 @@ class DetailPrefRefresh(unittest.TestCase):
                                  self.tray._DETAIL_MIN_H))
         try:
             frm = _tk.Frame(root)
-            frm.pack(fill="both", expand=True, padx=14, pady=10)
+            frm.pack(fill="both", expand=True,
+                      padx=self.tray._DIALOG_PAD_X,
+                      pady=self.tray._DIALOG_PAD_Y)
             keys = ["进程名:", "PID:", "完整路径:", "启动时间:",
                     "当前所在:", "GPU 首选项:",
                     "GPU% / 核显% / 独显%:", "专用/共享内存:", "注意:"]
@@ -8378,7 +8381,8 @@ class DetailPrefRefresh(unittest.TestCase):
             root.update()
             col0 = max(_tk.Label(frm, text=k).winfo_reqwidth()
                        for k in keys)
-            avail = root.winfo_width() - 28 - col0
+            avail = (root.winfo_width() - 2 * self.tray._DIALOG_PAD_X
+                    - col0)
         finally:
             root.destroy()
         self.assertGreater(avail, 0, "详情窗右列居然没有宽度")
@@ -10088,6 +10092,76 @@ class TrayPanelStatusFloor(unittest.TestCase):
         finally:
             root.destroy()
 
+    def test_both_dialogs_share_one_outer_pad(self):
+        u"""设置窗与详情窗的外层内边距必须是同一套命名常量。
+
+        这两个窗原来各写一套: 设置窗 padx=12/pady=8, 详情窗
+        padx=14/pady=10, 而且都是同一个提交里带进来的, 没有任何理由。
+        两个对话框差 2px, 用户在两个窗之间来回时看得见 —— 左边缘不在
+        同一条竖线上。
+
+        取设置窗那一套(较小的): 设置窗因此一个像素都不动, 只有详情窗每边
+        收 2px, 而它是吃宽度的那一个(要显示没空格的长路径, 见 _detail_build
+        里 wraplength 那段账)。
+
+        静态钉两边的 pack 形状; 真渲染钉框架偏移与内容宽度 —— 后者同时是
+        详情窗右列折行宽度那笔账的输入(avail = 窗宽 - 2*_DIALOG_PAD_X -
+        键名列), 所以 _DIALOG_PAD_X 涨得太多会被现有的折行守卫抓住。
+        """
+        import gpu_tray as gt
+        import tkinter as _tk
+        # 数值也钉: 12/8 是设置窗原有的值, 取它就是为了让设置窗一个像素
+        # 都不动。改这个数就是重新决定两个对话框的疏密, 不能是随手一敲。
+        self.assertEqual(gt._DIALOG_PAD_X, 12,
+                         "_DIALOG_PAD_X=%d: 12 是设置窗原有的值, "
+                         "取它就是为了让设置窗一个像素都不动"
+                         % gt._DIALOG_PAD_X)
+        self.assertEqual(gt._DIALOG_PAD_Y, 8,
+                         "_DIALOG_PAD_Y=%d: 同上" % gt._DIALOG_PAD_Y)
+        sbody = inspect.getsource(gt.TrayApp._settings_build)
+        self.assertIn("padx=_DIALOG_PAD_X, pady=_DIALOG_PAD_Y", sbody,
+                      "设置窗的外层内边距又是裸数字, 或者又和详情窗"
+                      "不是同一套")
+        self.assertIn("saver.pack(pady=_DIALOG_PAD_Y)", sbody,
+                      "设置窗保存键的上下留白又是裸数字: 它进 460x520"
+                      "那笔纵向账")
+        dbody = inspect.getsource(gt.TrayApp._detail_build)
+        self.assertIn("padx=_DIALOG_PAD_X, pady=_DIALOG_PAD_Y", dbody,
+                      "详情窗的外层内边距又是裸数字, 或者又和设置窗"
+                      "不是同一套")
+        # 真渲染: 两个窗的框架落在同一个偏移上, 内容宽度也按同一套算。
+        # 两个几何都量 —— 只量一个的话, 另一个窗改回裸数字正好漏掉。
+        root = _tk.Tk()
+        try:
+            gt._rebuild_fonts()
+            gt._apply_fluent_theme()
+            for geom in ("460x520", "520x320"):
+                for w in root.winfo_children():
+                    w.destroy()
+                root.geometry(geom)
+                frm = _tk.Frame(root)
+                frm.pack(fill="both", expand=True,
+                         padx=gt._DIALOG_PAD_X, pady=gt._DIALOG_PAD_Y)
+                root.update()
+                self.assertEqual(
+                    frm.winfo_x(), gt._DIALOG_PAD_X,
+                    "%s 的窗里内容左边距 %dpx, 而 _DIALOG_PAD_X=%d"
+                    % (geom, frm.winfo_x(), gt._DIALOG_PAD_X))
+                self.assertEqual(
+                    frm.winfo_y(), gt._DIALOG_PAD_Y,
+                    "%s 的窗里内容上边距 %dpx, 而 _DIALOG_PAD_Y=%d"
+                    % (geom, frm.winfo_y(), gt._DIALOG_PAD_Y))
+                self.assertEqual(
+                    root.winfo_width() - frm.winfo_width(),
+                    2 * gt._DIALOG_PAD_X,
+                    "%s 的窗里内容比窗窄 %dpx, 而两侧合计 "
+                    "2*_DIALOG_PAD_X=%d: 详情窗右列的折行宽度就按这个"
+                    "差算, 对不上长路径会画到窗户外"
+                    % (geom, root.winfo_width() - frm.winfo_width(),
+                       2 * gt._DIALOG_PAD_X))
+        finally:
+            root.destroy()
+
     def test_the_filter_row_controls_share_one_baseline(self):
         u"""筛选栏里五个控件的底边必须对齐。
 
@@ -10141,7 +10215,8 @@ class TrayPanelStatusFloor(unittest.TestCase):
             gt._rebuild_fonts()
             gt._apply_fluent_theme()
             fbar = _tk.Frame(root)
-            fbar.pack(fill="x", padx=gt._PANEL_PAD, pady=(0, 4))
+            fbar.pack(fill="x", padx=gt._PANEL_PAD,
+                      pady=(0, gt._BLOCK_GAP))
             # 与源码逐字同一个算法(连 font= 都带上): 行高由按钮/Entry
             # 定, Label 用 ipady 补齐。ipady 是单侧值, 上下各加一次。
             fbar_ipady = (max(gt._ctl_h(fbar, _tk.Button,
@@ -10539,7 +10614,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         面板每秒刷一次, 双击落在两次刷新之间时进程可能已经退出 ——
         详情窗为此多插一行"注意", 折行的长路径还占两行。按 _FONT_UI
         现量: Label 22 + ipady 5 = 32 一行, 按钮 28。8 行的常规形态
-        是 8*32 + padx/pady 20 + 按钮行 12 + 28 = 316, 装得进
+        是 8*32 + padx/pady 16 + 按钮行 12 + 28 = 312, 装得进
         _DETAIL_MIN_H=320; gone 形态多一行(那一行还折成两行), 9 行
         的账是 354 起 —— 写死 320 的话 pack 从后声明的按钮行身上扣,
         三个按钮实测只剩 1px, 用户看得见字点不到键。与 §154 主面板
@@ -10567,15 +10642,15 @@ class TrayPanelStatusFloor(unittest.TestCase):
             two = gt._ctl_h(frm, _tk.Label, text="第一行\n第二行",
                             anchor="w", font=gt._FONT_UI)
             # 8 行常规形态: 装得进下限, 一个像素都不该涨
-            budget8 = (8 * row + 2 * 10 + 2 * gt._DETAIL_BTN_PAD_Y
-                      + btn)
+            budget8 = (8 * row + 2 * gt._DIALOG_PAD_Y
+                      + 2 * gt._DETAIL_BTN_PAD_Y + btn)
             self.assertLessEqual(
                 budget8, gt._DETAIL_MIN_H,
                 "8 行的账 %d 超过 _DETAIL_MIN_H %d: 下限设矮了, 常规"
                 "形态就会被撑大" % (budget8, gt._DETAIL_MIN_H))
             # gone 形态: 9 行(其中一行折成两行)一定超下限 —— 超得出,
             # 自适应窗高才是活代码; 装得进的话那段代码就是死代码
-            budget9 = (8 * row + two + 2 * 10
+            budget9 = (8 * row + two + 2 * gt._DIALOG_PAD_Y
                       + 2 * gt._DETAIL_BTN_PAD_Y + btn)
             self.assertGreater(
                 budget9, gt._DETAIL_MIN_H,
@@ -10814,12 +10889,13 @@ class TrayPanelStatusFloor(unittest.TestCase):
                     w.destroy()
                 root.geometry(f"{width}x200")
                 cards = _tk.Frame(root)
-                cards.pack(fill="x", padx=gt._PANEL_PAD, pady=(gt._PANEL_PAD, 4))
+                cards.pack(fill="x", padx=gt._PANEL_PAD,
+                           pady=(gt._PANEL_PAD, gt._BLOCK_GAP))
                 for rows in (summary, busy):
                     cards.destroy()
                     cards = _tk.Frame(root)
                     cards.pack(fill="x", padx=gt._PANEL_PAD,
-                               pady=(gt._PANEL_PAD, 4))
+                               pady=(gt._PANEL_PAD, gt._BLOCK_GAP))
                     last = len(rows) - 1
                     for i, (lab, val, _c, _tip) in enumerate(rows):
                         cell = _tk.Frame(cards)

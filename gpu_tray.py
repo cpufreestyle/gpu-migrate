@@ -344,6 +344,20 @@ _ROW_H = 32
 # (奇数高度)也跟着消失了。名单 Text 三行 52px 比行距高, ipady 给 0。
 _FORM_ROW_PITCH = 32
 
+# 设置窗与详情窗的外层内边距: 左右 _DIALOG_PAD_X, 上下 _DIALOG_PAD_Y。
+# 这两个窗原来各写一套 —— 设置窗 padx=12/pady=8, 详情窗 padx=14/pady=10,
+# 而且都是同一个提交里带进来的, 没有任何理由。两个对话框差 2px, 用户在
+# 两个窗之间来回时看得见: 左边缘不在同一条竖线上。
+# 取设置窗那一套(较小的): 设置窗因此一个像素都不动, 只有详情窗每边收
+# 2px —— 而它是吃宽度的那一个(要显示没空格的长路径, 见 _detail_build 里
+# wraplength 那段账), 收 2px 正好多给它 4px 内容宽。
+# 它比 _PANEL_PAD(主面板 8)宽是故意的: 对话框比监控面板更该透口气, 而
+# 主面板那边要对齐的是表格 8 列的左右边, 是另一件事。
+# 改这个数必须是有意识的决定: 它同时进两个窗的高度账(设置窗 460x520 的
+# 余量、详情窗 _DETAIL_MIN_H 的 budget)和详情窗右列的折行宽度账。
+_DIALOG_PAD_X = 12
+_DIALOG_PAD_Y = 8
+
 # 面板四个区块之间的间距: 汇总卡 -> 筛选栏 -> 表格 -> 趋势图, 每处都是
 # 4px。Web 面板那边区块顺序不同(卡片 -> 趋势图 -> 筛选框 -> 表格), 没有
 # 一一对应的 margin 可对齐, 所以这里取一个自己的统一值: 三处同一个数,
@@ -1291,8 +1305,9 @@ class TrayApp:
             # 纵向预算(实测, 按 _FORM_ROW_PITCH=32 算):
             #   6 行输入 x 32 + 4 个勾选 x 32 + 2 段名单 x 52
             #   = 192 + 128 + 104 = 424
-            # 加 grid 的 pady 8x2 与保存键 28 + pady 8x2 = 484,
-            # 所以 520 留得出余量。460 那个老尺寸装不下: expand 的
+            # 加 grid 的 pady _DIALOG_PAD_Yx2 与保存键 28 +
+            # pady _DIALOG_PAD_Yx2 = 484, 所以 520 留得出余量。
+            # 460 那个老尺寸装不下: expand 的
             # grid 一超预算, pack 就把后声明的保存键压成 1px 高 ——
             # 与主面板 470 那个坑同款。实测:
             #     420 -> 按钮 1px   460 -> 30px 满血(行距 25px)
@@ -1304,7 +1319,8 @@ class TrayApp:
             cfg = load_config(self.config_path)
             rows = []
             grid = tk.Frame(root)
-            grid.pack(fill="both", expand=True, padx=12, pady=8)
+            grid.pack(fill="both", expand=True,
+                      padx=_DIALOG_PAD_X, pady=_DIALOG_PAD_Y)
 
             # 行的目标高度直接写在控件上(ipady), 不给 grid pady:
             # grid 的行距 = 上一行 pady 下 + 下一行 pady 上, 控件高
@@ -1442,7 +1458,7 @@ class TrayApp:
             saver = tk.Button(root, text="保存 (热重载立即生效)",
                               command=save, bg=_ACCENT, fg=_FG,
                               font=_FONT_UI)
-            saver.pack(pady=8)
+            saver.pack(pady=_DIALOG_PAD_Y)
             root.protocol("WM_DELETE_WINDOW", close)
             # Esc = 取消, 和面板 / 详情窗同一个键。填到一半按错一下会丢掉
             # 没保存的输入 —— 这是对话框的通行语义, 比"每个键都关不掉"
@@ -2421,7 +2437,8 @@ class TrayApp:
             where = gpu_where_text(ig, dg)
 
             frm = tk.Frame(root)
-            frm.pack(fill="both", expand=True, padx=14, pady=10)
+            frm.pack(fill="both", expand=True,
+                      padx=_DIALOG_PAD_X, pady=_DIALOG_PAD_Y)
             lines = [
                 ("进程名", name), ("PID", str(pid)),
                 ("完整路径", full), ("启动时间", start_str),
@@ -2448,9 +2465,10 @@ class TrayApp:
                          font=_FONT_UI).grid(
                     row=i, column=0, sticky="ne", ipady=det_ipady)
                 # wraplength 不能比右列真能用的宽度大: 520 宽窗减掉
-                # padx 14x2 与键名列 141 之后只剩 351, 写 380 的话
-                # Tk 直接把这一行画到窗户外(它只保证折到 wraplength,
-                # 不保证折得进窗)。345 留 6px 余量给字体差异。
+                # padx _DIALOG_PAD_Xx2 与键名列 141 之后只剩 355, 写
+                # 380 的话 Tk 直接把这一行画到窗户外(它只保证折到
+                # wraplength, 不保证折得进窗)。345 留 10px 余量给字体
+                # 差异。
                 lb = tk.Label(frm, text=v, anchor="w",
                               wraplength=_DETAIL_WRAP_PX,
                               justify="left", font=_FONT_UI)
