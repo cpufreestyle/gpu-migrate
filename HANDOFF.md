@@ -4,9 +4,9 @@
 
 ## 0. 现状快照（2026-10-03 第三轮重写；下面 §1–§7 是**第一轮**的原样记录，只作历史）
 
-- 分支 `main`。**已 push**：§166 轮推 54 条（连同其 docs 提交 `66f04b1` 共 55 条）、§167 轮（第二写者）推 2 条，`3bf1c4a..02caf12` 共 57 条在 `origin/main`；§168 轮（第二写者）又推 1 条（`2d51419`）；§169 轮落 1 条 fix（`90e5084`）尚未 push，现共 59 条（`3bf1c4a..90e5084`）、未 push 1（本轮 docs 落地后为 2，push 后 `origin/main` 60 条、0 未 push）；release `v1.0.0` 已建，tag 仍指向 `fdea9ae`；§168 已把现网 exe 换成含 §155-§167 全部间距修复的新构建（活页阈值线实测 `<line class=thr x1=0 y1=10.7 x2=300 y2=10.7 />`）。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准；§170 / §171 / §172 三轮的 fix + docs 改动已写盘未 commit/push，提交后回填本行的 SHA 与未 push 计数。
+- 分支 `main`。**已 push**：§166 轮推 54 条（连同其 docs 提交 `66f04b1` 共 55 条）、§167 轮（第二写者）推 2 条，`3bf1c4a..02caf12` 共 57 条在 `origin/main`；§168 轮（第二写者）又推 1 条（`2d51419`）；§169 轮落 1 条 fix（`90e5084`）尚未 push，现共 59 条（`3bf1c4a..90e5084`）、未 push 1（本轮 docs 落地后为 2，push 后 `origin/main` 60 条、0 未 push）；release `v1.0.0` 已建，tag 仍指向 `fdea9ae`；release `v1.0.1` 已建（11-09，tag 指 `d097bf6`，即 §169 现网构建对应的源码树，<https://github.com/cpufreestyle/gpu-migrate/releases/tag/v1.0.1>）；§168 已把现网 exe 换成含 §155-§167 全部间距修复的新构建（活页阈值线实测 `<line class=thr x1=0 y1=10.7 x2=300 y2=10.7 />`）。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准；§170 / §171 / §172 三轮的 fix + docs 已提交（fix `4e6425f`、docs `0cf2027`）并 push，现共 63 条（`3bf1c4a..0cf2027`）、0 未 push（§0a 以后各节里 60 条那类旧计数以本节与 `git rev-list --count` 实况为准）。
 - 体量（§172 轮）：`gpu_monitor.py` 3378 行、`gpu_tray.py` 2870 行、`tests/test_gpu_monitor.py` 13280 行、README 457 行、HANDOFF 8676 行（含 §172）。
-- 测试：**686 条**。§166 轮四种跑法实测（pytest 正序 `678 collected`，全量挂 2 条已知漂白、单独复跑全过，根因见 §166；`python -X utf8 tests/test_gpu_monitor.py` `Ran 678 tests ... OK`（40.2s）、`python -X utf8 -m unittest discover -s tests` `Ran 678`（45.7s，2 个 error 同为 `RegisterClassEx` 已知漂白）；整套倒序（含守卫自身）随上述各跑覆盖，倒序那条是仓库里的正式用例 `SuiteRunsInReverseOrder`（子进程按类名自排除防套娃），不再靠人记得手工跑）。§169 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（30.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（29.4s）；§170 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（31.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（30.7s），两种都带 `-B` 跑过一遍确认与 pyc 无关（见 §170 踩过的坑）；§171 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 685 tests ... OK`（30.7s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 685 tests ... OK`（32.5s），首次跑法一撞过一次 `WinError 1410` 已知漂白（Tk 建窗时序，复跑即绿，见 §171 踩过的坑）；§172 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 686 tests ... OK`（30.8s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 686`（31.7s），本轮新增的 `DetailWrapWidth` 会真建一次详情窗（patch `pid_to_name`），两种跑法下都稳。**跑完整套后 7 个数据/日志文件逐字节不变**：`config.json` / `panel_ui.json` / `report.csv` / `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` / `gpu_monitor_error.log` —— 这句在 §111 时是假的，`tray_debug.log` 一直在被测试写穿，§113 才修真，§169 轮复跑实测仍旧不变（注意 `history.jsonl` 不在这 7 个里：活实例每 10s 往里追一行，拿它当"没变"的判据永远不成立，README 里那条旧声称只在没有活实例跑着的时候成立）。长行基线 §166 轮实测 `gpu_monitor.py 16 / gpu_tray.py 6 / tests 10`，§169 轮复测未变（后两个数比 §165 记录的 5/5 大，增量来自 §166 并入的第二写者内容，见 §166 踩过的坑；约定是别新增）。
+- 测试：**693 条**。§166 轮四种跑法实测（pytest 正序 `678 collected`，全量挂 2 条已知漂白、单独复跑全过，根因见 §166；`python -X utf8 tests/test_gpu_monitor.py` `Ran 678 tests ... OK`（40.2s）、`python -X utf8 -m unittest discover -s tests` `Ran 678`（45.7s，2 个 error 同为 `RegisterClassEx` 已知漂白）；整套倒序（含守卫自身）随上述各跑覆盖，倒序那条是仓库里的正式用例 `SuiteRunsInReverseOrder`（子进程按类名自排除防套娃），不再靠人记得手工跑）。§169 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（30.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（29.4s）；§170 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（31.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（30.7s），两种都带 `-B` 跑过一遍确认与 pyc 无关（见 §170 踩过的坑）；§171 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 685 tests ... OK`（30.7s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 685 tests ... OK`（32.5s），首次跑法一撞过一次 `WinError 1410` 已知漂白（Tk 建窗时序，复跑即绿，见 §171 踩过的坑）；§172 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 693 tests ... OK`（72.5s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 693`（72.7s，1 个 `RegisterClassEx` 已知漂白、单跑即过），本轮新增的 `DetailWrapWidth` 会真建一次详情窗（patch `pid_to_name`），两种跑法下都稳。**跑完整套后 7 个数据/日志文件逐字节不变**：`config.json` / `panel_ui.json` / `report.csv` / `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` / `gpu_monitor_error.log` —— 这句在 §111 时是假的，`tray_debug.log` 一直在被测试写穿，§113 才修真，§169 轮复跑实测仍旧不变（注意 `history.jsonl` 不在这 7 个里：活实例每 10s 往里追一行，拿它当"没变"的判据永远不成立，README 里那条旧声称只在没有活实例跑着的时候成立）。长行基线 §166 轮实测 `gpu_monitor.py 16 / gpu_tray.py 6 / tests 10`，§169 轮复测未变（后两个数比 §165 记录的 5/5 大，增量来自 §166 并入的第二写者内容，见 §166 踩过的坑；约定是别新增）。
 - 本文档 172 节、8676 行，最新节号 §172，且**节号有倒挂**（§108 排在 §105 前面，尾部 §92 在 §87 前面）。查某件事按节号搜（`grep -n "^## 105\."`），别按物理位置读；新轮次请续号并顺手确认没有比它更大的号。
 - 现网状态：`GPUMigrate.exe --ensure` 父子对存活（11-09 00:25 换上的新实例，PID 36712/41736，§169 落地后的同步轮），看门狗 `GPUMigrateWatchdog` 每 2 分钟一次，面板 `127.0.0.1:8787` 正常。**现网 exe 是 11-09 00:23 重建的构建**（两个 spec 构建 + 冒烟全过，七项字节码级断言全过），含 §155-§169 全部间距修复（**§170 的 Web 行高修复、§171 的 head 修复、§172 的折行注释/守卫都不在其中**，同步见 §172 待办），§109 的崩溃日志滚动、§110 的温度保住、PDH 展开上界这些老修复同样已在其中。`gpu_monitor_crash.log` 的性质见 §109 —— 它是原生故障现场记录，**不是**死亡证明，§105 里"0 字节 = 没崩"和"165 条 = 一直崩"两种读法都错。
 
@@ -8214,10 +8214,12 @@ build -> sync -> 重启托盘(会打断当前实例, 重启前问用户)。本�
 
 ### 用户决策待办
 
-1. release `v1.0.0` 的 tag 仍指 `fdea9ae`(§166 那条), §167 的 3px 修复
-   不在那个 tag 里 —— 现网跑的已是含 §167 的构建, 要不要补一个 v1.0.1
-   让 tag 跟上现网, 是产品决定。v1.0.0 的发布说明("间距统一, 阈值线
-   修复")本身没写错, 只是慢一站。
+1. ~~release `v1.0.0` 的 tag 仍指 `fdea9ae`(§166 那条), §167 的 3px 修复~~
+   ~~不在那个 tag 里 —— 现网跑的已是含 §167 的构建, 要不要补一个 v1.0.1~~
+   ~~让 tag 跟上现网, 是产品决定。~~**已完成(11-09, 用户一个要字放行)**:
+   tag `v1.0.1` 已打并 push, 指 `d097bf6`(§169 现网构建对应的源码树), release
+   已建并发布: <https://github.com/cpufreestyle/gpu-migrate/releases/tag/v1.0.1> 。
+   v1.0.0 的发布说明("间距统一, 阈值线修复")本身没写错, 只是慢一站。
 
 ## 169. 续一百六十八：两个对话框的表单框 expand=True 把「内容 -> 按钮行」撑成大洞, 视觉间隙 44px vs 22px(布局)
 
@@ -8628,9 +8630,10 @@ M4/M5 说明新守卫**不**负责按钮行 pady 的裸数字(既有守卫负责
 
 - 新守卫 2 条 OK; 真窗口实测键名列 132/右列可用 364, 宽字体替身 141/355,
   与改后注释写的数一致。
-- 全量两种跑法: `python -X utf8 -B tests/test_gpu_monitor.py`
-  `Ran 686 tests ... OK`(30.8s)、`python -X utf8 -B -m unittest discover -s tests`
-  `Ran 686`(31.7s)。
+- 全量两种跑法(提交前复跑; 写本稿后测试文件又有追加, 686 -> 693):
+  `python -X utf8 -B tests/test_gpu_monitor.py` `Ran 693 tests ... OK`(72.5s)、
+  `python -X utf8 -B -m unittest discover -s tests` `Ran 693`(72.7s, 1 个
+  `RegisterClassEx` 已知漂白见 §166, 单跑即过)。
 - 跑完整套后 7 个状态文件与跑前一致。
 
 ### 变异验证(5 条, 全红; 外加 1 条对照)
@@ -8670,7 +8673,8 @@ M4/M5 说明新守卫**不**负责按钮行 pady 的裸数字(既有守卫负责
 
 ### 用户决策待办
 
-1. §170 + §171 + §172 三轮的 fix + docs 改动已写盘未 commit/push, 等放行;
-   提交后回填 §0 快照的 SHA 与未 push 计数。
+1. ~~§170 + §171 + §172 三轮的 fix + docs 改动已写盘未 commit/push, 等放行;~~
+   **已完成(11-09)**: fix `4e6425f` + docs `0cf2027` 已提交并 push, §0 快照的
+   SHA 与未 push 计数已回填(提交前复跑全量 693 OK, 比写本稿时的 686 多 7 条)。
 2. 现网同步(见上)。
 3. 记档候选已清空(见顺带发现), 下一轮从新审计开始。

@@ -325,7 +325,7 @@ python gpu_monitor.py --unset-all
   4 秒以上），而温度每 10s 读一次，隔离会把采样周期整个吃光，所以那种环境下老老实实
   进程内直读。实测子进程读一次 ~0.3s，进程内直读 ~42ms。
 - **PDH 通配展开的缓冲区有了上界**：`expand_counter_paths` 的缓冲区是照 `PdhExpandWildCardPathW` 报回的字符数现分配的（`size.value + 1024` 余量，防两次调用之间实例数增长）。对这个数不设上界，等于让一个外部 API 的返回值决定本进程一次分配多少内存：报回荒谬值时 `create_unicode_buffer` 直接 `MemoryError`，采样线程硬死，连 `_dbg` 那种"留一行痕迹"的机会都没有。现在超过 1M 字符就 `OSError` 拒绝分配，且不重试（荒谬的长度重试五次还是荒谬）。本机实测一次展开 507 条 GPU Engine 实例路径 / 54,943 字符，上限是它的约 19 倍 —— 拦不到正常用量，只拦荒谬值。
-- **测试**：`python tests/test_gpu_monitor.py`（纯标准库 unittest，686 用例；
+- **测试**：`python tests/test_gpu_monitor.py`（纯标准库 unittest，693 用例；
    跑测试不会碰仓库里的任何状态文件：  `TraySingleInterpreter` 只把 config.json 指去临时目录，`_UI_FILE` 还指着仓库里那份，而其中一条用例会真的走一遍 `on_close`。
   结果是每跑一遍 `python tests/test_gpu_monitor.py`，你的列宽/筛选词/排序列/置顶就被冲掉：列宽变成替身 `tree.column` 的返回值（一列不多一列不少全是同一个数），geometry 是替身 `Toplevel` 的返回值，而且没有任何恢复办法。
   现在 `_UI_FILE` 一起指到临时目录，并新增 `TrayPanelUiIsolation` 两条守卫：用例跑的时候 `_UI_FILE` 必须在临时目录里、跑完必须原样还原、磁盘上那份一个字节都不许动；实测跑完整套之后 `panel_ui.json` / `config.json` / `history.jsonl` / `report.csv` / `gpu_monitor.log` 全部逐字节不变。
