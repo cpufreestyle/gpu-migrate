@@ -301,11 +301,19 @@ _STATUS_BOTTOM_PAD = 6   # 状态区最下面那行 Label 与窗口底边的距�
 # 行间 2px 与 Web 面板 #hidden / #counters 的 margin:2px 0 0 对齐。
 # 这个高度会被 Frame 锁死, 详见 _panel_build 里 spark_box / bottom 那段。
 _STATUS_H = 52
-# 面板左右内边距。Web 面板那边是 body{padding:16px 20px}, 所有区块共用
-# 同一个外层内边距, 左右边缘是对齐的; 托盘这边原来是 8/6/0 三套值, 表格
-# 比汇总卡左右各宽出 2px, 边缘对不齐。统一成一个数: 区块的左右边都在同一
-# 条竖线上, 和 Web 一个做法。(表格列宽合计 722px, 而窗口可以任意拖窄,
-# 表格自己有横向滚动条, 所以这个内边距不构成任何宽度约束。)
+# 面板的外层内边距: 四个区块的左右都用它; 汇总卡是 _panel_build 里第一个
+# pack 的区块, 它顶上那 8px 同样是它(窗口上沿, 不是区块间距)。唯一的例外
+# 是窗口下沿 —— 归 _STATUS_BOTTOM_PAD 管, 见那段注释。
+# Web 面板那边是 body{padding:16px 20px}, 所有区块共用同一个外层内边距,
+# 左右边缘是对齐的; 托盘这边原来是 8/6/0 三套值, 表格比汇总卡左右各宽出
+# 2px, 边缘对不齐。统一成一个数: 区块的左右边都在同一条竖线上, 和 Web 一
+# 个做法。(表格列宽合计 722px, 而窗口可以任意拖窄, 表格自己有横向滚动条,
+# 所以这个内边距不构成任何宽度约束。)
+# 别把汇总卡顶上这个数拿去对 Web 的 .cards{margin:10px 0 12px}: Web 面板
+# 卡片上方还有 h2 / #policy / #conn / #gpuinfo 四段, 那个 10px 是从
+# #gpuinfo 底边量的; 托盘的汇总卡是第一个区块, 顶上就是窗口上沿。两个数
+# 量的参照物不同, 对不上是应该的(§160 里那句"数值也对不上"是错的, §161
+# 改正)。
 _PANEL_PAD = 8
 # 面板四个区块之间的间距: 汇总卡 -> 筛选栏 -> 表格 -> 趋势图, 每处都是
 # 4px。Web 面板那边区块顺序不同(卡片 -> 趋势图 -> 筛选框 -> 表格), 没有
@@ -1014,7 +1022,7 @@ _HEAD_PAD_X = 6
 _HEAD_PAD_Y = 5
 
 # 面板的保底高度, 按各区块的**实测**请求高度加出来:
-#   卡片 78 (pad 8 + 内容 _CARD_H 66 + 间距 4)
+#   卡片 78 (pad _PANEL_PAD 8 + 内容 _CARD_H 66 + 间距 4)
 #   筛选栏 32 (28 + 间距 4)
 #   表格 422 (12 行 x 32 + 表头 _TREE_HEAD_H + ttk 多留的 2px)
 #   趋势图 46 + 间距 10
@@ -1842,7 +1850,7 @@ class TrayApp:
             # 顶部汇总条: 口径与 Web 面板共用一份 (panel_summary)
             cards = tk.Frame(root, bg=_BG)
             cards.pack(fill="x", padx=_PANEL_PAD,
-                        pady=(8, _BLOCK_GAP))
+                        pady=(_PANEL_PAD, _BLOCK_GAP))
             card_labels = {}
             last = len(panel_summary(self.snapshot or {})) - 1
             tips = {}

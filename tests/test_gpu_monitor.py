@@ -9862,7 +9862,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         """默认窗口高度下各区块请求高度之和。"""
         import gpu_tray as gt
         return (gt._PANEL_MIN_H,
-                8 + gt._CARD_H + gt._BLOCK_GAP,   # cards: pad + h + pad
+                gt._PANEL_PAD + gt._CARD_H + gt._BLOCK_GAP,   # cards: pad + h + pad
                 28 + gt._BLOCK_GAP,       # fbar
                 # tree: 12 行 x 行高 + 表头 + ttk 多留的 2px。表头从
                 # _TREE_HEAD_H 取, 别再写死数字: 它由 _HEAD_PAD_Y
@@ -9908,10 +9908,11 @@ class TrayPanelStatusFloor(unittest.TestCase):
         # 逐个点名, 且必须是 (0, _BLOCK_GAP) 这个形状: 裸 pady=_BLOCK_GAP
         # 会让上下都吃 4px, 与上一块叠成 8px
         # 逐个点名, 且形状必须是"只声明下边距": 裸 pady=_BLOCK_GAP
-        # 会让上下都吃 4px, 与上一块的下边距叠成 8px。汇总卡顶部那 8
-        # 是窗口上沿, 不是区块间距, 所以它是唯一带非零上边距的一处。
+        # 会让上下都吃 4px, 与上一块的下边距叠成 8px。汇总卡顶部那个
+        # _PANEL_PAD 是窗口上沿的外层内边距, 不是区块间距, 所以它是唯一
+        # 带非零上边距的一处(§161 才把它从裸 8 提成常量)。
         expect = (("cards.pack(fill=\"x\", padx=_PANEL_PAD,",
-                   "pady=(8, _BLOCK_GAP)"),
+                   "pady=(_PANEL_PAD, _BLOCK_GAP)"),
                   ("fbar.pack(fill=\"x\", padx=_PANEL_PAD,",
                    "pady=(0, _BLOCK_GAP)"),
                   ("tree.pack(fill=\"both\", expand=True, padx=_PANEL_PAD,",
@@ -9930,6 +9931,43 @@ class TrayPanelStatusFloor(unittest.TestCase):
         self.assertNotIn("pady=_BLOCK_GAP", code,
                          "还有裸 pady=_BLOCK_GAP: 上下各 4 会与上一块"
                          "的下边距叠成 8px, 区块间距又歪了")
+
+    def test_the_first_block_top_pad_is_the_panel_pad(self):
+        u"""汇总卡顶上的间距必须用 _PANEL_PAD, 不能再是裸数字。
+
+        汇总卡是 _panel_build 里第一个 pack 的区块, 所以它顶上那个数就是
+        窗口上沿的外层内边距, 和左右两边是同一个数。原来这个 8 在七个地方
+        各写一遍 —— pack 那句、_PANEL_MIN_H 的账面注释、_budget()、行高等式
+        那条, 以及四处真渲染镜像 —— 改一处不牵动别处, 正是 §147/§157 治过的
+        那类漂移。
+
+        这条同时把一件事钉住: 别把这个数拿去对 Web 的
+        .cards{margin:10px 0 12px}。Web 面板卡片上方还有 h2 / #policy /
+        #conn / #gpuinfo 四段, 那个 10px 是从 #gpuinfo 底边量的; 托盘的汇总
+        卡是第一个区块, 顶上就是窗口上沿。两个数量的参照物不同, 对不上是应
+        该的 —— §160 里"托盘 8/4 vs Web 10/12, 数值也对不上"那句是错的, 本节
+        改正。
+        """
+        import tkinter as _tk
+        import gpu_tray as gt
+        body = inspect.getsource(gt.TrayApp._panel_build)
+        self.assertIn("pady=(_PANEL_PAD, _BLOCK_GAP)", body,
+                      "汇总卡顶上那 8px 又是裸数字: 它是窗口上沿的外层内边距, "
+                      "该用 _PANEL_PAD")
+        root = _tk.Tk()
+        try:
+            root.geometry("1046x%d" % gt._PANEL_MIN_H)
+            cards = _tk.Frame(root, bg=gt._BG)
+            cards.pack(fill="x", padx=gt._PANEL_PAD,
+                       pady=(gt._PANEL_PAD, gt._BLOCK_GAP))
+            _tk.Frame(cards, height=gt._CARD_H).pack(fill="x")
+            root.update()
+            self.assertEqual(cards.winfo_y(), gt._PANEL_PAD,
+                             "汇总卡实测离窗口上沿 %dpx, 而 _PANEL_PAD=%d: "
+                             "第一个区块的顶部间距和左右内边距对不上"
+                             % (cards.winfo_y(), gt._PANEL_PAD))
+        finally:
+            root.destroy()
 
 
     def test_every_block_shares_one_left_and_right_edge(self):
@@ -10091,7 +10129,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         这条把两者的等式钉死: 保底高度 >= 全部区块请求高之和。
         """
         import gpu_tray as gt
-        need = (8 + gt._CARD_H + gt._BLOCK_GAP      # cards: pad + h + pad
+        need = (gt._PANEL_PAD + gt._CARD_H + gt._BLOCK_GAP      # cards: pad + h + pad
                 + 28 + gt._BLOCK_GAP        # fbar
                 + 12 * gt._ROW_H + gt._TREE_HEAD_H + 2   # tree: 12 行 + 表头
                 + gt._SPARK_H
@@ -10408,7 +10446,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         try:
             root.geometry("1046x590")
             cards = _tk.Frame(root)
-            cards.pack(fill="x", padx=gt._PANEL_PAD, pady=(8, gt._BLOCK_GAP))
+            cards.pack(fill="x", padx=gt._PANEL_PAD, pady=(gt._PANEL_PAD, gt._BLOCK_GAP))
             fbar = _tk.Frame(root)
             fbar.pack(fill="x", padx=gt._PANEL_PAD, pady=(0, gt._BLOCK_GAP))
             tree = _tk.Frame(root)
@@ -10584,12 +10622,12 @@ class TrayPanelStatusFloor(unittest.TestCase):
                     w.destroy()
                 root.geometry(f"{width}x200")
                 cards = _tk.Frame(root)
-                cards.pack(fill="x", padx=gt._PANEL_PAD, pady=(8, 4))
+                cards.pack(fill="x", padx=gt._PANEL_PAD, pady=(gt._PANEL_PAD, 4))
                 for rows in (summary, busy):
                     cards.destroy()
                     cards = _tk.Frame(root)
                     cards.pack(fill="x", padx=gt._PANEL_PAD,
-                               pady=(8, 4))
+                               pady=(gt._PANEL_PAD, 4))
                     last = len(rows) - 1
                     for i, (lab, val, _c, _tip) in enumerate(rows):
                         cell = _tk.Frame(cards)
@@ -10687,7 +10725,7 @@ class TrayPanelCardGeometry(unittest.TestCase):
         import tkinter as _tk
         import gpu_tray as gt
         cards = _tk.Frame(root, bg=gt._BG)
-        cards.pack(fill="x", padx=gt._PANEL_PAD, pady=(8, gt._BLOCK_GAP))
+        cards.pack(fill="x", padx=gt._PANEL_PAD, pady=(gt._PANEL_PAD, gt._BLOCK_GAP))
         last = len(rows) - 1
         out = []
         for i, (lab, val, cls, _tip) in enumerate(rows):
