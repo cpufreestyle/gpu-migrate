@@ -344,6 +344,15 @@ _ROW_H = 32
 # (奇数高度)也跟着消失了。名单 Text 三行 52px 比行距高, ipady 给 0。
 _FORM_ROW_PITCH = 32
 
+# 表单里区块之间的间距: 设置窗的"勾选区 -> 游戏名单 -> 排除名单"两处,
+# 每处 _FORM_BLOCK_GAP。与 _BLOCK_GAP 取同一个数(4)是有意的 —— 面板
+# 那四处区块间隙和表单这两处是同一件事(不同区块之间透一口气), 分成两
+# 个数的话, 用户在面板与设置窗之间看到的就是两种节奏。
+# 它必须由 rowconfigure(minsize=) 显式声明: 空 grid 行不产间距, 跳过
+# 几行当间隙是行不通的(见 _settings_build 里那段长注释)。
+# 改这个数会同时改动设置窗的纵向预算(460x520 的余量)。
+_FORM_BLOCK_GAP = 4
+
 # 设置窗与详情窗的外层内边距: 左右 _DIALOG_PAD_X, 上下 _DIALOG_PAD_Y。
 # 这两个窗原来各写一套 —— 设置窗 padx=12/pady=8, 详情窗 padx=14/pady=10,
 # 而且都是同一个提交里带进来的, 没有任何理由。两个对话框差 2px, 用户在
@@ -1314,9 +1323,10 @@ class TrayApp:
             root.title("GPU 监控设置")
             # 纵向预算(实测, 按 _FORM_ROW_PITCH=32 算):
             #   6 行输入 x 32 + 4 个勾选 x 32 + 2 段名单 x 52
-            #   = 192 + 128 + 104 = 424
+            #   + 2 处区块间隙 x _FORM_BLOCK_GAP
+            #   = 192 + 128 + 104 + 8 = 432
             # 加 grid 的 pady _DIALOG_PAD_Yx2 与保存键 28 +
-            # pady _DIALOG_PAD_Yx2 = 484, 所以 520 留得出余量。
+            # pady _DIALOG_PAD_Yx2 = 492, 所以 520 留得出余量。
             # 460 那个老尺寸装不下: expand 的
             # grid 一超预算, pack 就把后声明的保存键压成 1px 高 ——
             # 与主面板 470 那个坑同款。实测:
@@ -1392,14 +1402,30 @@ class TrayApp:
             # 比 _FORM_ROW_PITCH 还高, _row_ipady 给 0, 这一行由 Text
             # 自己的高度说话。这是有意的: 三行文本压到 32px 会读不成行。
             # Label 照样吃自己的 ipady, 与 Text 顶对齐(sticky="nw")。
+            #
+            # 三段之间各留一行空行当区块间隙, 而**空 grid 行不产间距**:
+            # 没有控件、也没有 rowconfigure(minsize=) 的行高度是 0。原来的
+            # 写法是 r2 = r + 4 之后 r2 += 5, 指望着跳过 4 个空行就出来 4px
+            # —— 实测两段名单贴在一起("排除名单" Label 顶边减游戏名单 Text
+            # 底边 = 0), 那 4 行从头到尾没生效过。git log -S 证明这两个偏移
+            # 量都来自最初提交 9bc4de0: 当时每一行都带 pady=2, 间隙是控件
+            # 自己的 2+2 凑出来的; §155 把 pady 换成 ipady 之后那 4px 消失,
+            # 是本轮行距工作自己引入的回退, 不是历史遗留。现在每一处间隙都
+            # 占一整行, 由 rowconfigure(minsize=_FORM_BLOCK_GAP) 钉死 ——
+            # 不占行的话(比如给 Text 加 pady)会改名单自己的 52px, 而它是
+            # 有意高于 _FORM_ROW_PITCH 的。
             r2 = r + 4
+            grid.rowconfigure(r2, minsize=_FORM_BLOCK_GAP)
+            r2 += 1
             tk.Label(grid, text="游戏名单(每行一个)", anchor="w",
                      font=_FONT_UI).grid(
                 row=r2, column=0, sticky="nw", ipady=_lbl_ipady)
             t_games = tk.Text(grid, width=30, height=3, font=_FONT_UI)
             t_games.grid(row=r2, column=1, sticky="w")
             t_games.insert("1.0", "\n".join(cfg.get("game_processes", [])))
-            r2 += 5
+            r2 += 1
+            grid.rowconfigure(r2, minsize=_FORM_BLOCK_GAP)
+            r2 += 1
             tk.Label(grid, text="排除名单(每行一个)", anchor="w",
                      font=_FONT_UI).grid(
                 row=r2, column=0, sticky="nw", ipady=_lbl_ipady)
