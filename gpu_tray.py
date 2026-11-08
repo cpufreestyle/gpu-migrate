@@ -315,10 +315,6 @@ _STATUS_H = 52
 # 量的参照物不同, 对不上是应该的(§160 里那句"数值也对不上"是错的, §161
 # 改正)。
 _PANEL_PAD = 8
-# 面板四个区块之间的间距: 汇总卡 -> 筛选栏 -> 表格 -> 趋势图, 每处都是
-# 4px。Web 面板那边区块顺序不同(卡片 -> 趋势图 -> 筛选框 -> 表格), 没有
-# 一一对应的 margin 可对齐, 所以这里取一个自己的统一值: 三处同一个数,
-# 区块之间节奏才匀。改这个数会同时改动三处, 测试 _budget() 跟着走。
 
 # 表格行高。字号 9 的 linespace 是 17px, 28px 行高只给文字上下各
 # 5.5px 留白; Win11 Fluent 的表格行在这个字号下宽得多, 而托盘
@@ -348,7 +344,22 @@ _ROW_H = 32
 # (奇数高度)也跟着消失了。名单 Text 三行 52px 比行距高, ipady 给 0。
 _FORM_ROW_PITCH = 32
 
+# 面板四个区块之间的间距: 汇总卡 -> 筛选栏 -> 表格 -> 趋势图, 每处都是
+# 4px。Web 面板那边区块顺序不同(卡片 -> 趋势图 -> 筛选框 -> 表格), 没有
+# 一一对应的 margin 可对齐, 所以这里取一个自己的统一值: 三处同一个数,
+# 区块之间节奏才匀。改这个数会同时改动三处, 测试 _budget() 跟着走。
 _BLOCK_GAP = 4
+# 同一行里相邻控件之间的横向间隙: 筛选栏的"筛选:" -> 输入框 ->
+# "显示 N/T 行" -> 两个按钮, 以及详情窗底部那三个按钮。Web 面板没有这
+# 样的一行(它的筛选器只有一个 #q 输入框), 没有一一对应的 margin 可对齐,
+# 所以和 _BLOCK_GAP 一样取托盘自己的统一值; 外部参照是反编译 AIDA64
+# Engineer 5.20 量到的按钮<->按钮 gap 6px(§159)。
+# 每个间隙只许有一个属主: 左边的元素不声明自己的右边距, 右边的元素用
+# padx=(_CTL_GAP, 0) 声明它左边那一份。原来筛选栏的输入框写的是
+# padx=6(左右都声明), 与右边 Label 的 (6, 0) 叠成了 12px —— 同一行四个
+# 间隙实测 6/12/6/6; 详情窗三个按钮更干脆, 12/12。§162 收成一律 6,
+# TrayPanelStatusFloor.test_the_filter_row_gaps_are_all_one_number 量着盯。
+_CTL_GAP = 6
 # 汇总卡内部左右内边距, 和 Web 面板 .card{padding:9px 16px} 的左右 16px
 # 对齐。原来左右是 9, 而浏览器里文字离卡的左右边缘是 16px —— 托盘这边
 # 标签贴着卡边, 显得挤。(这句注释从前还写着"上下那半边早就按 9px 对齐了",
@@ -618,6 +629,7 @@ _TIP_WRAP_PX = 320          # 弹泡内容折行宽度, 比面板还宽就没意
 _DETAIL_WRAP_PX = 345        # 详情窗右列折行宽度, 见 _detail_build 注释
 # 详情窗窗高下限: 8 行的常规形态。gone 分支多插一行, 窗高改成按内容
 # 现算(见 _detail_build 收尾), 这个数只是"常规形态别比现在更矮"。
+_DETAIL_BTN_PAD_Y = 6       # 详情窗按钮行上下的留白
 _DETAIL_MIN_H = 320
 
 
@@ -1904,7 +1916,10 @@ class TrayApp:
             # 这一行看着是歪的。实测 entry y=4/h=21 vs 按钮 y=0/h=30;
             # 带上它 Entry 拉到 30px, 三者底边齐(Tk 会把 Entry 的文字
             # 垂直居中在额外空间里, 视觉正常)。
-            entry.pack(side="left", padx=6, fill="y")
+            # padx 只声明左边那一份: 右边的间隙归后面的 hint 管
+            # (padx=(_CTL_GAP, 0))。左右都写的话两边叠加成 12px,
+            # 同一行四个间隙就成了 6/12/6/6。
+            entry.pack(side="left", padx=(_CTL_GAP, 0), fill="y")
             # fill=x + expand=True: 不带这两个, Label 在 side=left 下
             # 只拿文本请求宽度, 而筛选栏右边还压着两个按钮 —— 空间一紧
             # pack 先压后声明的元素, 实测窗口 800 宽时这行 417px 的
@@ -1932,7 +1947,7 @@ class TrayApp:
                             text="置顶: 开" if top_on[0]
                             else "置顶: 关",
                             command=_toggle_top)
-            pin.pack(side="right", padx=(6, 0))
+            pin.pack(side="right", padx=(_CTL_GAP, 0))
 
             def _sort_btn_label():
                 sort_btn.config(text=sort_button_text(self.sort_state))
@@ -1948,13 +1963,14 @@ class TrayApp:
                                  fg=_MUTED, activebackground=_BTN_HOVER,
                                  activeforeground=_FG, font=_FONT_UI,
                                  cursor="hand2", command=_reset_sort)
-            sort_btn.pack(side="right", padx=(6, 0))
+            sort_btn.pack(side="right", padx=(_CTL_GAP, 0))
             _sort_btn_label()
             # 在两个按钮之后 pack: side=right 组的最前一个 + expand=True,
             # 空间一紧先压它, 按钮的请求宽度始终被满足。
             # ipady 与左边的"筛选:"同一个数: 两个 Label 都要补到行高,
             # 不然底边比 Entry/按钮矮 3px。
-            hint.pack(side="right", fill="x", expand=True, padx=(6, 0),
+            hint.pack(side="right", fill="x", expand=True,
+                      padx=(_CTL_GAP, 0),
                       ipady=_fbar_ipady)
 
             tree = ttk.Treeview(root, columns=cols, show="headings", height=12)
@@ -2468,15 +2484,16 @@ class TrayApp:
                 root.destroy()
 
             btns = tk.Frame(root)
-            btns.pack(pady=6)
+            btns.pack(pady=_DETAIL_BTN_PAD_Y)
             tk.Button(btns, text="立即设为独显", command=do_set,
                       font=_FONT_UI).pack(
-                side="left", padx=6)
+                side="left", padx=(_CTL_GAP, 0))
             tk.Button(btns, text="撤销独显设置", command=do_unset,
                       font=_FONT_UI).pack(
-                side="left", padx=6)
+                side="left", padx=(_CTL_GAP, 0))
             tk.Button(btns, text="关闭", command=close,
-                      font=_FONT_UI).pack(side="left", padx=6)
+                      font=_FONT_UI).pack(side="left",
+                                        padx=(_CTL_GAP, 0))
             root.protocol("WM_DELETE_WINDOW", close)
             # Esc 关窗: 面板那边 Esc 已经是"收起键盘面板"的通用键, 详情窗
             # 不认它的话, 键盘用户得把手挪回鼠标去点那个"关闭"按钮 ——

@@ -10047,13 +10047,14 @@ class TrayPanelStatusFloor(unittest.TestCase):
         import tkinter as _tk
         import gpu_tray as gt
         body = inspect.getsource(gt.TrayApp._panel_build)
-        fill_y = 'entry.pack(side="left", padx=6, fill="y")' in body
+        fill_y = ('entry.pack(side="left", padx=(_CTL_GAP, 0), '
+                 'fill="y")') in body
         self.assertTrue(fill_y,
                       "筛选输入框没有 fill=\"y\": 它比按钮矮 9px, "
                       "底边差 5px, 这一行是歪的")
         # 两个 Label 必须带 ipady: 这一行的行高由按钮/Entry 定
         # (28px), Label 既没有 fill 也不带 ipady 就停在 22px, 底边
-        # 差 6px。hint.pack 跨两行, 且参数里有 padx=(6, 0) 这种
+        # 差 6px。hint.pack 跨两行, 且参数里有 padx=(_CTL_GAP, 0) 这种
         # 一层嵌套括号, 所以用"括号配一层"的正则取完整调用 ——
         # [^()] 吃不掉括号, 由 \([^()]*\) 这一支专门吃一层。
         pack_re = _re.compile(r"(\w+)\.pack\("
@@ -10096,15 +10097,15 @@ class TrayPanelStatusFloor(unittest.TestCase):
                              font=gt._FONT_UI)
             lead.pack(side="left", ipady=fbar_ipady)
             entry = _tk.Entry(fbar, width=24, font=gt._FONT_NUM)
-            entry.pack(side="left", padx=6, fill="y")
+            entry.pack(side="left", padx=(gt._CTL_GAP, 0), fill="y")
             hint = _tk.Label(fbar, text="", anchor="w",
                              font=gt._FONT_UI)
-            hint.pack(side="right", fill="x", expand=True, padx=(6, 0),
-                      ipady=fbar_ipady)
+            hint.pack(side="right", fill="x", expand=True,
+                      padx=(gt._CTL_GAP, 0), ipady=fbar_ipady)
             pin = _tk.Button(fbar, text="置顶: 开", font=gt._FONT_UI)
-            pin.pack(side="right", padx=(6, 0))
+            pin.pack(side="right", padx=(gt._CTL_GAP, 0))
             srt = _tk.Button(fbar, text="复原排序", font=gt._FONT_UI)
-            srt.pack(side="right", padx=(6, 0))
+            srt.pack(side="right", padx=(gt._CTL_GAP, 0))
             root.update()
             bottoms = {w.winfo_y() + w.winfo_height()
                        for w in (lead, entry, hint, pin, srt)}
@@ -10117,6 +10118,138 @@ class TrayPanelStatusFloor(unittest.TestCase):
             self.assertEqual(fbar.winfo_height(), lead.winfo_height(),
                              "筛选栏比自己的控件还高: %d vs %d"
                              % (fbar.winfo_height(), lead.winfo_height()))
+        finally:
+            root.destroy()
+
+    def test_the_filter_row_gaps_are_all_one_number(self):
+        u"""筛选栏五个控件之间的四个间隙必须全都等于 _CTL_GAP。
+
+        这条以前不存在, 而实测是歪的: 输入框写的是 padx=6(左右都声明),
+        右边"显示 N/T 行"写的是 padx=(6, 0), 两份叠在一起 —— 同一行四个
+        间隙量出来是 6/12/6/6, 1046/900/722/650 四个宽度下一律如此。不是
+        窄窗才有的偶发现象, 是每个宽度都错。
+
+        修法是"每个间隙只许有一个属主": 左边的元素不声明自己的右边距,
+        右边的元素用 padx=(_CTL_GAP, 0) 声明它左边那一份。修完四个宽度
+        全是 6, 而且右边那个 Label 还多出 6px 可用宽度。
+
+        多个宽度都要量: 只有宽窗量过一次的话, "空间一紧就被挤变形"这条
+        正好漏掉。
+        """
+        import tkinter as _tk
+        import gpu_tray as gt
+        body = inspect.getsource(gt.TrayApp._panel_build)
+        # 数值也要钉: Web 面板没有这样的一行, 没有能抠的 margin, 所以
+        # 外部参照是反编译 AIDA64 Engineer 5.20 量到的按钮<->按钮 gap
+        # 6px(§159), 而筛选栏原来三处间隙本来也是 6。改这个数必须是有
+        # 意识的决定, 不能是随手一敲。
+        self.assertEqual(gt._CTL_GAP, 6,
+                         "控件间隙 %dpx: AIDA64 反编译量到的按钮<->按钮 "
+                         "gap 是 6px(§159), 筛选栏原本三处也是 6"
+                         % gt._CTL_GAP)
+        # 恰好四处: 输入框 + 两个按钮 + 右边那个 Label。少一处说明又
+        # 退回裸数字了, 而裸数字分两种死法 —— 只写左边会掉间隙, 左右都写
+        # 会与邻居叠成双倍(本轮修的就是后者)。
+        # 先剥整行注释: 上面那句"右边的间隙归后面的 hint 管"里也写着
+        # padx=(_CTL_GAP, 0), 不剥就会多数一处。
+        code = "\n".join(l for l in body.splitlines()
+                          if not l.lstrip().startswith("#"))
+        self.assertEqual(code.count("padx=(_CTL_GAP, 0)"), 4,
+                         "筛选栏该有四处 padx=(_CTL_GAP, 0), 实际 %d 处"
+                         % code.count("padx=(_CTL_GAP, 0)"))
+        root = _tk.Tk()
+        try:
+            gt._rebuild_fonts()
+            gt._apply_fluent_theme()
+            for width in (1046, 900, 722, 650):
+                for w in root.winfo_children():
+                    w.destroy()
+                root.geometry("%dx200" % width)
+                fbar = _tk.Frame(root, bg=gt._BG)
+                fbar.pack(fill="x", padx=gt._PANEL_PAD,
+                          pady=(0, gt._BLOCK_GAP))
+                ipady = (max(gt._ctl_h(fbar, _tk.Button, text="置顶: 开",
+                                       font=gt._FONT_UI),
+                             gt._ctl_h(fbar, _tk.Entry, width=24,
+                                       font=gt._FONT_NUM))
+                         - gt._ctl_h(fbar, _tk.Label, text="x",
+                                    font=gt._FONT_UI)) // 2
+                lead = _tk.Label(fbar, text="筛选:", bg=gt._BG,
+                                 fg=gt._MUTED, font=gt._FONT_UI)
+                lead.pack(side="left", ipady=ipady)
+                entry = _tk.Entry(fbar, width=24, font=gt._FONT_NUM)
+                entry.pack(side="left", padx=(gt._CTL_GAP, 0), fill="y")
+                pin = _tk.Button(fbar, text="置顶: 开", font=gt._FONT_UI)
+                pin.pack(side="right", padx=(gt._CTL_GAP, 0))
+                srt = _tk.Button(fbar, text="复原排序", font=gt._FONT_UI)
+                srt.pack(side="right", padx=(gt._CTL_GAP, 0))
+                hint = _tk.Label(fbar, text="显示 59/59 行 (还有 29 行未显示), "
+                                            "按 Esc 关闭窗口",
+                                 anchor="w", bg=gt._BG, fg=gt._MUTED,
+                                 font=gt._FONT_UI)
+                hint.pack(side="right", fill="x", expand=True,
+                          padx=(gt._CTL_GAP, 0), ipady=ipady)
+                root.update()
+                row = [lead, entry, hint, srt, pin]
+                for a, b in zip(row, row[1:]):
+                    gap = b.winfo_x() - (a.winfo_x() + a.winfo_width())
+                    self.assertEqual(
+                        gap, gt._CTL_GAP,
+                        "窗口 %d 宽时控件之间 %dpx, 而 _CTL_GAP=%d: 这一行"
+                        "的间隙又歪了(输入框左右都声明 padx 就会和右边的"
+                        "叠成双倍)" % (width, gap, gt._CTL_GAP))
+        finally:
+            root.destroy()
+
+    def test_the_detail_button_gaps_are_all_one_number(self):
+        u"""详情窗底部三个按钮之间的间隙也必须等于 _CTL_GAP。
+
+        和筛选栏同一个病: 三个按钮都写 padx=6(左右都声明), 实测间隙
+        12/12。外部参照是反编译 AIDA64 Engineer 5.20 量到的按钮<->按钮
+        gap 6px(§159) —— 同一类"控件之间才分松紧"的间距。
+
+        按钮行高度也一起量: 它进详情窗的高度账(2*_DETAIL_BTN_PAD_Y +
+        按钮自然高), padx 改动不该牵动高度, 这条顺带钉住。
+        """
+        import tkinter as _tk
+        import gpu_tray as gt
+        body = inspect.getsource(gt.TrayApp._detail_build)
+        dcode = "\n".join(l for l in body.splitlines()
+                           if not l.lstrip().startswith("#"))
+        self.assertEqual(dcode.count("padx=(_CTL_GAP, 0)"), 3,
+                         "详情窗三个按钮没用 _CTL_GAP: %d 处"
+                         % dcode.count("padx=(_CTL_GAP, 0)"))
+        self.assertIn("btns.pack(pady=_DETAIL_BTN_PAD_Y)", body,
+                      "详情窗按钮行的上下留白又是裸数字: 它进窗高账, "
+                      "该用 _DETAIL_BTN_PAD_Y")
+        root = _tk.Tk()
+        try:
+            gt._rebuild_fonts()
+            gt._apply_fluent_theme()
+            root.geometry("520x320")
+            btns = _tk.Frame(root)
+            btns.pack(pady=gt._DETAIL_BTN_PAD_Y)
+            row = []
+            for text in ("立即设为独显", "撤销独显设置", "关闭"):
+                b = _tk.Button(btns, text=text, font=gt._FONT_UI)
+                b.pack(side="left", padx=(gt._CTL_GAP, 0))
+                row.append(b)
+            root.update()
+            for a, b in zip(row, row[1:]):
+                gap = b.winfo_x() - (a.winfo_x() + a.winfo_width())
+                self.assertEqual(gap, gt._CTL_GAP,
+                                 "详情窗按钮之间 %dpx, 而 _CTL_GAP=%d"
+                                 % (gap, gt._CTL_GAP))
+            # pady 在 Frame 的分配区之外, winfo_height 不含它: 框架自己
+            # 贴身裹住按钮, 上下那两份留白体现在 winfo_y 和总占用上。
+            # 详情窗的高度账按 2*_DETAIL_BTN_PAD_Y + 按钮自然高算, 所以
+            # 这里两头都量: 框架贴身, 且上边距真的是那个常量。
+            self.assertEqual(btns.winfo_height(), row[0].winfo_height(),
+                             "按钮行比自己的按钮还高: %d vs %d"
+                             % (btns.winfo_height(), row[0].winfo_height()))
+            self.assertEqual(btns.winfo_y(), gt._DETAIL_BTN_PAD_Y,
+                             "按钮行上边距 %dpx, 而 _DETAIL_BTN_PAD_Y=%d"
+                             % (btns.winfo_y(), gt._DETAIL_BTN_PAD_Y))
         finally:
             root.destroy()
 
@@ -10377,14 +10510,16 @@ class TrayPanelStatusFloor(unittest.TestCase):
             two = gt._ctl_h(frm, _tk.Label, text="第一行\n第二行",
                             anchor="w", font=gt._FONT_UI)
             # 8 行常规形态: 装得进下限, 一个像素都不该涨
-            budget8 = 8 * row + 2 * 10 + 2 * 6 + btn
+            budget8 = (8 * row + 2 * 10 + 2 * gt._DETAIL_BTN_PAD_Y
+                      + btn)
             self.assertLessEqual(
                 budget8, gt._DETAIL_MIN_H,
                 "8 行的账 %d 超过 _DETAIL_MIN_H %d: 下限设矮了, 常规"
                 "形态就会被撑大" % (budget8, gt._DETAIL_MIN_H))
             # gone 形态: 9 行(其中一行折成两行)一定超下限 —— 超得出,
             # 自适应窗高才是活代码; 装得进的话那段代码就是死代码
-            budget9 = 8 * row + two + 2 * 10 + 2 * 6 + btn
+            budget9 = (8 * row + two + 2 * 10
+                      + 2 * gt._DETAIL_BTN_PAD_Y + btn)
             self.assertGreater(
                 budget9, gt._DETAIL_MIN_H,
                 "gone 分支的账 %d 居然装得进 _DETAIL_MIN_H %d: 自适应"
