@@ -3402,28 +3402,44 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
             _tk.Entry(grid, width=10, font=gt._FONT_UI).grid(
                 row=r, column=1, sticky="w", ipady=entry_ipady)
             r += 1
+        cb_widgets = []
         for i, t in enumerate(cbs):
-            _tk.Checkbutton(grid, text=t, variable=_tk.BooleanVar(),
-                            font=gt._FONT_UI).grid(
-                row=r + i, column=0, columnspan=2, sticky="w",
-                ipady=cb_ipady)
+            cb = _tk.Checkbutton(grid, text=t, variable=_tk.BooleanVar(),
+                                 font=gt._FONT_UI)
+            cb.grid(row=r + i, column=0, columnspan=2, sticky="w",
+                    ipady=cb_ipady)
+            cb_widgets.append(cb)
+        # 与 _settings_build 同一套: 两处区块间隙各占一整行, 由
+        # rowconfigure(minsize=) 钉死。空 grid 行不产间距 —— 原来
+        # 这里写的是 r2 = r + 4 之后 r3 = r2 + 5, 指望着跳过空行就
+        # 出来 4px, 实测 gap = 0(源码与替身一起贴在一起)。
         r2 = r + 4
+        grid.rowconfigure(r2, minsize=gt._FORM_BLOCK_GAP)
+        r2 += 1
+        t_games = _tk.Text(grid, width=30, height=texth,
+                          font=gt._FONT_UI)
+        t_games.grid(row=r2, column=1, sticky="w")
         _tk.Label(grid, text="游戏名单(每行一个)", anchor="w",
                   font=gt._FONT_UI).grid(
             row=r2, column=0, sticky="nw", ipady=lbl_ipady)
-        _tk.Text(grid, width=30, height=texth, font=gt._FONT_UI).grid(
-            row=r2, column=1, sticky="w")
-        r3 = r2 + 5
+        r2 += 1
+        grid.rowconfigure(r2, minsize=gt._FORM_BLOCK_GAP)
+        r2 += 1
+        t_excl = _tk.Text(grid, width=30, height=texth,
+                         font=gt._FONT_UI)
+        t_excl.grid(row=r2, column=1, sticky="w")
         _tk.Label(grid, text="排除名单(每行一个)", anchor="w",
                   font=gt._FONT_UI).grid(
-            row=r3, column=0, sticky="nw", ipady=lbl_ipady)
-        _tk.Text(grid, width=30, height=texth, font=gt._FONT_UI).grid(
-            row=r3, column=1, sticky="w")
+            row=r2, column=0, sticky="nw", ipady=lbl_ipady)
         btn = _tk.Button(root, text="保存 (热重载立即生效)",
                          font=gt._FONT_UI)
         btn.pack(pady=gt._DIALOG_PAD_Y)
         root.update()
-        return root, grid, btn
+        # 区块间隙要量「上一条底边到下一条顶边」, 所以把名单 Text 与
+        # 最后一个勾选一起交出去。
+        refs = {"games": t_games, "excl": t_excl,
+                "last_cb": cb_widgets[-1]}
+        return root, grid, btn, refs
 
     def _real_params(self):
         u"""几何与间距参数全部从源码/模块抓, 不许在这里写死。
@@ -3450,7 +3466,7 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
     def test_the_save_button_is_not_squeezed_flat(self):
         u"""满高度才算数: 18px 那种是被压过的, 不是正常按钮。"""
         geom, pitch, texth = self._real_params()
-        root, grid, btn = self._build(geom, pitch=pitch, texth=texth)
+        root, grid, btn, _refs = self._build(geom, pitch=pitch, texth=texth)
         try:
             want = btn.winfo_reqheight()
             got = btn.winfo_height()
@@ -3473,13 +3489,140 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
         "光提窗高不管用、pady 和名单行数得一起收"这个结论。
         """
         for h in (420, 430, 440, 450, 460):
-            root, grid, btn = self._build(f"460x{h}", pitch=2, texth=4)
+            root, grid, btn, _refs = self._build(f"460x{h}", pitch=2, texth=4)
             try:
                 self.assertLess(
                     btn.winfo_height(), btn.winfo_reqheight(),
                     f"老参数在 460x{h} 下按钮居然满高? 那这个坑是假的")
             finally:
                 root.destroy()
+
+    def test_the_two_list_blocks_are_separated(self):
+        u"""两段名单之间必须有 _FORM_BLOCK_GAP, 不能贴在一起。
+
+        设置窗的「勾选区 -> 游戏名单 -> 排除名单」三段原来是靠跳过
+        空 grid 行分隔的(r2 = r + 4 之后 r2 += 5)。空行不产间距:
+        没有控件、也没有 rowconfigure(minsize=) 的 grid 行高度是 0
+        —— 实测两段名单贴在一起(排除名单 Label 顶边减游戏名单 Text
+        底边 = 0), 名单文本与下一个 Label 的文字挤在同一条视觉线上。
+        git log -S 证明这两个偏移量都来自最初提交 9bc4de0, 从没生效
+        过: 当时每一行都带 pady=2, 间隙是控件自己的 2+2 凑出来的;
+        §155 把 pady 换成 ipady 之后那 4px 消失, 是本轮行距工作
+        自己引入的回退, 不是历史遗留。
+
+        这条量的是真渲染(全套测试里少见的建真 Tk 的量法, 与
+        TrayPanelStatusFloor 那张纵向账同一套)。
+        """
+        import gpu_tray as gt
+        geom, pitch, texth = self._real_params()
+        root, grid, btn, refs = self._build(geom, pitch=pitch, texth=texth)
+        try:
+            gap = gt._FORM_BLOCK_GAP
+            mid = (refs["excl"].winfo_y()
+                   - (refs["games"].winfo_y()
+                      + refs["games"].winfo_height()))
+            self.assertEqual(
+                mid, gap,
+                "游戏名单底边到排除名单顶边只有 %dpx(要 %dpx): 两段名单"
+                "贴在一起 —— 空 grid 行不产间距, 间隙必须写在"
+                "rowconfigure(minsize=) 上" % (mid, gap))
+            head = (refs["games"].winfo_y()
+                    - (refs["last_cb"].winfo_y()
+                       + refs["last_cb"].winfo_height()))
+            self.assertEqual(
+                head, gap,
+                "最后一个勾选底边到游戏名单顶边是 %dpx(要 %dpx): 两处"
+                "间隙不对称, 表单会读成名单与勾选连成一片"
+                % (head, gap))
+            # 两处间隙各占一整行, 且这一行真的被 minsize 撑起来了
+            grow = refs["games"].grid_info()["row"]
+            erow = refs["excl"].grid_info()["row"]
+            self.assertEqual(erow - grow, 2,
+                             "两段名单之间应该正好隔着一个间隙行, 实际"
+                             "隔 %d 行" % (erow - grow - 1))
+            for row in (grow - 1, erow - 1):
+                self.assertEqual(
+                    grid.grid_bbox(1, row)[3], gap,
+                    "间隙行 %d 高 %d(要 %d): 空 grid 行不产间距, 这一行"
+                    "没有 rowconfigure(minsize=) 盯着"
+                    % (row, grid.grid_bbox(1, row)[3], gap))
+        finally:
+            root.destroy()
+
+    def test_the_form_block_gap_is_nailed_down_in_code(self):
+        u"""两处间隙必须在源码里写成 rowconfigure(minsize=_FORM_BLOCK_GAP)。
+
+        真渲染那条量的是**替身**, 所以它抓不到只发生在源码里的结构
+        改动: 替身照旧建, 量出来照旧是 4px, 绿灯常亮。变异验证实测
+        跑掉两条 —— 给名单 Text 加 pady=(0, _FORM_BLOCK_GAP)(与那一行
+        叠成 8px)、把 r2 += 1 写成 r2 += 2(多一个空行, 高度 0, 不产
+        间距还让人以为有)。所以这一层静态的一个个钉死:
+          * 行号推进只能是「起行 + 三次 +1」;
+          * rowconfigure 必须紧跟一次 r2 推进, 且钉在 r2 上
+            (挂在已经有 32px 控件的那一行, minsize 只是个下限, 空转);
+          * 名单 Text 的 grid 调用不许带 pady —— 间隙只许有一个属主,
+            与 _CTL_GAP / _BLOCK_GAP 同一个「只声明一份」的约定。
+        """
+        import inspect as _inspect
+        import gpu_tray as gt
+        src = _inspect.getsource(gt)
+        self.assertIn("_FORM_BLOCK_GAP = ", src,
+                      "_FORM_BLOCK_GAP 没有命名常量了?")
+        self.assertEqual(gt._FORM_BLOCK_GAP, 4,
+                         "_FORM_BLOCK_GAP 是 %d: 表单区块间距与"
+                         "_BLOCK_GAP 一样取 4px"
+                         % gt._FORM_BLOCK_GAP)
+        self.assertEqual(gt._FORM_BLOCK_GAP, gt._BLOCK_GAP,
+                         "_FORM_BLOCK_GAP %d 与 _BLOCK_GAP %d 不是"
+                         "一个数: 面板区块间距与表单区块间距会是两种"
+                         "节奏" % (gt._FORM_BLOCK_GAP, gt._BLOCK_GAP))
+        body = _inspect.getsource(gt.TrayApp._settings_build)
+        code = [l for l in body.splitlines()
+                if not l.lstrip().startswith("#")]
+        pinned = [l for l in code if "minsize=_FORM_BLOCK_GAP" in l]
+        self.assertEqual(
+            len(pinned), 2,
+            "设置窗里显式声明区块间隙的应该正好两处(勾选->游戏名单, "
+            "游戏名单->排除名单), 实际 %d 处: %s"
+            % (len(pinned), [l.strip()[:50] for l in pinned]))
+        for l in pinned:
+            self.assertIn(
+                "grid.rowconfigure(", l,
+                "区块间隙必须由 rowconfigure(minsize=) 撑着, 不是 "
+                "pady/ipady: %r" % l.strip()[:50])
+        # 行号推进只能是「起行 + 三次 +1」: 两处间隙各占一整行, 而且
+        # 只能各占一行。写成 +2 / +5 都是在拿空行当间隙 —— 多出来的
+        # 那些行高度是 0, 一个像素都不产, 只让读代码的人以为有间距。
+        steps = [l.strip() for l in code
+                 if l.strip().startswith("r2 =")
+                 or l.strip().startswith("r2 +=")]
+        self.assertEqual(
+            steps, ["r2 = r + 4", "r2 += 1", "r2 += 1", "r2 += 1"],
+            "名单段的行号推进必须是「起行 + 三次 +1」(两处间隙各占一整行), "
+            "实际 %s: 多一个空行不产间距, 少一个就把名单贴回上一块"
+            % steps)
+        # rowconfigure 必须紧跟一次 r2 推进: 它声明的是刚空出来的那一行。
+        # 挂在别处(比如勾选那一行)minsize 是空转 —— 那一行已经有 32px
+        # 的控件, minsize 只是个下限, 拦不住什么。
+        for k, l in enumerate(code):
+            if "minsize=_FORM_BLOCK_GAP" not in l:
+                continue
+            self.assertRegex(
+                l, r"grid\.rowconfigure\(r2, minsize=_FORM_BLOCK_GAP\)",
+                "区块间隙必须钉在 r2 这一行上: %r" % l.strip())
+            self.assertTrue(
+                k and code[k - 1].strip().startswith("r2"),
+                "rowconfigure 前面必须紧跟一次 r2 推进(它声明的是刚空出来"
+                "的那一行), 实际上一行是 %r" % code[k - 1].strip())
+        # 间隙只许有一个属主: 那一整行。在名单 Text 上再写一份 pady,
+        # 两处会叠成 8px; 而真渲染量的是替身, 源码里多出来的这一份
+        # 它看不见。
+        for m in re.finditer(r"t_(?:games|excl)\.grid\(([^)]*)\)", body):
+            self.assertNotIn(
+                "pady=", m.group(1),
+                "名单 Text 的 grid 调用不许带 pady: %r —— 区块间隙已经由"
+                " rowconfigure 那一整行声明了, 再写一份会叠成双倍"
+                % m.group(1))
 
 class TrayLifecycleLog(unittest.TestCase):
     """托盘退出必须留一行日志。
@@ -8569,6 +8712,24 @@ class SparklineHtml(unittest.TestCase):
         self.assertIn("当前30.0%", html)
         self.assertIn("white-space:nowrap", gm._PANEL_STYLE,
                       "覆盖层不能换行, 否则面板一窄就折成两行")
+
+    def test_the_threshold_line_is_a_line_the_browser_will_draw(self):
+        """y2 少一个空格, 整条阈值线就不存在 —— 而且没人看得出来。
+
+        HTML 解析器对未加引号的属性值只认空白符和 > 作终止, 不认 /:
+        y2={thr_y}/> 会被读成 y2="10.7/", SVG 报 Invalid length 把
+        整条线丢掉, 浏览器控制台每秒刷一条错(面板每 1000ms 重注入
+        一次 innerHTML)。前缀断言("<line class=thr" in html)对此全无
+        感觉 —— 标签在, 线不在。所以按 HTML 的规则把属性值当真读出
+        来, 再 float() 一遍: 解析不出数字, 就是浏览器画不出来的线。
+        """
+        html = gm.sparkline_html(self.POINTS, 40)
+        line = re.search(r"<line class=thr[^>]*>", html).group(0)
+        attrs = dict(re.findall(r"([a-z0-9]+)=([^\s>]+)", line))
+        self.assertEqual(attrs["y2"], attrs["y1"],
+                         "阈值线是水平线: y2 必须等于 y1")
+        for axis in ("x1", "y1", "x2", "y2"):
+            float(attrs[axis])
 
     def test_no_threshold_means_no_threshold_line(self):
         html = gm.sparkline_html(self.POINTS, 0)

@@ -1540,8 +1540,14 @@ def sparkline_html(hist, threshold=0):
     thr_y = None
     if threshold:
         thr_y = round(spark_y_of(threshold, _SPARK_H, ymax), 2)
+        # y2 后面那个空格是承力墙: HTML 解析器对未加引号的属性值,
+        # 只认空白符和 > 作为终止, 不认 /。写成 y2={thr_y}/> 的话,
+        # 值会变成 "10.7/" 这么一个 Invalid length, SVG 把整条线
+        # 丢掉, 浏览器控制台每秒刷一条报错(pull 每 1000ms 重注入
+        # 一次 innerHTML), 而 <line class=thr 前缀断言对此全无感觉
+        # —— 线在不在, 只有把属性值当真读过才知道。
         out.append(f"<line class=thr x1=0 y1={thr_y} x2={_SPARK_W} "
-                   f"y2={thr_y}/>")
+                   f"y2={thr_y} />")
     out.append(f"<polyline class=line points='{poly}'/>")
     out.append("</svg>")
     if thr_y is not None:
