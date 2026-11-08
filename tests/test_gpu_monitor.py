@@ -3374,6 +3374,10 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
         import tkinter as _tk
         import gpu_tray as gt
         root = _tk.Tk()
+        # 先把运行期字体装上: _ctl_h 量的是**当前字体**下的自然高度。
+        # 不装的话 Label 是 23, 而 _settings_build 里带 _FONT_UI 是
+        # 22 —— 替身按 23 算 ipady, 量的是改之前的布局, 绿灯常亮。
+        gt._rebuild_fonts()
         root.geometry(geom)
         grid = _tk.Frame(root)
         grid.pack(fill="both", expand=True, padx=12, pady=8)
@@ -3382,34 +3386,40 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
         cbs = ["自动重启迁移的进程", "迁移前弹窗确认",
                "低负载自动切回核显", "启用内置排除名单"]
         # 与 _settings_build 同一套: 目标行高写在控件的 ipady 上,
-        # 不给 grid pady。每种控件按自己的自然高度算。
+        # 不给 grid pady。每种控件按自己的自然高度算, 探针与控件带
+        # 同一个 font= —— 两边不一致的话算出来的 ipady 补不出目标行距。
         lbl_ipady = gt._row_ipady(gt._ctl_h(grid, _tk.Label, text="x",
-                                             anchor="w"))
-        entry_ipady = gt._row_ipady(gt._ctl_h(grid, _tk.Entry, width=10))
+                                             anchor="w", font=gt._FONT_UI))
+        entry_ipady = gt._row_ipady(gt._ctl_h(grid, _tk.Entry, width=10,
+                                              font=gt._FONT_UI))
         cb_ipady = gt._row_ipady(gt._ctl_h(grid, _tk.Checkbutton,
-                                           text="x"))
+                                           text="x", font=gt._FONT_UI))
         r = 0
         for lb in labels:
-            _tk.Label(grid, text=lb, anchor="w").grid(
+            _tk.Label(grid, text=lb, anchor="w", font=gt._FONT_UI).grid(
                 row=r, column=0, sticky="w", ipady=lbl_ipady)
-            _tk.Entry(grid, width=10).grid(
+            _tk.Entry(grid, width=10, font=gt._FONT_UI).grid(
                 row=r, column=1, sticky="w", ipady=entry_ipady)
             r += 1
         for i, t in enumerate(cbs):
-            _tk.Checkbutton(grid, text=t, variable=_tk.BooleanVar()).grid(
+            _tk.Checkbutton(grid, text=t, variable=_tk.BooleanVar(),
+                            font=gt._FONT_UI).grid(
                 row=r + i, column=0, columnspan=2, sticky="w",
                 ipady=cb_ipady)
         r2 = r + 4
-        _tk.Label(grid, text="游戏名单(每行一个)", anchor="w").grid(
+        _tk.Label(grid, text="游戏名单(每行一个)", anchor="w",
+                  font=gt._FONT_UI).grid(
             row=r2, column=0, sticky="nw", ipady=lbl_ipady)
-        _tk.Text(grid, width=30, height=texth).grid(
+        _tk.Text(grid, width=30, height=texth, font=gt._FONT_UI).grid(
             row=r2, column=1, sticky="w")
         r3 = r2 + 5
-        _tk.Label(grid, text="排除名单(每行一个)", anchor="w").grid(
+        _tk.Label(grid, text="排除名单(每行一个)", anchor="w",
+                  font=gt._FONT_UI).grid(
             row=r3, column=0, sticky="nw", ipady=lbl_ipady)
-        _tk.Text(grid, width=30, height=texth).grid(
+        _tk.Text(grid, width=30, height=texth, font=gt._FONT_UI).grid(
             row=r3, column=1, sticky="w")
-        btn = _tk.Button(root, text="保存 (热重载立即生效)")
+        btn = _tk.Button(root, text="保存 (热重载立即生效)",
+                         font=gt._FONT_UI)
         btn.pack(pady=8)
         root.update()
         return root, grid, btn
@@ -3425,7 +3435,9 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
         body = inspect.getsource(gt.TrayApp._settings_build)
         geom = re.search(r'root\.geometry\("(\d+x\d+)"\)', body)
         self.assertIsNotNone(geom, "设置窗没写 geometry, 量不了")
-        th = re.search(r'tk\.Text\(grid, width=30, height=(\d+)\)', body)
+        # 右括号不能要: Text 现在长这样 tk.Text(grid, width=30,
+        # height=3, font=_FONT_UI), 参数后面还有别的。
+        th = re.search(r'tk\.Text\(grid, width=30, height=(\d+)', body)
         self.assertIsNotNone(th, "名单 Text 的高度不是字面量, 量不了")
         # 行距不再抓字面量 pady: 它现在是 _row_ipady(...) 按控件高度
         # 算的, 源码里没有数字可抓。抓常量本身, 替身用同一个函数
@@ -8335,13 +8347,18 @@ class DetailPrefRefresh(unittest.TestCase):
         import tkinter as _tk
         root = _tk.Tk()
         # 尺寸从源码抓, 不写死: 写死过一次, 详情窗 300 -> 320 之后
-        # 这个替身还按 300 建, 量的是改之前的布局。
+        # 这个替身还按 300 建, 量的是改之前的布局。窗高现在是
+        # "520x%d" % _DETAIL_MIN_H(按内容现算, 见 _detail_build 收尾),
+        # 这里取下限 —— 折行宽度只跟窗宽有关, 与窗高无关。
         import re as _re
-        geom = _re.search(r'root\.geometry\("(\d+x\d+)"\)',
+        # 结尾的 \) 不能要: 窗高现在是 "520x%d" % _DETAIL_MIN_H,
+        # 引号后面跟的是格式化参数, 不是右括号。
+        geom = _re.search(r'root\.geometry\("(\d+)x[^"]*"',
                           inspect.getsource(
                               self.tray.TrayApp._detail_build))
         self.assertIsNotNone(geom, "详情窗没写 geometry, 量不了")
-        root.geometry(geom.group(1))
+        root.geometry("%sx%d" % (geom.group(1),
+                                 self.tray._DETAIL_MIN_H))
         try:
             frm = _tk.Frame(root)
             frm.pack(fill="both", expand=True, padx=14, pady=10)
@@ -10189,6 +10206,11 @@ class TrayPanelStatusFloor(unittest.TestCase):
         (裸 pady=2 + Entry 21)、设置窗勾选行 31px、详情窗 27px ——
         用户在三个窗之间来回切, 疏密感对不上, 而代码里没有任何
         东西保证它们一致。_FORM_ROW_PITCH 就是那把统一的尺。
+
+        §158: 这把尺从 31 换成 32, 与 _ROW_H 相等。31 是迁就出来的
+        —— 两个窗的控件没带 font=, 落在 TkDefaultFont 上, Label 23 /
+        Checkbutton 27 都是奇数高, 只有奇数行距才补得出整数 ipady。
+        换上 _FONT_UI 之后高度变成偶数, 这个迁就就没了。
         """
         import tkinter as _tk
         import gpu_tray as gt
@@ -10197,41 +10219,151 @@ class TrayPanelStatusFloor(unittest.TestCase):
             gt._rebuild_fonts()
             gt._apply_fluent_theme()
             pitch = gt._FORM_ROW_PITCH
-            # 1. 常量本身: 正奇数。(P-23) 与 (P-27) 都是偶数时两种
-            #    控件才都补得出整数 ipady; 取偶数有一个要向下取整,
-            #    行距立刻差 1px。
+            frm = _tk.Frame(root)
+            frm.pack()
+            # 1. 常量本身: 正偶数。控件高度全是偶数时, 偶数行距才给
+            #    每种控件都补得出整数 ipady(奇数高度配偶数行距, 必有
+            #    一个要向下取整, 行距立刻差 1px)。
             self.assertGreater(pitch, 0, "_FORM_ROW_PITCH 要是正数")
-            self.assertEqual(pitch % 2, 1,
-                             "_FORM_ROW_PITCH %d 是偶数: Label 23 和 "
-                             "Checkbutton 27 补不出整数 ipady" % pitch)
-            # 2. _row_ipady 对每种控件都给整数, 且 2*ipady + 控件高
-            #    正好等于 pitch
-            for name, h in (("Label", 23), ("Entry", 21),
-                            ("Checkbutton", 27)):
+            self.assertEqual(pitch % 2, 0,
+                             "_FORM_ROW_PITCH %d 是奇数: 现在的控件高度 "
+                             "(Label 22 / Entry 20 / Checkbutton 26) 全是 "
+                             "偶数, 奇数行距补不出整数 ipady" % pitch)
+            # 2. 按 _FONT_UI 现量真控件(不写死数字: 字体一换这条跟着
+            #    走)。高度必须是偶数, 且 2*ipady + 控件高正好等于 pitch
+            for name, kw in (("Label", dict(text="x", anchor="w")),
+                             ("Entry", dict(width=10)),
+                             ("Checkbutton", dict(text="x"))):
+                h = gt._ctl_h(frm, getattr(_tk, name),
+                              font=gt._FONT_UI, **kw)
+                self.assertEqual(h % 2, 0,
+                                 "%s 在 _FONT_UI 下高 %d 是奇数: ipady "
+                                 "要向下取整, 行距会差 1px"
+                                 % (name, h))
                 ipady = gt._row_ipady(h)
-                self.assertIsInstance(ipady, int,
-                                     "%s 的 ipady 不是整数" % name)
                 self.assertEqual(ipady * 2 + h, pitch,
                                  "%s 行(高 %d)配 ipady %d 行距是 %d, "
                                  "不是 _FORM_ROW_PITCH %d"
                                  % (name, h, ipady, ipady * 2 + h, pitch))
-            # 3. 控件比目标行距高时 ipady 必须是 0(不是负数)
-            self.assertEqual(gt._row_ipady(43), 0,
-                             "比 _FORM_ROW_PITCH 高的控件(名单 Text) "
-                             "ipady 必须是 0")
+            # 3. 控件比目标行距高时 ipady 必须是 0(不是负数): 名单
+            #    Text 三行按 _FONT_UI 现量就有 52px
+            texth = gt._ctl_h(frm, _tk.Text, width=30, height=3,
+                              font=gt._FONT_UI)
+            self.assertGreater(texth, pitch, "名单 Text 应该比行距高")
+            self.assertEqual(gt._row_ipady(texth), 0,
+                             "比 _FORM_ROW_PITCH 高的控件(名单 Text "
+                             "%dpx) ipady 必须是 0" % texth)
             self.assertEqual(gt._row_ipady(pitch), 0,
                              "正好等高的控件不该再加 ipady")
-            # 4. 主面板表格行高必须和它同一个密度(差 1px 是底噪:
-            #    表格行高由文字留白定(32 = 17 linespace + 上下各 7.5),
-            #    而 _FORM_ROW_PITCH 取奇数 31 才能让两种控件都补出
-            #    整数 ipady)
-            self.assertLessEqual(abs(gt._ROW_H - pitch), 1,
-                                 "主面板表格行高 %d 与 _FORM_ROW_PITCH "
-                                 "%d 差 %dpx: 三个窗口还是两种密度"
-                                 % (gt._ROW_H, pitch,
-                                    abs(gt._ROW_H - pitch)))
+            # 4. 主面板表格行高必须和它**相等**。以前只允许差 1px, 因为
+            #    _FORM_ROW_PITCH 只能取奇数 31 而表格是 32; §158 之后
+            #    控件高度全偶数, 31 这个迁就消失了 —— 差 1px 就是回归。
+            self.assertEqual(gt._ROW_H, pitch,
+                             "主面板表格行高 %d 与 _FORM_ROW_PITCH %d "
+                             "差 %dpx: 三个窗口还是两种密度"
+                             % (gt._ROW_H, pitch,
+                                abs(gt._ROW_H - pitch)))
         finally:
             root.destroy()
+
+    def test_both_form_windows_set_their_own_font(self):
+        u"""设置窗与详情窗的每个文本控件都必须带 font=_FONT_UI。
+
+        这两个窗原来一个 font= 都不传, 全套落在 TkDefaultFont 上:
+        Label 23 / Checkbutton 27 都是奇数高, 于是 _FORM_ROW_PITCH
+        只能取奇数 31, 与主面板表格的 32 永远差 1px。§158 补上字体
+        之后高度变偶数, 才换成 32。谁把某个 font= 删掉, 那个控件立刻
+        落回默认字体 —— 高度变奇数, ipady 向下取整, 行距当场裂一道缝,
+        而这条用例就是抓这个的。
+        """
+        import inspect as _inspect
+        import gpu_tray as gt
+        # 只查这两个窗的文本控件; 主面板自己那套另有 _FONT_NUM(筛选
+        # Entry 的数字列要 Consolas 对齐), 不在这把尺里。
+        classes = ("Label", "Entry", "Checkbutton", "Button", "Text")
+        for fn in (gt.TrayApp._settings_build, gt.TrayApp._detail_build):
+            body = _inspect.getsource(fn)
+            for cls in classes:
+                # 按 tk.X( 切, 再用括号配对取完整调用。正则不行: 它会被
+                # 内层括号提前截断, 量到的是半个调用。
+                for chunk in body.split("tk.%s(" % cls)[1:]:
+                    depth, buf = 1, []
+                    for ch in chunk:
+                        if ch == "(":
+                            depth += 1
+                        elif ch == ")":
+                            depth -= 1
+                            if depth == 0:
+                                break
+                        buf.append(ch)
+                    call = "".join(buf)
+                    # _ctl_h(grid, tk.Label, ...) 是探针, 不是构造调用:
+                    # 它后面没有紧跟括号, 切不出来。
+                    self.assertIn(
+                        "font=_FONT_UI", call,
+                        "%s 里有个 tk.%s 没带 font=_FONT_UI: %r —— "
+                        "它会落回 TkDefaultFont, 高度变奇数, 行距裂一道缝"
+                        % (fn.__name__, cls, call[:70]))
+
+    def test_the_detail_window_grows_for_the_gone_row(self):
+        u"""gone 分支多插一行, 详情窗必须跟着长, 不然按钮被压成 1px。
+
+        面板每秒刷一次, 双击落在两次刷新之间时进程可能已经退出 ——
+        详情窗为此多插一行"注意", 折行的长路径还占两行。按 _FONT_UI
+        现量: Label 22 + ipady 5 = 32 一行, 按钮 28。8 行的常规形态
+        是 8*32 + padx/pady 20 + 按钮行 12 + 28 = 316, 装得进
+        _DETAIL_MIN_H=320; gone 形态多一行(那一行还折成两行), 9 行
+        的账是 354 起 —— 写死 320 的话 pack 从后声明的按钮行身上扣,
+        三个按钮实测只剩 1px, 用户看得见字点不到键。与 §154 主面板
+        470、§157 设置窗 460 是同一个坑: 保底尺寸的账对不上真实请求。
+
+        这条用例**不建真窗**: 全套测试从来不建真 Toplevel ——
+        TraySingleInterpreter 要开线程跑 Tcl, 真解释器加线程, Tk 会
+        把整个进程带崩(Tcl_AsyncDelete: async handler deleted by the
+        wrong thread), 实测建一个真详情窗就够触发。所以这里守的是
+        "账算得对 + 代码真的按这个账设窗高"两件事。
+        """
+        import tkinter as _tk
+        import gpu_tray as gt
+        root = _tk.Tk()
+        try:
+            gt._rebuild_fonts()
+            gt._apply_fluent_theme()
+            frm = _tk.Frame(root)
+            frm.pack()
+            row = gt._FORM_ROW_PITCH
+            btn = gt._ctl_h(frm, _tk.Button, text="立即设为独显",
+                            font=gt._FONT_UI)
+            self.assertEqual(btn, 28, "详情窗按钮不是满血的 28px")
+            # 折行的"注意"那一行: 两行文字, 比一行高
+            two = gt._ctl_h(frm, _tk.Label, text="第一行\n第二行",
+                            anchor="w", font=gt._FONT_UI)
+            # 8 行常规形态: 装得进下限, 一个像素都不该涨
+            budget8 = 8 * row + 2 * 10 + 2 * 6 + btn
+            self.assertLessEqual(
+                budget8, gt._DETAIL_MIN_H,
+                "8 行的账 %d 超过 _DETAIL_MIN_H %d: 下限设矮了, 常规"
+                "形态就会被撑大" % (budget8, gt._DETAIL_MIN_H))
+            # gone 形态: 9 行(其中一行折成两行)一定超下限 —— 超得出,
+            # 自适应窗高才是活代码; 装得进的话那段代码就是死代码
+            budget9 = 8 * row + two + 2 * 10 + 2 * 6 + btn
+            self.assertGreater(
+                budget9, gt._DETAIL_MIN_H,
+                "gone 分支的账 %d 居然装得进 _DETAIL_MIN_H %d: 自适应"
+                "窗高成了死代码, 没人守得住它" % (budget9,
+                                                gt._DETAIL_MIN_H))
+        finally:
+            root.destroy()
+        # 代码必须真的按这个账设窗高, 不能又写死一个数
+        body = inspect.getsource(gt.TrayApp._detail_build)
+        self.assertIn("winfo_reqheight", body,
+                      "详情窗不量自己的请求高度, 窗高又是写死的")
+        self.assertIn("_DETAIL_MIN_H", body,
+                      "详情窗窗高没有下限了? 常规形态会缩水")
+        self.assertRegex(
+            body, r'geometry\("520x%d" % ',
+            "详情窗没有按量出来的高度设 geometry: 写死窗高的话 gone "
+            "分支会把按钮行压成 1px")
 
     def test_the_status_floor_is_taller_than_its_two_labels(self):
         u"""状态区高度要装得下两行 Label, 不然压扁的还是它自己。

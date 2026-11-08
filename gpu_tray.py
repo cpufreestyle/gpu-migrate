@@ -293,18 +293,24 @@ _PANEL_PAD = 8
 # 位置), 768 高屏幕上 y=55 时底部到 685, 距屏底还有 83px。
 _ROW_H = 32
 
-# 设置窗/详情窗里 grid 每一行的目标行距。原来这两处是裸的 pady=2:
-# 而控件自然高度各不一样(Label 23 / Entry 21 / Checkbutton 27 /
-# 名单 Text 43), 同一个 2 给出的行距是 25 / 27 / 31 / 47 四种 ——
-# 设置窗输入行 25px、勾选行 31px 差 6px, 详情窗又是 27px,
-# 加上主面板表格 32px, 四个数字四种密度。
-# 现在按目标行距反推每一行的 ipady(见 _row_ipady), 统一到 31。
-# 取奇数 31 而不是 32: Label 23 与 Checkbutton 27 都是奇数高,
-# (31-23) 和 (31-27) 才是偶数, 两种控件都补得出整数 ipady;
-# 取 32 时有一个要四舍五入, 行距立刻裂成两个值。
-# 与主面板表格行高 _ROW_H=32 差 1px —— 那个数由文字留白定
-# (17px linespace + 上下各 7.5), 动它会挤文字, 所以这里迁就它。
-_FORM_ROW_PITCH = 31
+# 设置窗/详情窗里 grid 每一行的目标行距, 也是全程序那一把尺:
+# 主面板表格行高 _ROW_H、这两个窗的每一行, 都是这个数。
+#
+# 原来这三处是四套值: 主面板表格 28px、设置窗输入行 25px(裸 pady=2
+# + Entry 21)、设置窗勾选行 31px、详情窗 27px。§155 用 ipady 把设置窗
+# 和详情窗统一到 31, 但 31 与表格的 32 差 1px —— 当时只能迁就: 这两个
+# 窗的控件没带 font=, 落在 TkDefaultFont 上, 自然高度 Label 23 /
+# Checkbutton 27 都是奇数, 只有奇数行距才补得出整数 ipady。
+#
+# §158 把这两个窗的文本统一换成 _FONT_UI(与主面板同一套字体, 见
+# _settings_build / _detail_build 里的注释), 自然高度随之变成
+# Label 22 / Entry 20 / Checkbutton 26 / Button 28 —— 全是偶数,
+# 于是偶数行距 32 也能给每种控件都补出整数 ipady:
+#     22 + 2*5 = 32     20 + 2*6 = 32
+#     26 + 2*3 = 32     28 + 2*2 = 32
+# 32 正好等于 _ROW_H, 表格与表单不再有那 1px 的缝, 取偶数的理由
+# (奇数高度)也跟着消失了。名单 Text 三行 52px 比行距高, ipady 给 0。
+_FORM_ROW_PITCH = 32
 
 _BLOCK_GAP = 4
 # 汇总卡内部左右内边距, 和 Web 面板 .card{padding:9px 16px} 的左右 16px
@@ -573,6 +579,9 @@ def _text_px(text):
 
 _TIP_WRAP_PX = 320          # 弹泡内容折行宽度, 比面板还宽就没意义了
 _DETAIL_WRAP_PX = 345        # 详情窗右列折行宽度, 见 _detail_build 注释
+# 详情窗窗高下限: 8 行的常规形态。gone 分支多插一行, 窗高改成按内容
+# 现算(见 _detail_build 收尾), 这个数只是"常规形态别比现在更矮"。
+_DETAIL_MIN_H = 320
 
 
 def _bind_tip(widget, text):
@@ -1227,15 +1236,15 @@ class TrayApp:
             counted = True
             self._ui_windows += 1
             root.title("GPU 监控设置")
-            # 纵向预算(实测, 按 _FORM_ROW_PITCH=31 算):
-            #   6 行输入 x 31 + 4 个勾选 x 31 + 2 段名单 x 43
-            #   = 186 + 124 + 86 = 396
-            # 加 grid 的 pady 8x2 与保存键 30 + pady 8x2 = 460 可用,
+            # 纵向预算(实测, 按 _FORM_ROW_PITCH=32 算):
+            #   6 行输入 x 32 + 4 个勾选 x 32 + 2 段名单 x 52
+            #   = 192 + 128 + 104 = 424
+            # 加 grid 的 pady 8x2 与保存键 28 + pady 8x2 = 484,
             # 所以 520 留得出余量。460 那个老尺寸装不下: expand 的
             # grid 一超预算, pack 就把后声明的保存键压成 1px 高 ——
             # 与主面板 470 那个坑同款。实测:
             #     420 -> 按钮 1px   460 -> 30px 满血(行距 25px)
-            #     520 -> 按钮 30px 满血, 行距 31px 与主面板 32px 同密度
+            #     520 -> 按钮 28px 满血, 行距 32px 与主面板 32px 同密度
             # SettingsWindowFitsItsOwnFrame 替身按同一套参数重建,
             # 保存键不满血就当场红。
             root.geometry("460x520")
@@ -1248,19 +1257,28 @@ class TrayApp:
             # 行的目标高度直接写在控件上(ipady), 不给 grid pady:
             # grid 的行距 = 上一行 pady 下 + 下一行 pady 上, 控件高
             # 不一时这个和算不出统一值(§155 实测交界处仍是 29px)。
-            # ipady 长在控件自己身上: Label 23+4、Entry 21+5、
-            # Checkbutton 27+2 都正好 31px, 行高不依赖邻居。
+            # ipady 长在控件自己身上: Label 22+5、Entry 20+6、
+            # Checkbutton 26+3 都正好 32px, 行高不依赖邻居。
             # 每个控件按自己的高度算 —— 用同一份会让矮的控件差一截
-            # (Entry 吃 Label 的 4 只有 29px)。
+            # (Entry 吃 Label 的 5 只有 30px)。
+            # 探针必须带 font=: 量的是**当前字体**下的自然高度, 而控件
+            # 本身也带同一个字体 —— 两边不一致的话, 算出来的 ipady
+            # 补不出目标行距。这两个窗的文本以前一个 font= 都不带, 落在
+            # TkDefaultFont 上(Label 23 / Checkbutton 27 都是奇数, 所以
+            # 行距只能取奇数 31); §158 统一换成 _FONT_UI 之后高度变成
+            # 偶数, 32 才给每种控件都补得出整数。
             _lbl_ipady = _row_ipady(_ctl_h(grid, tk.Label, text="x",
-                                           anchor="w"))
-            _entry_ipady = _row_ipady(_ctl_h(grid, tk.Entry, width=10))
+                                           anchor="w", font=_FONT_UI))
+            _entry_ipady = _row_ipady(_ctl_h(grid, tk.Entry, width=10,
+                                         font=_FONT_UI))
             def add_entry(label, key, width=10):
-                lb = tk.Label(grid, text=label, anchor="w")
+                lb = tk.Label(grid, text=label, anchor="w",
+                              font=_FONT_UI)
                 lb.grid(row=len(rows), column=0, sticky="w",
                         ipady=_lbl_ipady)
                 var = tk.StringVar(value=str(cfg.get(key, "")))
-                e = tk.Entry(grid, textvariable=var, width=width)
+                e = tk.Entry(grid, textvariable=var, width=width,
+                             font=_FONT_UI)
                 e.grid(row=len(rows), column=1, sticky="w",
                         ipady=_entry_ipady)
                 # Enter 直接保存: 六个格子 Tab 走完再摸鼠标去点那个按钮,
@@ -1285,25 +1303,29 @@ class TrayApp:
             for i, (text, var) in enumerate((
                     ("自动重启迁移的进程", v_ar), ("迁移前弹窗确认", v_cm),
                     ("低负载自动切回核显", v_pa), ("启用内置排除名单", v_ed))):
-                cb = tk.Checkbutton(grid, text=text, variable=var)
+                cb = tk.Checkbutton(grid, text=text, variable=var,
+                                    font=_FONT_UI)
                 cb.grid(row=r + i, column=0, columnspan=2, sticky="w",
                         ipady=_row_ipady(_ctl_h(grid, tk.Checkbutton,
-                                              text=text)))
+                                              text=text,
+                                              font=_FONT_UI)))
 
-            # 名单段: Label 与 Text 同行, 而 Text 三行就有 43px ——
+            # 名单段: Label 与 Text 同行, 而 Text 三行就有 52px ——
             # 比 _FORM_ROW_PITCH 还高, _row_ipady 给 0, 这一行由 Text
-            # 自己的高度说话。这是有意的: 三行文本压到 31px 会读不成行。
+            # 自己的高度说话。这是有意的: 三行文本压到 32px 会读不成行。
             # Label 照样吃自己的 ipady, 与 Text 顶对齐(sticky="nw")。
             r2 = r + 4
-            tk.Label(grid, text="游戏名单(每行一个)", anchor="w").grid(
+            tk.Label(grid, text="游戏名单(每行一个)", anchor="w",
+                     font=_FONT_UI).grid(
                 row=r2, column=0, sticky="nw", ipady=_lbl_ipady)
-            t_games = tk.Text(grid, width=30, height=3)
+            t_games = tk.Text(grid, width=30, height=3, font=_FONT_UI)
             t_games.grid(row=r2, column=1, sticky="w")
             t_games.insert("1.0", "\n".join(cfg.get("game_processes", [])))
             r2 += 5
-            tk.Label(grid, text="排除名单(每行一个)", anchor="w").grid(
+            tk.Label(grid, text="排除名单(每行一个)", anchor="w",
+                     font=_FONT_UI).grid(
                 row=r2, column=0, sticky="nw", ipady=_lbl_ipady)
-            t_excl = tk.Text(grid, width=30, height=3)
+            t_excl = tk.Text(grid, width=30, height=3, font=_FONT_UI)
             t_excl.grid(row=r2, column=1, sticky="w")
             t_excl.insert("1.0", "\n".join(cfg.get("exclude_processes", [])))
 
@@ -1366,7 +1388,8 @@ class TrayApp:
                 root.destroy()
 
             saver = tk.Button(root, text="保存 (热重载立即生效)",
-                              command=save, bg=_ACCENT, fg=_FG)
+                              command=save, bg=_ACCENT, fg=_FG,
+                              font=_FONT_UI)
             saver.pack(pady=8)
             root.protocol("WM_DELETE_WINDOW", close)
             # Esc = 取消, 和面板 / 详情窗同一个键。填到一半按错一下会丢掉
@@ -2278,11 +2301,12 @@ class TrayApp:
             counted = True
             self._ui_windows += 1
             root.title(f"进程详情 - pid {pid}")
-            # 8 行 x 31px(_FORM_ROW_PITCH) + padx 10x2 = 268, 而折行
-            # 的长路径会占两行 —— 320 留得出余量。原来是 300: 行距
-            # 27px 时刚好, 提到 31 之后 reqheight 310, 底边那行会被
-            # 裁掉一半。
-            root.geometry("520x320")
+            # 纵向预算(实测, 按 _FORM_ROW_PITCH=32 算): 8 行 x 32
+            # + padx 10x2 = 276, 按钮行 6 + 28 + 6 = 40, 合计 316 ——
+            # _DETAIL_MIN_H=320 留得出余量。原来是 300: 行距 27px 时
+            # 刚好, 提到 31 之后 reqheight 310, 底边那行会被裁掉一半。
+            # 这个 geometry 只是初始尺寸(也是下限), 收尾按内容现算。
+            root.geometry("520x%d" % _DETAIL_MIN_H)
             root.attributes("-topmost", True)
             try:
                 root.iconbitmap(_APP_ICON)
@@ -2353,11 +2377,13 @@ class TrayApp:
             # 行距与设置窗同一把尺(_FORM_ROW_PITCH): 详情窗 8 行原来
             # 也是裸 pady=2, Label 23px 加 2 是 27px 行距, 比设置窗
             # 输入行的 25px 宽、比主面板表格的 32px 窄 —— 三个窗口
-            # 三种疏密。
+            # 三种疏密。现在两窗都带 font=_FONT_UI, Label 22px, 与
+            # 表格 32px 同一密度。
             det_ipady = _row_ipady(_ctl_h(frm, tk.Label, text="x",
-                                           anchor="ne"))
+                                           anchor="ne", font=_FONT_UI))
             for i, (k, v) in enumerate(lines):
-                tk.Label(frm, text=k + ":", anchor="ne", fg=_MUTED).grid(
+                tk.Label(frm, text=k + ":", anchor="ne", fg=_MUTED,
+                         font=_FONT_UI).grid(
                     row=i, column=0, sticky="ne", ipady=det_ipady)
                 # wraplength 不能比右列真能用的宽度大: 520 宽窗减掉
                 # padx 14x2 与键名列 141 之后只剩 351, 写 380 的话
@@ -2365,7 +2391,7 @@ class TrayApp:
                 # 不保证折得进窗)。345 留 6px 余量给字体差异。
                 lb = tk.Label(frm, text=v, anchor="w",
                               wraplength=_DETAIL_WRAP_PX,
-                              justify="left")
+                              justify="left", font=_FONT_UI)
                 lb.grid(row=i, column=1, sticky="w", ipady=det_ipady)
                 if k == "GPU 首选项":
                     pref_label = lb
@@ -2403,18 +2429,40 @@ class TrayApp:
 
             btns = tk.Frame(root)
             btns.pack(pady=6)
-            tk.Button(btns, text="立即设为独显", command=do_set).pack(
+            tk.Button(btns, text="立即设为独显", command=do_set,
+                      font=_FONT_UI).pack(
                 side="left", padx=6)
-            tk.Button(btns, text="撤销独显设置", command=do_unset).pack(
+            tk.Button(btns, text="撤销独显设置", command=do_unset,
+                      font=_FONT_UI).pack(
                 side="left", padx=6)
-            tk.Button(btns, text="关闭", command=close).pack(side="left",
-                                                             padx=6)
+            tk.Button(btns, text="关闭", command=close,
+                      font=_FONT_UI).pack(side="left", padx=6)
             root.protocol("WM_DELETE_WINDOW", close)
             # Esc 关窗: 面板那边 Esc 已经是"收起键盘面板"的通用键, 详情窗
             # 不认它的话, 键盘用户得把手挪回鼠标去点那个"关闭"按钮 ——
             # 而这个窗存在的全部理由就是让键盘用户少碰鼠标。
             root.bind("<Escape>", lambda _e=None: close())
             _darken_tree(root)
+            # 窗高按内容现算, 不认死 _DETAIL_MIN_H: gone 分支会多插
+            # 一行, 折行的"注意"还占两行, 9 行实测 reqheight 364 ——
+            # 写死 320 的话 pack 从后声明的按钮行身上扣, 三个按钮实测
+            # 被压成 1px(与 §154 主面板 470、§157 设置窗 460 同一个
+            # 坑: 保底尺寸的账对不上真实请求)。常规形态 316 < 320,
+            # 一个像素都不涨。
+            #
+            # 必须循环到量稳为止(最多三遍): 第一遍 update_idletasks
+            # 之后 Tk 才把折行那一行算完, reqheight 当场长一截
+            # (实测 316 -> 364), 只量一遍会按旧值设窗高, 按钮照样
+            # 被压平 —— 而第二遍之后就不再变了。
+            need = -1
+            for _ in range(3):
+                root.update_idletasks()
+                got = int(root.winfo_reqheight())
+                if got > _DETAIL_MIN_H:
+                    root.geometry("520x%d" % got)
+                if got == need:
+                    break
+                need = got
         except Exception:
             if counted:
                 self._ui_windows -= 1
