@@ -9862,7 +9862,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         """默认窗口高度下各区块请求高度之和。"""
         import gpu_tray as gt
         return (gt._PANEL_MIN_H,
-                8 + 56 + gt._BLOCK_GAP,   # cards: pad + h + pad
+                8 + gt._CARD_H + gt._BLOCK_GAP,   # cards: pad + h + pad
                 28 + gt._BLOCK_GAP,       # fbar
                 # tree: 12 行 x 行高 + 表头 + ttk 多留的 2px。表头从
                 # _TREE_HEAD_H 取, 别再写死数字: 它由 _HEAD_PAD_Y
@@ -9947,7 +9947,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
             root.geometry("1046x590")
             pad = gt._PANEL_PAD
             blocks = []
-            for h in (56, 28):
+            for h in (gt._CARD_H, 28):
                 w = _tk.Frame(root, height=h)
                 w.pack(fill="x", padx=pad, pady=(0, gt._BLOCK_GAP))
                 blocks.append(w)
@@ -10091,7 +10091,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         这条把两者的等式钉死: 保底高度 >= 全部区块请求高之和。
         """
         import gpu_tray as gt
-        need = (8 + 56 + gt._BLOCK_GAP      # cards: pad + h + pad
+        need = (8 + gt._CARD_H + gt._BLOCK_GAP      # cards: pad + h + pad
                 + 28 + gt._BLOCK_GAP        # fbar
                 + 12 * gt._ROW_H + gt._TREE_HEAD_H + 2   # tree: 12 行 + 表头
                 + gt._SPARK_H
@@ -10463,7 +10463,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         u"""读到的窗口太矮要提到保底高度(老存档正是 1046x470)。"""
         import gpu_tray as gt
         got = gt._onscreen_geometry("1046x470+55+55", 1512, 949)
-        self.assertEqual(got, "1046x634+55+55",
+        self.assertEqual(got, "1046x644+55+55",
                          "老存档的矮窗口原样还回去, 趋势图就被压成 1px")
 
     def test_a_tall_window_keeps_the_height_the_user_chose(self):
@@ -10504,15 +10504,17 @@ class TrayPanelStatusFloor(unittest.TestCase):
 
         托盘原来是 pady=(5,0)/(0,5): 标签底边直接贴上数值顶边, 间隙
         0px, 而 Web 面板 .card b 写着 margin-top:2px —— 六张卡每张都少
-        这两像素, 攒成一张卡就是标签糊在数字上。卡片总高没变(顶部 5 +
-        底部 3 合计还是 8), 纵向预算不动。
+        这两像素, 攒成一张卡就是标签糊在数字上。
+        §159 补述: 当时卡片总高确实没变(顶部 5 + 底部 3 合计 8), 但"合计
+        还是 8"正是毛病本身 —— Web 那边的 .card 上下各 9px, 托盘少 10px,
+        见 test_the_card_vertical_padding_matches_the_web_panel。
         """
         import gpu_tray as gt
         import gpu_monitor as gm
         src = io.open(gpu_tray.__file__, encoding="utf-8").read()
         self.assertIn("_CARD_LABEL_GAP = 2", src,
                       "卡片标签间距不再是对齐 Web 的那个数了")
-        self.assertIn("pady=(5, _CARD_LABEL_GAP)", src,
+        self.assertIn("pady=(_CARD_PAD_Y, _CARD_LABEL_GAP)", src,
                       "卡片标签没用 _CARD_LABEL_GAP: 间距又退化成 0")
         # Web 侧 .card b{margin-top:2px}, 抠出来和托盘比
         hit = re.search(r"\.card b\{[^}]*margin-top:(\d+)px",
@@ -10526,9 +10528,10 @@ class TrayPanelStatusFloor(unittest.TestCase):
     def test_the_card_side_padding_matches_the_web_panel(self):
         u"""汇总卡内部左右内边距, 托盘和 Web 得是同一个数。
 
-        托盘原来是 9px: 上下那半边早就按 9px 对齐了(Web
-        .card{padding:9px 16px} 的上 9), 只有左右还是 9, 而浏览器里
-        文字离卡的左右边缘是 16px —— 托盘这边标签贴着卡边, 显得挤。
+        托盘原来左右是 9px, 而 Web 面板 .card{padding:9px 16px} 里文字离
+        卡的左右边缘是 16px —— 托盘这边标签贴着卡边, 显得挤。
+        (这条 docstring 从前还接着写"上下那半边早就按 9px 对齐了", 假的:
+         纵向当时是 5/3, §159 才真对齐。)
         """
         import gpu_tray as gt
         import gpu_monitor as gm
@@ -10594,10 +10597,10 @@ class TrayPanelStatusFloor(unittest.TestCase):
                                   padx=(0, 0 if i == last else 8))
                         inner = _tk.Label(cell, text=lab)
                         inner.pack(anchor="w", padx=gt._CARD_PAD_X,
-                                   pady=(5, gt._CARD_LABEL_GAP))
+                                   pady=(gt._CARD_PAD_Y, gt._CARD_LABEL_GAP))
                         _tk.Label(cell, text=val).pack(
                             anchor="w", padx=gt._CARD_PAD_X,
-                            pady=(0, 5 - gt._CARD_LABEL_GAP))
+                            pady=(0, gt._CARD_PAD_Y))
                 root.update()
                 for cell in cards.winfo_children():
                     # Label 的 winfo_reqwidth 不含它自己的 padx, 所以
@@ -10661,6 +10664,132 @@ class TrayPanelStatusFloor(unittest.TestCase):
         self.assertEqual(int(hit.group(1)), gt._SPARK_GAP,
                          "托盘 %dpx / Web %spx: 同一个趋势图两种间距"
                          % (gt._SPARK_GAP, hit.group(1)))
+
+class TrayPanelCardGeometry(unittest.TestCase):
+    u"""汇总卡的纵向内边距: 上下必须一样, 且必须等于 Web 面板那个数。
+
+    §159 之前托盘卡片是 pady=(5, _CARD_LABEL_GAP) / pady=(0, 5 -
+    _CARD_LABEL_GAP): 标签离卡顶 5px、数值离卡底 3px, 同一张卡两种留白,
+    而 Web 面板 .card{padding:9px 16px} 是上下各 9px —— 托盘这边一张卡比
+    浏览器里矮 10px。两处注释还都写着"早就按 9px 对齐了", 账面对不上,
+    正是这个项目最恨的那类。
+
+    外部样本: 反编译 AIDA64 Engineer 5.20(Delphi, 二进制 DFM 窗体资源)
+    那个 790x503 的结果窗体, 内容区四边内边距是同一个数(7px), 没有哪
+    一边是另算的。上下对称不是审美偏好, 是成熟工具的通例。
+
+    三条分别守: 与 Web 同数、上下对称、_CARD_H 的账面等于实测。
+    """
+
+    def _cards(self, root, rows):
+        u"""按 _panel_build 同样的 pack 方式搭一行汇总卡。"""
+        import tkinter as _tk
+        import gpu_tray as gt
+        cards = _tk.Frame(root, bg=gt._BG)
+        cards.pack(fill="x", padx=gt._PANEL_PAD, pady=(8, gt._BLOCK_GAP))
+        last = len(rows) - 1
+        out = []
+        for i, (lab, val, cls, _tip) in enumerate(rows):
+            cell = _tk.Frame(cards, bg=gt._PANEL_BG, highlightthickness=1,
+                             highlightbackground=gt._LINE)
+            cell.pack(side="left", fill="x", expand=True,
+                      padx=(0, 0 if i == last else 8))
+            lb = _tk.Label(cell, text=lab, bg=gt._PANEL_BG, fg=gt._MUTED,
+                           font=gt._FONT_UI)
+            lb.pack(anchor="w", padx=gt._CARD_PAD_X,
+                    pady=(gt._CARD_PAD_Y, gt._CARD_LABEL_GAP))
+            v = _tk.Label(cell, text=val, bg=gt._PANEL_BG,
+                          fg=gt._heat_color(cls), font=gt._FONT_UI_BOLD)
+            v.pack(anchor="w", padx=gt._CARD_PAD_X,
+                   pady=(0, gt._CARD_PAD_Y))
+            out.append((cell, lb, v))
+        root.update()
+        return out
+
+    def test_the_card_vertical_padding_matches_the_web_panel(self):
+        u"""卡片的上下内边距必须和 Web 面板 .card{padding:9px 16px} 同数。
+
+        这条以前不存在: 标签间距和左右内边距都各有守卫, 唯独纵向没有,
+        于是 5/3 与 9/9 的分歧可以一直藏着, 而注释还自称已经对齐。
+        """
+        import gpu_tray as gt
+        import gpu_monitor as gm
+        src = io.open(gpu_tray.__file__, encoding="utf-8").read()
+        self.assertIn("_CARD_PAD_Y = ", src,
+                      "卡片纵向内边距没有常量, 又回到裸数字了")
+        hit = re.search(r"\.card\{[^}]*padding:(\d+)px (\d+)px",
+                        gm._PANEL_STYLE)
+        self.assertIsNotNone(hit, "Web 面板 .card 的 padding 不见了")
+        top, side = int(hit.group(1)), int(hit.group(2))
+        self.assertEqual(top, gt._CARD_PAD_Y,
+                         "托盘上下 %dpx / Web %dpx: 汇总卡两种高度"
+                         % (gt._CARD_PAD_Y, top))
+        self.assertEqual(side, gt._CARD_PAD_X,
+                         "托盘左右 %dpx / Web %dpx: 汇总卡两种宽度"
+                         % (gt._CARD_PAD_X, side))
+        # 上下必须是同一个数: 只和 Web 对齐还不够, 5/5 仍然是自己不对称
+        for shape in ("pady=(_CARD_PAD_Y, _CARD_LABEL_GAP)",
+                      "pady=(0, _CARD_PAD_Y)"):
+            self.assertIn(shape, src,
+                          "卡片里找不到 %s: 上下内边距又不对称了" % shape)
+
+    def test_the_card_padding_is_symmetric_top_and_bottom(self):
+        u"""按真渲染量: 标签离卡顶 == 数值离卡底, 且都含那 1px 边框。"""
+        import tkinter as _tk
+        import gpu_tray as gt
+        import gpu_monitor as gm
+        root = _tk.Tk()
+        try:
+            cells = self._cards(root, gm.panel_summary({}))
+            for cell, lb, val in cells:
+                top = lb.winfo_y()
+                bottom = cell.winfo_height() - (val.winfo_y()
+                                                + val.winfo_height())
+                self.assertEqual(top, bottom,
+                                 "卡片上下内边距不对称: 上 %d / 下 %d"
+                                 % (top, bottom))
+                self.assertEqual(top, 1 + gt._CARD_PAD_Y,
+                                 "上内边距 %dpx: 1px highlight 边框加 "
+                                 "_CARD_PAD_Y=%d 应该是 %d"
+                                 % (top, gt._CARD_PAD_Y,
+                                    1 + gt._CARD_PAD_Y))
+                gap = val.winfo_y() - (lb.winfo_y() + lb.winfo_height())
+                self.assertEqual(gap, gt._CARD_LABEL_GAP,
+                                 "标签与数值之间 %dpx, Web .card b 的 "
+                                 "margin-top 是 %dpx"
+                                 % (gap, gt._CARD_LABEL_GAP))
+        finally:
+            root.destroy()
+
+    def test_the_card_height_matches_its_parts(self):
+        u"""_CARD_H 的账面必须等于实测卡片高度。
+
+        这个数只服务 _PANEL_MIN_H 的纵向预算: 账面矮一点, pack 就把趋势图
+        和底部两行状态压掉一截(§14391ee 记过 48px 那回)。所以字号、内边距
+        一改, 这里必须当场红, 并提示去同步 _PANEL_MIN_H。
+        """
+        import tkinter as _tk
+        import gpu_tray as gt
+        import gpu_monitor as gm
+        root = _tk.Tk()
+        try:
+            cells = self._cards(root, gm.panel_summary({}))
+            for cell, lb, val in cells:
+                parts = (2 + 2 * gt._CARD_PAD_Y + lb.winfo_height()
+                         + gt._CARD_LABEL_GAP + val.winfo_height())
+                self.assertEqual(cell.winfo_height(), parts,
+                                 "卡片实测 %dpx, 按 2px 边框 + 2x%d 内边距 "
+                                 "+ 标签 %d + 间距 %d + 数值 %d 算出来是 %d"
+                                 % (cell.winfo_height(), gt._CARD_PAD_Y,
+                                    lb.winfo_height(), gt._CARD_LABEL_GAP,
+                                    val.winfo_height(), parts))
+                self.assertEqual(cell.winfo_height(), gt._CARD_H,
+                                 "卡片实测 %dpx 而 _CARD_H=%d: 同步它, "
+                                 "并跟着同步 _PANEL_MIN_H 的账面"
+                                 % (cell.winfo_height(), gt._CARD_H))
+        finally:
+            root.destroy()
+
 
 class NormalizePerAdapter(unittest.TestCase):
     """normalize_total 按适配器归一: 独显忙不许把核显的读数压小。
@@ -11151,7 +11280,7 @@ class TrayPanelGeometryGuard(unittest.TestCase):
         """
         import gpu_tray as gt
         self.assertEqual(gt._onscreen_geometry("1046x470+55+55", 1512, 949),
-                         "1046x634+55+55",
+                         "1046x644+55+55",
                          "老存档的矮窗口原样还回去, 趋势图就被压成 1px")
         self.assertEqual(gt._onscreen_geometry("1040x300+0+0", 1512, 949),
                          "1040x%d+0+0" % gt._PANEL_MIN_H)

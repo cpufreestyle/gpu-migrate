@@ -260,6 +260,26 @@ _SPARK_GAP = 10
 # 汇总卡里标签与数值之间的间距, 和 Web 面板 .card b{margin-top:2px} 对齐。
 # 原来是 0: 标签底边直接贴上数值顶边, 而浏览器里那两个数之间空着 2px。
 _CARD_LABEL_GAP = 2
+# 汇总卡的纵向内边距, 上下取同一个数, 和 Web 面板 .card{padding:9px 16px}
+# 的上 9 / 下 9 对齐。原来是 5/3: 加起来 8, 比浏览器里少 10px, 而且上下
+# 不对称 —— 标签离卡顶 5px、数值离卡底 3px, 同一张卡两种留白。
+#
+# 这两处原来的注释写着"早就按 9px 对齐了", 与实际代码不符: 数值那行当时
+# 写的是 pady=(0, 5 - _CARD_LABEL_GAP) —— 一个"总纵向 padding 恒为 8"
+# 的装置, 它把 9 这个意图吃成了 5/3, 而且改 _CARD_LABEL_GAP 会让不对称
+# 加剧(改成 3 就变 5/2)。§159 把这个装置拆掉, 上下都落回 9, 注释与代码
+# 重新对上。
+#
+# 上下取对称有外部样本撑着: 反编译 AIDA64 Engineer 5.20 的窗体资源
+# (Delphi 二进制 DFM, 见 §159)里, 那个 790x503 的结果窗体内容区四边
+# 内边距是同一个数(7px), 没有哪一边是另算的。
+_CARD_PAD_Y = 9
+# 汇总卡实测高度, 只服务于 _PANEL_MIN_H 的账面:
+#   上下各 1px highlightthickness + 上下 _CARD_PAD_Y + 标签 22
+#   + _CARD_LABEL_GAP + 数值 22 = 66
+# 22 是 _FONT_UI 下 Label 的实测高度(§158)。字号或内边距一改就要同步,
+# TrayPanelCardGeometry.test_the_card_height_matches_its_parts 量着盯。
+_CARD_H = 66
 # 底部状态区两行 Label 之间的间距, 和 Web 面板 #hidden / #counters 的
 # margin:2px 0 0 对齐。原来是 1px: 两行灰字几乎贴在一起, 而浏览器
 # 里空着 2px。
@@ -314,9 +334,10 @@ _FORM_ROW_PITCH = 32
 
 _BLOCK_GAP = 4
 # 汇总卡内部左右内边距, 和 Web 面板 .card{padding:9px 16px} 的左右 16px
-# 对齐。原来是 9: 上下那半边早就按 9px 对齐了(见下面 pady=(5, ...) 那两个),
-# 只有左右还是 9, 而浏览器里文字离卡的左右边缘是 16px —— 托盘这边标签贴
-# 着卡边, 显得挤。卡片横向余量足: 六张卡等分, 最窄 650px 窗口下每张仍有
+# 对齐。原来左右是 9, 而浏览器里文字离卡的左右边缘是 16px —— 托盘这边
+# 标签贴着卡边, 显得挤。(这句注释从前还写着"上下那半边早就按 9px 对齐了",
+# 那是假的: 纵向当时是 5/3, §159 才真对齐。)
+# 卡片横向余量足: 六张卡等分, 最窄 650px 窗口下每张仍有
 # 99px, 减去 2x16 还剩 67px, 而最宽的标签("GPU 进程")只要 53px。
 _CARD_PAD_X = 16
 _ROW_ALT_TAG = "rowalt"
@@ -985,20 +1006,23 @@ _HEAD_PAD_X = 6
 _HEAD_PAD_Y = 5
 
 # 面板的保底高度, 按各区块的**实测**请求高度加出来:
-#   卡片 68 (pad 8 + 内容 56 + 间距 4)
+#   卡片 78 (pad 8 + 内容 _CARD_H 66 + 间距 4)
 #   筛选栏 32 (28 + 间距 4)
 #   表格 422 (12 行 x 32 + 表头 _TREE_HEAD_H + ttk 多留的 2px)
 #   趋势图 46 + 间距 10
 #   状态区 52
-# 账面上是 630, 但**实测 toplevel 要 634** —— ttk.Treeview 在 12 行全
-# 展开时的请求高是 418 而不是 416(12x32+32), 多出 2px。630 这个数就是
-# 少了这 2px: 底部状态区实测被 pack 压成 48px(需求 52), 第二行“会话
+# 账面上是 640, 但**实测 toplevel 要 644** —— ttk.Treeview 在 12 行全
+# 展开时的请求高是 418 而不是 416(12x32+32), 多出 2px, 窗体自身再吃 2px,
+# 账面与实测之间恒定差 4px。这笔差 §14391ee 记过: 630 这个数就是少了这
+# 4px, 底部状态区实测被 pack 压成 48px(需求 52), 第二行“会话
 # 累计”的下半截被切掉。提到 634 之后实测 52px 正好装下。
 # 低于这个高度趋势图和底部两行会被 pack 压扁(老默认 470 实测压成
 # 1px, 用户根本看不见); 行高 28 -> 32 之后 12 行从 336 涨到 384,
 # 这个数必须跟着涨 —— TrayPanelStatusFloor.
 # test_the_row_height_and_the_window_floor_move_together 钉死等式。
-_PANEL_MIN_H = 634
+# §159 卡片纵向内边距 5/3 -> 9/9(对齐 Web .card{padding:9px 16px}), 卡片
+# 56 -> 66, 账面 630 -> 640, 这个数跟着 634 -> 644。
+_PANEL_MIN_H = 644
 
 
 def _onscreen_geometry(text, screen_w, screen_h,
@@ -1825,12 +1849,12 @@ class TrayApp:
                           padx=(0, 0 if i == last else 8))
                 tk.Label(cell, text=label, bg=_PANEL_BG, fg=_MUTED,
                          font=_FONT_UI).pack(anchor="w", padx=_CARD_PAD_X,
-                                            pady=(5, _CARD_LABEL_GAP))
+                                            pady=(_CARD_PAD_Y, _CARD_LABEL_GAP))
                 val = tk.Label(cell, text=text, bg=_PANEL_BG,
                                fg=_heat_color(cls),
                                font=_FONT_UI_BOLD)
                 val.pack(anchor="w", padx=_CARD_PAD_X,
-                          pady=(0, 5 - _CARD_LABEL_GAP))
+                          pady=(0, _CARD_PAD_Y))
                 card_labels[label] = val
                 tips[label] = tip
                 _bind_tip(val, tip)
