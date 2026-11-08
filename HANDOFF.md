@@ -7509,3 +7509,100 @@ vs Web 10/12)"。本轮先去核实这个对照, 结论是**那个对照是错�
    34 -> 28、汇总卡 56 -> 66、卡片间距都看不到。不同步的话用户看不到这些
    优化。要同步需 build -> sync -> 重启托盘(会打断实例)。
 2. 43 条新提交未 push, 与 origin/main 分叉。
+
+## 162. 续一百五十三：同一行相邻控件的间隙被「两个属主」叠成双倍，收成 _CTL_GAP=6(布局)
+
+§161 扫出来但没处理的那批未命名间距字面量，本轮取其中「已经量出错了」的两条:
+筛选栏五个控件之间的四个间隙、详情窗底部三个按钮之间的两个间隙。
+
+### 为什么是缺陷
+
+数值上看着像「已经对了」: 筛选栏三处间隙本来就是 6，详情窗三个按钮也是 6。但真
+渲染量出来是歪的:
+
+- 筛选栏四个间隙: **6/12/6/6**，1046/900/722/650 四个宽度下一律如此
+- 详情窗三个按钮的两个间隙: **12/12**
+
+病因是**每个间隙有两个属主**: 筛选栏的输入框写 `padx=6`(左右都声明)，右边「显示
+N/T 行」又写 `padx=(6, 0)`，两份叠成 12px; 详情窗三个按钮都写 `padx=6`，相邻两份
+同样叠加。所以这不是窄窗才有的偶发现象，是每个宽度都错。
+
+而这条以前**没有任何测试看得见**: `test_the_filter_row_controls_share_one_baseline`
+只量底边齐不齐，全套单测里没有一个用例量横向间隙。
+
+### 改动
+
+- `gpu_tray.py`
+  - 新增 `_CTL_GAP = 6`: 同一行里相邻控件的横向间隙。Web 面板没有这样的一行(它的
+    筛选器只有一个 `#q` 输入框)，没有一一对应的 margin 可抠，所以和 `_BLOCK_GAP`
+    一样取托盘自己的统一值; 外部参照是反编译 AIDA64 Engineer 5.20 量到的按钮↔按钮
+    gap 6px(§159)。
+  - 修法统一成「每个间隙只许有一个属主」: 左边的元素不声明自己的右边距，右边的元素
+    用 `padx=(_CTL_GAP, 0)` 声明它左边那一份。
+  - 筛选栏 4 处(输入框 + 两个按钮 + 右边那个 Label)+ 详情窗 3 处按钮全部改成
+    `padx=(_CTL_GAP, 0)`; `entry.pack` 从 `padx=6`(左右都声明)改成
+    `padx=(_CTL_GAP, 0)`(只声明左边那一份)。
+  - `btns.pack(pady=6)` 提成 `_DETAIL_BTN_PAD_Y = 6` —— 它进详情窗的窗高账，按
+    §157 立的规矩「说不出名字的数测试算不出账」。
+  - 顺手搬回被甩开的 `_BLOCK_GAP` 注释: 它原本贴在常量上方，后来 `_ROW_H` /
+    `_FORM_ROW_PITCH` 两块插进两者之间，注释被甩到 30 行开外、正好压在 `_ROW_H` 的
+    注释上头 —— 读代码的人会把「面板四个区块之间的间距...每处都是 4px」当成在说表格
+    行高。
+- `tests/test_gpu_monitor.py`
+  - 镜像同步: `test_the_filter_row_controls_share_one_baseline` 里的 `entry.pack` /
+    `hint.pack` / `pin.pack` / `srt.pack` 4 处，加上该用例里 `fill_y` 的字符串断言
+    (改成跨两行的拼接串 —— `entry.pack` 那句现在也跨两行了)，以及注释里
+    `padx=(6, 0)` 的字样。
+  - 详情窗高度账 `budget8` / `budget9` 的 `2 * 6` -> `2 * gt._DETAIL_BTN_PAD_Y`。
+  - 新增 `TrayPanelStatusFloor.test_the_filter_row_gaps_are_all_one_number`: 4 个
+    宽度真渲染量 4 个间隙 + 静态数「恰好 4 处 `padx=(_CTL_GAP, 0)`」+ 钉
+    `_CTL_GAP == 6`。
+  - 新增 `TrayPanelStatusFloor.test_the_detail_button_gaps_are_all_one_number`: 数
+    3 处 + `btns.pack(pady=_DETAIL_BTN_PAD_Y)` 形状 + 量 2 个间隙 +
+    `btns.winfo_height() == 按钮高` 且 `btns.winfo_y() == _DETAIL_BTN_PAD_Y`。
+- `README.md`: 新增 §162 两条(控件间隙收成 _CTL_GAP + 搬回被甩开的注释)。
+
+### 验证结果
+
+- 两个 runner 各 **672 条全绿**(原 670 + 2 新)。
+- 变异验证 6 条(`.tmptest/_mut162.py` / `_mut162b.py`，`finally` 还原并
+  `os.remove`):
+  - M1 输入框退回 `padx=6`: 红(老守卫 + `3 != 4`)
+  - M2 详情窗按钮退回 `padx=6`: 红(`2 != 3`)
+  - M3 `_CTL_GAP` 6->4 / 6->8: **一开始全绿** —— 真渲染镜像跟着常量走，静态计数也
+    只数「有几处用了常量」，所以改数值两条都放行。这正是 §160/§161 反复出现的覆盖
+    边界: 真渲染镜像证明的是「常量没有说谎」，不是「常量是对的」。补了
+    `assertEqual(gt._CTL_GAP, 6)` 之后红。
+  - M4 按钮行 `pady` 退回裸 6: 红(形状守卫)
+  - M5 `_DETAIL_BTN_PAD_Y` 6->8: 全绿(账面与镜像一起动的一致性检查，符合预期)
+
+### 踩过的坑
+
+- `t.replace(old, new, 1)` 在两处相同文本时只换第一处 -> 中间那个按钮漏改，返工两次。
+  同类文本要么全量替换，要么按出现次数循环。
+- `assert "padx=6" not in code` 把自己注释里的字样也算进去 -> 写盘没执行。计数类
+  断言必须先剥整行注释(`test_the_block_gap_is_one_number_used_in_all_three_places`
+  里已有先例，本轮又踩一次)。
+- `btns.winfo_height()` **不含** `pady`(pady 在 Frame 的分配区之外)，第一版断言
+  `== 按钮高 + 2*pad` 挂; 改为量 `winfo_height()==按钮高` 与
+  `winfo_y()==_DETAIL_BTN_PAD_Y`。
+- 镜像漏同步一处就红: `hint.pack` 在测试里也跨两行，`fill_y` 那条字符串断言要跟着
+  改成拼接串。
+
+### 顺带发现(未改，记档)
+
+- 弹泡 `padx=8, pady=6` 共 2 处(gpu_tray.py 674 / 738)
+- `avail = width - 16  # padx=8 两侧` 1 处
+- `test_the_card_text_still_fits_at_the_narrowest_window` 镜像里的
+  `pady=(gt._PANEL_PAD, 4)` 的裸 `4`
+- `_DETAIL_BTN_PAD_Y` 的数值本身无外部参照(只有「进窗高账」这条边界)，未钉
+- aida64.ini `[Generic]` 按界面分面设刷新率(SensorPage 3000 / GPUPage 3000 /
+  SensorIcons 5000)，面板三个面共用一个频率
+
+### 用户决策待办
+
+1. 现网 exe 仍是旧构建(10-04)，默认窗口高度 630 -> 634 -> 644、表格行高
+   28 -> 32、设置窗 460x460 -> 460x520、详情窗 520x300 -> 520x320、筛选栏
+   34 -> 28、汇总卡 56 -> 66、卡片间距、控件间隙都看不到。要同步需
+   build -> sync -> 重启托盘(会打断实例)。
+2. 44 条新提交未 push，与 origin/main 分叉。
