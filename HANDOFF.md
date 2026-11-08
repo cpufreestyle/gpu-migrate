@@ -7429,3 +7429,83 @@ Web 面板 `.card{padding:9px 16px}` 上下左右都是明写的 9/9/16/16, 而�
    34 -> 28、汇总卡 56 -> 66、卡片间距都看不到。不同步的话用户看不到这些
    优化。要同步需 build -> sync -> 重启托盘(会打断实例)。
 2. 41 条新提交未 push, 与 origin/main 分叉。
+
+## 161. 续一百五十二：汇总卡顶上那个裸 8 提成 _PANEL_PAD, 并纠正 §160 一处错的 Web 对照(布局)
+
+§160 结尾把"下一轮最值得做的一条"记成: `cards.pack(..., pady=(8, _BLOCK_GAP))`
+里那个裸 `8` 对 Web 的 `.cards{margin:10px 0 12px}`, "数值也对不上(托盘 8/4
+vs Web 10/12)"。本轮先去核实这个对照, 结论是**那个对照是错的**, 于是本节做
+两件事: 把该命名的数命名, 把错的结论改正。
+
+### 先纠正: 8 和 10 不是同一个数量
+
+看 Web 面板的 HTML(gpu_monitor.py:1961-1967), 卡片上方还有四段:
+
+```
+<h2>GPU 监控</h2>
+<p id=policy class='policy'>生效中: ...</p>
+<p id=conn hidden></p>
+<p id=gpuinfo>核显: ...<br>独显: ...</p>
+<div id=cards class=cards>...</div>
+```
+
+所以 `.cards{margin:10px 0 12px}` 那个 `10px` 是从 `#gpuinfo` 底边量的,
+不是从视口顶。而托盘的汇总卡是 `_panel_build` 里**第一个** pack 的区块, 顶上
+就是窗口上沿。两个数量的参照物不同, 对不上是应该的。
+
+托盘自己的注释早就把这个说对了, 在 tests 里:
+"汇总卡顶部那 8 是窗口上沿, 不是区块间距, 所以它是唯一带非零上边距的一处。"
+
+另外 `_BLOCK_GAP` 的注释也写着 Web 面板区块顺序不同(卡片 -> 趋势图 -> 筛选框
+-> 表格), 没有一一对应的 margin 可对齐 —— 所以"托盘 4 vs Web 12"同样不是一
+回事。
+
+按 §160 那个错误结论去把 8 改成 10 会是回退。真正该做的是把这个数**命名**:
+它和左右两边是同一个数(`_PANEL_PAD`), 因为它是窗口上沿的外层内边距。
+
+### 改动
+
+- `gpu_tray.py`:
+  - `cards.pack(..., pady=(8, _BLOCK_GAP))` -> `pady=(_PANEL_PAD, _BLOCK_GAP)`
+  - `_PANEL_PAD` 的注释改写: 它同时管四个区块的左右和第一个区块的顶部; 窗口
+    下沿是唯一例外(`_STATUS_BOTTOM_PAD`)。并把"别拿这个数去对 Web 的
+    `.cards{margin:10px 0 12px}`"连原因写进注释, 免得下一个人再误读一遍。
+  - `_PANEL_MIN_H` 账面注释 `卡片 78 (pad 8 + ...)` -> `(pad _PANEL_PAD 8 + ...)`
+- `tests/test_gpu_monitor.py`:
+  - 七处裸 `8` 全部换成 `gt._PANEL_PAD`: `_budget()`、行高等式那条、
+    `expect` 元组里的形状串、以及四处真渲染镜像
+  - `test_the_block_gap_is_one_number_used_in_all_three_places` 里那段注释
+    同步(原文"汇总卡顶部那 8 是窗口上沿")
+  - 新增 `test_the_first_block_top_pad_is_the_panel_pad`: 静态查
+    `pady=(_PANEL_PAD, _BLOCK_GAP)` 形状 + 真渲染量 `cards.winfo_y()` ==
+    `_PANEL_PAD`; docstring 里把上面那条纠正写全
+- `README.md`: 新增条目, 并把 §160 的错误对照当场改正
+
+### 验证结果
+
+- 两个 runner 各 **670 条全绿**(原 669 + 1 新)。
+- 变异验证 3 条(`.tmptest/_mut161.py`, 备份/还原 gpu_tray.py):
+  - M1 pack 退回裸 `8`: **红**。`test_the_block_gap_is_one_number_used_in_all_
+    three_places` 和新守卫都抓到(`pady=(_PANEL_PAD, _BLOCK_GAP)` not found)
+  - M2 按 §160 的错误结论对齐成 `10`: **红**。这条是关键 —— 那个错误改法现在
+    会被当场抓住, 不会再有人照着做
+  - M3 `_PANEL_PAD` 8 -> 10: **全绿**。一致性检查: 提成常量后顶部间距与左右
+    内边距该一起动、账面该跟着走, 全套仍应全绿。红了才说明提常量时漏同步
+
+### 剩下的候选(未动, 记档)
+
+- 筛选栏 `padx=6` / `padx=(6,0)` 共 4 处; 详情窗三按钮 `padx=6` 共 3 处;
+  弹泡 `padx=8, pady=6` 共 2 处; `avail = width - 16  # padx=8 两侧` 1 处
+- `test_the_card_text_still_fits_at_the_narrowest_window` 的镜像里还有一处
+  `pady=(gt._PANEL_PAD, 4)` 的 `4`(本轮只换了 8, 没动它)
+- AIDA64 侧可作外部参照: 按钮↔按钮 gap 6px、窗体四边内边距 7px
+- aida64.ini 的 `[Generic]` 按界面分面设刷新率(SensorPage 3000 / GPUPage
+  3000 / SensorIcons 5000), 面板现在三个面共用一个频率
+
+### 用户决策待办
+
+1. 现网 exe 仍是旧构建(10-04), 默认窗口高度 630 -> 634 -> 644、表格行高
+   28 -> 32、设置窗 460x460 -> 460x520、详情窗 520x300 -> 520x320、筛选栏
+   34 -> 28、汇总卡 56 -> 66、卡片间距都看不到。不同步的话用户看不到这些
+   优化。要同步需 build -> sync -> 重启托盘(会打断实例)。
+2. 43 条新提交未 push, 与 origin/main 分叉。
