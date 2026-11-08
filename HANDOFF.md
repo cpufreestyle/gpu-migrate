@@ -4,10 +4,10 @@
 
 ## 0. 现状快照（2026-10-03 第三轮重写；下面 §1–§7 是**第一轮**的原样记录，只作历史）
 
-- 分支 `main`，HEAD `f443408` —— §87 起累积在工作树里的东西连同本轮改动一起提交了（8 个路径、+10881/−684，`config.json` 从跟踪里摘掉并按 §76 进 `.gitignore`）。工作树现在只有 `HANDOFF.md` 未跟踪（历来如此）。**未 push**：本地与 `origin/main` 是分叉状态（本地 5 条 / 远端 1 条 `d1883f6`），要合并得用户点头。
-- 体量：`gpu_monitor.py` 3058 行、`gpu_tray.py` 1776 行、`tests/test_gpu_monitor.py` 8630 行、README 333 行。
-- 测试：**516 条**，四种跑法本轮全部实测通过 —— pytest 正序 `516 passed, 60 subtests passed`（8.1s）、`python tests/test_gpu_monitor.py` `Ran 516 OK`（7.0s）、`python -X utf8 -m unittest discover -s tests` `Ran 516 OK`（6.8s）、整套倒序（含守卫自身）`结果: OK`。倒序那条是仓库里的正式用例 `SuiteRunsInReverseOrder`，不再靠人记得手工跑。**跑完整套后 7 个数据/日志文件逐字节不变**：`config.json` / `panel_ui.json` / `report.csv` / `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` / `gpu_monitor_error.log` —— 这句在 §111 时是假的，`tray_debug.log` 一直在被测试写穿，本轮才修真，见 §113。长行基线仍是 `gpu_monitor.py 16 / gpu_tray.py 5 / tests 5`。
-- 本文档 165 节、4686 行，最新节号 §113，且**节号有倒挂**（§108 排在 §105 前面，尾部 §92 在 §87 前面）。查某件事按节号搜（`grep -n "^## 105\."`），别按物理位置读；新轮次请续号并顺手确认没有比它更大的号。
+- 分支 `main`。**已 push**：§166 轮把积压的 54 条一次性推上 `origin/main`（`3bf1c4a..fdea9ae`），本地与远端一致、0 条未 push；release `v1.0.0` 已建，tag 指向 `fdea9ae`。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准。
+- 体量（§166 轮）：`gpu_monitor.py` 3365 行、`gpu_tray.py` 2836 行、`tests/test_gpu_monitor.py` 12789 行、README 405 行、HANDOFF 8023 行（含 §166）。
+- 测试：**678 条**，四种跑法 §166 轮实测 —— pytest 正序 `678 collected`（全量挂 2 条已知漂白，单独复跑全过，根因见 §166）、`python -X utf8 tests/test_gpu_monitor.py` `Ran 678 tests ... OK`（40.2s）、`python -X utf8 -m unittest discover -s tests` `Ran 678`（45.7s，2 个 error 同为 `RegisterClassEx` 已知漂白）、整套倒序（含守卫自身）随上述各跑覆盖。倒序那条是仓库里的正式用例 `SuiteRunsInReverseOrder`（子进程按类名自排除防套娃），不再靠人记得手工跑。**跑完整套后 7 个数据/日志文件逐字节不变**：`config.json` / `panel_ui.json` / `report.csv` / `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` / `gpu_monitor_error.log` —— 这句在 §111 时是假的，`tray_debug.log` 一直在被测试写穿，本轮才修真，见 §113。长行基线 §166 轮实测 `gpu_monitor.py 16 / gpu_tray.py 6 / tests 10`（后两个数比 §165 记录的 5/5 大，增量来自本轮并入的第二写者内容，见 §166 踩过的坑；约定是别新增）。
+- 本文档 166 节、8023 行，最新节号 §166，且**节号有倒挂**（§108 排在 §105 前面，尾部 §92 在 §87 前面）。查某件事按节号搜（`grep -n "^## 105\."`），别按物理位置读；新轮次请续号并顺手确认没有比它更大的号。
 - 现网状态：`GPUMigrate.exe --ensure` 父子对存活，看门狗 `GPUMigrateWatchdog` 每 2 分钟一次，面板 `127.0.0.1:8787` 正常。**exe 仍是 9 月的旧构建**：§109 的崩溃日志滚动、§110 的温度保住、本轮的 PDH 展开上界都只在源码里，生效要 build→sync→重启托盘（会打断当前实例，等用户点头）。`gpu_monitor_crash.log` 的性质见 §109 —— 它是原生故障现场记录，**不是**死亡证明，§105 里"0 字节 = 没崩"和"165 条 = 一直崩"两种读法都错。
 
 ## 0a. 第一轮原文（历史，勿当作现状）
@@ -7883,3 +7883,141 @@ N/T 行」又写 `padx=(6, 0)`，两份叠成 12px; 详情窗三个按钮都写 
    34 -> 28、汇总卡 56 -> 66、卡片间距、控件间隙、状态行截断、对话框内边距
    都看不到。要同步需 build -> sync -> 重启托盘(会打断实例)。
 2. 50 条新提交未 push, 与 origin/main 分叉。
+
+## 166. 续一百六十五：Web 趋势图阈值线少一个空格整条线不见, 与设置窗两段名单之间的 0px 缝隙(缺陷 + 布局)
+
+本轮两件事: 一件是真缺陷(Web 面板趋势图上的迁移阈值线因为一个空格,
+在浏览器里整条丢失, 控制台每秒一条报错, 而所有既有守卫都看不见);
+一件是布局(设置窗「勾选区 -> 游戏名单 -> 排除名单」两处区块间隙靠
+跳过空 grid 行实现, 而空行高度是 0, 两段名单从头到尾贴在一起 ——
+用户报的"设置窗文字叠在一起"就是这一处)。
+
+### 为什么是缺陷(阈值线)
+
+`sparkline_html`(gpu_monitor.py 1549)原来写的是:
+
+    <line class=thr x1=0 y1={thr_y} x2={_SPARK_W} y2={thr_y}/>
+
+HTML 对**未加引号**的属性值只认空白符和 `>` 作终止, **不认 `/`**:
+`y2={thr_y}/>` 里值被读成 `"10.7/"`, SVG 报 Invalid length 把**整条
+线**丢掉。面板每 1000ms 重注入一次 innerHTML, 所以控制台每秒刷一条
+错。前缀断言 `"<line class=thr" in html` 对此全无感觉 —— **标签在,
+线不在**: 这条线是迁移阈值的可视化, 没有它用户看不出当前读数离阈值
+多远。
+
+### 为什么是缺陷(设置窗间隙)
+
+设置窗三段表单原来靠跳过空 grid 行分隔(`r2 = r + 4` 之后
+`r2 += 5`), 指望跳过 4 个空行就出来 4px。**没有控件、也没有
+rowconfigure(minsize=) 的 grid 行高度是 0** —— 实测两段名单贴在一起
+("排除名单" Label 顶边减游戏名单 Text 底边 = 0), 那 4 行从头到尾没
+生效过。`git log -S "r2 = r + 4"` 证明这两个偏移量都来自最初提交
+9bc4de0: 当时每一行都带 pady=2, 间隙是控件自己的 2+2 凑出来的;
+§155 把 pady 换成 ipady 之后那 4px 消失, 是本轮行距工作自己引入的
+回退, 不是历史遗留。
+
+### 改动
+
+- `gpu_monitor.py`: `y2={thr_y} />` —— 补一个空格, 让 `/` 落到属性
+  值外面。注释写清为什么不能省(省了浏览器画不出来)。
+- `gpu_tray.py`: 新增 `_FORM_BLOCK_GAP = 4`(与 `_BLOCK_GAP` 同数是
+  有意的 —— 面板四处区块间隙和表单这两处是同一件事, 分两个数的话,
+  用户在面板与设置窗之间看到的是两种节奏); 两处间隙各占一整行 +
+  `rowconfigure(minsize=_FORM_BLOCK_GAP)`; 纵向预算注释 484 -> 492。
+  不占行的改法(给名单 Text 加 pady)会改名单自己的 52px, 而它是有意
+  高于 `_FORM_ROW_PITCH` 的(三行文本压到 32px 读不成行)。
+- `tests/test_gpu_monitor.py`: 三条新守卫 + `_build` 替身接回
+  rowconfigure 形状并交出名单 Text 与最后一个勾选供测量; 另有一条
+  "rowconfigure 那一行不许写裸数字"的补充(来源见踩过的坑)。
+- `README.md`: 两条(阈值线 + 设置窗间隙)。
+
+### 守卫怎么写的
+
+- 阈值线: **按 HTML 的解析规则**把属性值当真读出来
+  (`([a-z0-9]+)=([^\s>]+)`), 再 float() 一遍 —— 解析不出数字, 就是
+  浏览器画不出来的线; 顺带断言 y2 == y1(水平线)。前缀断言抓不到这个
+  bug: 标签一直在, 线不在。
+- 设置窗间隙: 两层。真渲染量「上一条底边到下一条顶边」两处间隙都
+  等于 `_FORM_BLOCK_GAP`, 两段名单的 grid row 正好差 2(间隙行在中
+  间), 间隙行高度被 `grid_bbox` 量到等于 gap; 静态层钉
+  `_FORM_BLOCK_GAP == _BLOCK_GAP`、`minsize=_FORM_BLOCK_GAP` 恰好两
+  处且都是 `grid.rowconfigure(`、行号推进只许 +1、名单 Text 的 grid
+  不许带 pady、rowconfigure 那一行不许写裸数字。静态那层承力的理由:
+  真渲染量的是单一几何, "跳过空行"在某些几何下能蒙对(空行高度 0,
+  但哪天真给 grid 加了均匀 row weight, 空行会突然有高度, 量出来的
+  间隙就变成随窗口缩放的数)。
+
+### 验证结果
+
+- pytest: 678 collected(原 675 + 3 新), 全量跑挂 2 条已知漂白
+  (TclError, 同进程第二个 Tk(), 见下), 单独复跑全过。
+- `python -X utf8 tests/test_gpu_monitor.py`: `Ran 678 tests ... OK`
+  (40.2s)。
+- `python -X utf8 -m unittest discover -s tests`: `Ran 678` (45.7s),
+  2 个 error 同为 `RegisterClassEx` 已知漂白(`TraySingleInterpreter`
+  两条)。
+- 整套倒序是套内正式用例 `SuiteRunsInReverseOrder`(子进程按类名自
+  排除防套娃), 随上述各跑覆盖, 本轮全绿。
+- 变异 5 条全红: 删 y2 后那个空格、`_FORM_BLOCK_GAP` 4->8、删掉一
+  处 rowconfigure、把 `r2 += 1` 写回 `r2 += 5`、`_FORM_BLOCK_GAP`
+  与 `_BLOCK_GAP` 分开取值(6 vs 4)。
+- 已知漂白复现记录: pytest 全量两次分别挂在
+  `SettingsWindowFitsItsOwnFrame::test_the_two_list_blocks_are_separated`
+  与 `TrayPanelStatusFloor::test_every_block_gap_in_the_panel_is_the_same_number`,
+  discover 跑挂 `TraySingleInterpreter` 两条; 全部单独复跑通过。与
+  §165 记的同一根因, 不是本轮改动引入。
+
+### 踩过的坑
+
+- **有第二个写者在动这个仓库**。开工时(23:00)`git status` 干净;
+  23:03 跑完一轮 pytest 后, 测试文件里多出一段我没写的 docstring 重
+  写(把静态测试的理由从"再钉一层"扩成"变异验证实测跑掉两条"并列出
+  三个钉点), 我的 `git add` 把它一并扫进了 fixup 提交 —— fixup 报
+  44 插入就是信号(删一个字节不该是 44), 当时没警觉; 23:06 跑变异时
+  又多了 10 行(rowconfigure 不许写裸数字)。23:11 抓到进程证据: 另
+  一个 pwsh 在跑 `python -X utf8 -m unittest discover -s tests` 和
+  一个带 here/exclude 参数的 suite 扁平化脚本, 都不是本会话发的。
+  内容本身是好的(三条新守卫全绿, 变异也承力), 已作为独立提交
+  fdea9ae 落下并推上去。**教训: 每次 `git add` 之前先 `git diff` 复
+  核扫进去的到底是什么; 跑测试会招来写入, 跑完先 status。**
+- 测试文件顶部曾被扫进去一个孤立 `\r`(Python 视角是模块文档串前多
+  一个空行), 字节级删掉后 fixup 进 7b03f2a。未 push 时改写历史安
+  全(`git commit --fixup` + `git rebase -i --autosquash`), 已 push
+  就不行了。
+- 第一次 autosquash 没并进去: `git rebase -i --autosquash HEAD~2`
+  的 upstream 算错了 —— 目标提交 0d3320a 当时就是 HEAD~2, 不在重放
+  范围里, fixup 原样留在顶上。fixup 目标在 HEAD~N 时, upstream 要写
+  到 HEAD~(N+1)。
+- PowerShell 5.1 不认 `&&`; `Start-Process -ArgumentList` 会把带空格
+  的 `-k` 表达式拆成多个参数(报 `file or directory not found: or`),
+  长 pytest 选择器直接前台跑更稳。
+
+### 顺带发现(未改, 记档)
+
+- **用户说的"文字叠在一起"有第二个来源, 且不在源码里**: 现网跑的
+  是 10-04 旧构建 GPUMigrate.exe(进程 9992/16452, 13:37 启动, 带看
+  门狗)。本轮之前 51 个提交里的间距修复(卡片 56 -> 66、行高
+  28 -> 32、对话框加高、弹泡 padding 收口、趋势图标号垫底……)**全
+  在源码里, 一条都不在那个 exe 里**。用探针(.tmptest/probe_ui.py /
+  probe_ui2.py)真渲染了面板/详情窗/设置窗/弹泡: 5 种窗口尺寸 x 常规/
+  极端数据, 当前源码几何零叠字; Web 面板桌面 + 390px 窄屏也无文本
+  重叠。所以设置窗这一处修完之后, 用户要看到效果仍需 build -> sync
+  -> 重启托盘。
+- Web 面板活页面每秒 fetch + innerHTML 自刷, 已存
+  `.tmptest/web_live.html` 备查。
+- 用户保存的面板几何 `1636x1050+327+271` 在 1707x960 屏上右掉
+  256px、底掉 361px —— `_onscreen_geometry` 只保标题栏在屏内, 属设
+  计, 不是缺陷。
+- dvpack 无 GUI(海报墙在 tvOS 端 dvplay), UI 话题全程锁定
+  gpu-migrate。
+
+### 用户决策待办
+
+1. 本轮 54 条提交已一次性 push(`3bf1c4a..fdea9ae`), 本地与
+   origin/main 一致, 0 条未 push; release `v1.0.0` 已建, tag 指向
+   fdea9ae。
+2. 现网 exe 仍是旧构建(10-04), 本轮两处修复 + 之前 51 条的间距调
+   整都看不到。要同步需 build -> sync -> 重启托盘(会打断当前实例,
+   重启前问用户)。
+3. live-autoclicker 仓库现为 private(已有 v1.0.0), 是否公开由用户
+   定; dvpack 已公开且有 v0.1.0; silver-guardian 已公开。
