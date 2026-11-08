@@ -10610,11 +10610,20 @@ class TrayPanelStatusFloor(unittest.TestCase):
             root.destroy()
 
     def test_the_detail_button_gaps_are_all_one_number(self):
-        u"""详情窗底部三个按钮之间的间隙也必须等于 _CTL_GAP。
+        u"""详情窗底部三个按钮: 两个间隙等于 _CTL_GAP, 且整组贴窗心。
 
         和筛选栏同一个病: 三个按钮都写 padx=6(左右都声明), 实测间隙
         12/12。外部参照是反编译 AIDA64 Engineer 5.20 量到的按钮<->按钮
         gap 6px(§159) —— 同一类"控件之间才分松紧"的间距。
+
+        §167 又抓出第二种歪法: 第一个按钮的 padx=(_CTL_GAP, 0) 左边没有
+        邻居, 这一份 6px 是孤儿声明。三个按钮的视觉组在 btns 里于是成了
+        左 6 / 右 0, 而 btns 是 pack 默认 anchor=center 按窗心居中的 ——
+        整组偏离窗心 2.5px(520 宽窗实测: 视觉组中心 262.5, 窗心 260)。
+        §162 立的规矩是"每个间隙只许有一个属主", 最左那个元素的左边
+        根本没有间隙可归属, 所以它不该声明 padx(筛选栏那一行同样是最左
+        的 _filter_hint 不带 padx)。修完左右留白都是 0, 视觉组中心与窗心
+        只差 0.5px —— 那是 213px 奇数宽的四舍五入, 不是缺陷。
 
         按钮行高度也一起量: 它进详情窗的高度账(2*_DETAIL_BTN_PAD_Y +
         按钮自然高), padx 改动不该牵动高度, 这条顺带钉住。
@@ -10624,12 +10633,37 @@ class TrayPanelStatusFloor(unittest.TestCase):
         body = inspect.getsource(gt.TrayApp._detail_build)
         dcode = "\n".join(l for l in body.splitlines()
                            if not l.lstrip().startswith("#"))
-        self.assertEqual(dcode.count("padx=(_CTL_GAP, 0)"), 3,
-                         "详情窗三个按钮没用 _CTL_GAP: %d 处"
-                         % dcode.count("padx=(_CTL_GAP, 0)"))
+        # 恰好两处: 三个按钮只有两个间隙, 每个间隙只许有一个属主。多一处
+        # 说明第一个按钮又把左边的孤儿 padx 写回来了(§167 修的就是这个),
+        # 少一处说明某个间隙掉成 0。这一处是防"只改替身"的那一层: 下面
+        # 真渲染量的是替身的几何, 替身与源码漂开了, 只有这个数字还咬得住。
+        self.assertEqual(dcode.count("padx=(_CTL_GAP, 0)"), 2,
+                         "详情窗三个按钮该有两处 padx=(_CTL_GAP, 0), "
+                         "实际 %d 处" % dcode.count("padx=(_CTL_GAP, 0)"))
         self.assertIn("btns.pack(pady=_DETAIL_BTN_PAD_Y)", body,
                       "详情窗按钮行的上下留白又是裸数字: 它进窗高账, "
                       "该用 _DETAIL_BTN_PAD_Y")
+        # 逐个按钮点名, 不按次数: 只数"共两处"数不出"孤儿声明挪到第二个
+        # 按钮"—— 计数还是 2, 而第一个间隙当场掉成 0。下面真渲染量的是
+        # 替身的几何, 替身与源码漂开了只有这一层还咬得住, 所以三个按钮的
+        # pack 各自钉形状: 第一个不许出现 padx, 后两个必须是
+        # padx=(_CTL_GAP, 0) 这一个形状。
+        segs = dcode.split("tk.Button(btns, text=")[1:]
+        self.assertEqual(len(segs), 3,
+                         "详情窗按钮行该有三个按钮, 实际 %d 个" % len(segs))
+        for idx, seg in enumerate(segs):
+            stmt = seg.split("tk.Button(btns, text=")[0]
+            call = stmt[stmt.index(".pack("):]
+            if idx == 0:
+                self.assertNotIn(
+                    "padx", call,
+                    "第一个按钮的 pack 里又出现了 padx: 它左边没有邻居, "
+                    "这一份是孤儿声明(§167 修的就是这个), 整组会偏离窗心")
+            else:
+                self.assertIn(
+                    "padx=(_CTL_GAP, 0)", call,
+                    "第 %d 个按钮没声明 padx=(_CTL_GAP, 0): 它左边的间隙"
+                    "归它管, 不声明就掉成 0" % (idx + 1))
         root = _tk.Tk()
         try:
             gt._rebuild_fonts()
@@ -10637,8 +10671,10 @@ class TrayPanelStatusFloor(unittest.TestCase):
             root.geometry("520x320")
             btns = _tk.Frame(root)
             btns.pack(pady=gt._DETAIL_BTN_PAD_Y)
-            row = []
-            for text in ("立即设为独显", "撤销独显设置", "关闭"):
+            b1 = _tk.Button(btns, text="立即设为独显", font=gt._FONT_UI)
+            b1.pack(side="left")
+            row = [b1]
+            for text in ("撤销独显设置", "关闭"):
                 b = _tk.Button(btns, text=text, font=gt._FONT_UI)
                 b.pack(side="left", padx=(gt._CTL_GAP, 0))
                 row.append(b)
@@ -10658,6 +10694,39 @@ class TrayPanelStatusFloor(unittest.TestCase):
             self.assertEqual(btns.winfo_y(), gt._DETAIL_BTN_PAD_Y,
                              "按钮行上边距 %dpx, 而 _DETAIL_BTN_PAD_Y=%d"
                              % (btns.winfo_y(), gt._DETAIL_BTN_PAD_Y))
+            # 框架必须贴身裹住三个按钮: 宽 == 三个按钮宽 + 两个间隙。宽出
+            # 6px 就是第一个按钮又把孤儿 padx 写回来了。
+            tight = (row[0].winfo_width() + row[1].winfo_width()
+                     + row[2].winfo_width() + 2 * gt._CTL_GAP)
+            self.assertEqual(btns.winfo_width(), tight,
+                             msg="按钮行宽 %dpx, 而三个按钮加两个间隙只要 "
+                                 "%dpx: 多出来的是孤儿 padx(第一个按钮左边"
+                                 "没有邻居, 不该声明)"
+                                 % (btns.winfo_width(), tight))
+            # 左右留白都得是 0。只量"框架贴身"量不出"左右都归零" ——
+            # 框架贴身而内容偏在一侧是可能的(把 padx 全挪到右边就是),
+            # 所以这两条各自量。
+            self.assertEqual(row[0].winfo_x(), 0,
+                             msg="第一个按钮左边留了 %dpx: 它左边没有邻居, "
+                                 "这一份是孤儿声明" % row[0].winfo_x())
+            self.assertEqual(btns.winfo_width(),
+                             row[2].winfo_x() + row[2].winfo_width(),
+                             msg="第三个按钮右边留了 %dpx: 视觉组该贴身裹"
+                                 "在 btns 里"
+                                 % (btns.winfo_width()
+                                    - (row[2].winfo_x()
+                                       + row[2].winfo_width())))
+            # btns 按窗心居中(pack 默认 anchor=center), 所以视觉组中心必须
+            # 落在窗心上。留 1px 容差: 框架宽是奇数时 winfo_x 四舍五入,
+            # 213px 宽的框架实测差 0.5px, 那不是缺陷。
+            centre = (btns.winfo_x()
+                      + (row[0].winfo_x()
+                         + row[2].winfo_x() + row[2].winfo_width()) / 2.0)
+            self.assertAlmostEqual(centre, root.winfo_width() / 2.0, delta=1,
+                                   msg="按钮组中心 %.1f, 窗心 %.1f: 整组偏离"
+                                       "窗心, 用户在详情窗里看得出"
+                                       % (centre,
+                                          root.winfo_width() / 2.0))
         finally:
             root.destroy()
 

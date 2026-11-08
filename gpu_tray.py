@@ -2545,9 +2545,16 @@ class TrayApp:
 
             btns = tk.Frame(root)
             btns.pack(pady=_DETAIL_BTN_PAD_Y)
+            # 第一个按钮不带 padx: 它左边没有邻居, 这一份 6px 是孤儿声明
+            # —— §162 立的规矩是"每个间隙只许有一个属主": 左边的元素不
+            # 声明自己的右边距, 右边的元素用 padx=(_CTL_GAP, 0) 声明它
+            # 左边那一份, 而最左这个元素的左边根本没有间隙可归属。带着它,
+            # 三个按钮的视觉组在 btns 里是左 6 / 右 0, 而 btns 按窗心居中
+            # (pack 默认 anchor=center) —— 整组偏离窗心 2.5px(实测 520 宽窗:
+            # 视觉组中心 262.5, 窗心 260)。筛选栏那一行同规矩: 最左的
+            # _filter_hint 不带 padx, 由它右边的输入框声明那一份。
             tk.Button(btns, text="立即设为独显", command=do_set,
-                      font=_FONT_UI).pack(
-                side="left", padx=(_CTL_GAP, 0))
+                      font=_FONT_UI).pack(side="left")
             tk.Button(btns, text="撤销独显设置", command=do_unset,
                       font=_FONT_UI).pack(
                 side="left", padx=(_CTL_GAP, 0))
