@@ -3573,14 +3573,24 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
         src = _inspect.getsource(gt)
         self.assertIn("_FORM_BLOCK_GAP = ", src,
                       "_FORM_BLOCK_GAP 没有命名常量了?")
-        self.assertEqual(gt._FORM_BLOCK_GAP, 4,
-                         "_FORM_BLOCK_GAP 是 %d: 表单区块间距与"
-                         "_BLOCK_GAP 一样取 4px"
-                         % gt._FORM_BLOCK_GAP)
-        self.assertEqual(gt._FORM_BLOCK_GAP, gt._BLOCK_GAP,
-                         "_FORM_BLOCK_GAP %d 与 _BLOCK_GAP %d 不是"
-                         "一个数: 面板区块间距与表单区块间距会是两种"
-                         "节奏" % (gt._FORM_BLOCK_GAP, gt._BLOCK_GAP))
+        # §176: 区块间隙改成行距的一半。比例是这条规矩的正文: 写成 15 或
+        # 17 都是在按感觉调数, 而行距一改(_FORM_ROW_PITCH)这个数必须跟着走。
+        self.assertEqual(
+            gt._FORM_BLOCK_GAP * 2, gt._FORM_ROW_PITCH,
+            "_FORM_BLOCK_GAP=%d 不是 _FORM_ROW_PITCH=%d 的一半: 段落间隙"
+            "必须跟着行距走(AIDA64 量到行 7 / 段 15, 约半个行距)"
+            % (gt._FORM_BLOCK_GAP, gt._FORM_ROW_PITCH))
+        # §177: 面板的 _BLOCK_GAP 也提到 16, 于是两边现在是同一个数 ——
+        # 不是"不巧相等", 是同一把尺的同一个输出: _ROW_H 与
+        # _FORM_ROW_PITCH 都是 32, 一半就是 16。§176 当时钉的是
+        # "表单必须大于面板的 4px"(防回退成两边一个 4), 那个方向由
+        # PanelBlockGapBeatsTableRowGap 接管; 这里改钉"相等", 回退成
+        # 两个不同的数(比如表单 16 / 面板 12)同样当场红。
+        self.assertEqual(
+            gt._FORM_BLOCK_GAP, gt._BLOCK_GAP,
+            "_FORM_BLOCK_GAP=%d 与 _BLOCK_GAP=%d 不是一个数: 表格行高与"
+            "表单行距同为 32(全程序一把尺), 区块间隙必须同为行距的一半"
+            % (gt._FORM_BLOCK_GAP, gt._BLOCK_GAP))
         body = _inspect.getsource(gt.TrayApp._settings_build)
         code = [l for l in body.splitlines()
                 if not l.lstrip().startswith("#")]
@@ -3639,6 +3649,230 @@ class SettingsWindowFitsItsOwnFrame(unittest.TestCase):
                 " rowconfigure 那一整行声明了, 再写一份会叠成双倍"
                 % m.group(1))
 
+class SettingsBlockGapBeatsRowGap(unittest.TestCase):
+    u"""表单的区块间隙必须大于同一渲染里最大的视觉行间隙(§176)。
+
+    _FORM_BLOCK_GAP 从前是 4px, 而表单自己的视觉行间隙 —— 行距
+    _FORM_ROW_PITCH 减控件自然高度(§155 把全部松弛都挪进了 ipady, 所以
+    控件的框是 32px 一个挨一个的, 看得见的间隙在框里头) —— 实测
+    Entry 12 / Label 10 / Checkbutton 6。段落边界 4px 比最窄的行边界
+    6px 还窄: 真渲染量出来「最后一个勾选底边 -> 游戏名单顶边」4px,
+    而相邻两个勾选之间是 6px。用户读到的是一个稍微松了一点的勾选行,
+    不是一个新段落的开始。
+
+    为什么是缺陷而不是"紧凑":
+    - 段落间隙的活就是比行间隙大。外部参照是反编译 AIDA64 Engineer
+      5.20 的二进制 DFM(UPX 脱壳后 Preferences 一个窗体 1435 个对象):
+      行间隙 7px 是全程序最高频的结构性数值(429 例), 段落间隙 15px
+      (107 例), 15/28 ≈ 0.54, 约半个行距。
+    - 我们自己的 Web 面板区块间隙是 10~12px(.cards{margin:10px 0 12px}、
+      .sparkwrap{margin:0 0 10px}), 只有托盘表单这边是 4px。
+    - §169 把设置窗高度定在 520 时, 那 28px 余量一直落在保存键下方闲着,
+      而段落分界看不出来 —— 余量用错了地方。§176 把间隙提到 16、窗高
+      提到 536, 用掉的正是那笔余量。
+
+    三层守卫:
+    1. 静态: _FORM_BLOCK_GAP 必须是 _FORM_ROW_PITCH 的一半(比例规矩,
+       行距一改这个数就得跟着走), 且必须大于 _BLOCK_GAP(与面板那笔账
+       脱钩, 理由见 gpu_tray.py 里常量那段注释)。
+    2. 真渲染: 两处区块间隙都正好是 _FORM_BLOCK_GAP, 且严格大于表单里
+       每一个视觉行间隙(逐行量, 不跟写死的数比)。
+    3. 漂移: 换宽一截的字体重建, 段落间隙仍赢过行间隙。
+
+    与 SettingsWindowFitsItsOwnFrame 的分工: 那类量的是一整套框架预算
+    (保存键不被压平、表单内容不超窗), 这里只量「段落边界比行边界宽」这
+    一件几何事实。
+    """
+
+    def setUp(self):
+        import gpu_tray
+        self.tray = gpu_tray
+
+    def _build(self, font=None):
+        u"""真建一次设置窗, 返回 (root, win, frm)。
+
+        与 SettingsListKeyValueGap._build 同一套取舍: config.json 写临时
+        目录(addCleanup 收尸), 字体在 finally 里还原, 不调
+        _apply_fluent_theme()(它内部会再跑一次 _rebuild_fonts(), 会把
+        替身字体冲掉)。
+        """
+        import json as _json
+        import tkinter as _tk
+        tmp = tempfile.mkdtemp(prefix="gpumig_p176_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        cfg = os.path.join(tmp, "config.json")
+        with io.open(cfg, "w", encoding="utf-8") as fh:
+            _json.dump({
+                "threshold_percent": 40,
+                "game_processes": ["game.exe"],
+                "exclude_processes": ["chat.exe"]}, fh)
+        root = _tk.Tk()
+        saved = self.tray._FONT_UI
+        try:
+            if font is None:
+                self.tray._rebuild_fonts()
+            else:
+                self.tray._FONT_UI = font
+            app = object.__new__(self.tray.TrayApp)
+            app._ui_root = root
+            app._ui_windows = 0
+            app._settings_open = False
+            app.config_path = cfg
+            app._settings_build()
+            for _ in range(6):
+                root.update_idletasks()
+            root.update()
+            wins = [w for w in root.winfo_children()
+                    if isinstance(w, _tk.Toplevel)]
+            self.assertTrue(wins, "设置窗没建出来, 后面全是空转")
+            win = wins[-1]
+            frm = next(c for c in win.winfo_children()
+                       if isinstance(c, _tk.Frame)
+                       and c.pack_info().get("padx")
+                       == self.tray._DIALOG_PAD_X)
+        finally:
+            self.tray._FONT_UI = saved
+        return root, win, frm
+
+    def _rows(self, frm):
+        u"""表单框里的控件按行分组: {row: [控件...]}。"""
+        rows = {}
+        for c in frm.winfo_children():
+            info = c.grid_info()
+            if not info:
+                continue
+            rows.setdefault(info.get("row"), []).append(c)
+        return rows
+
+    def _by_class(self, rows, cls):
+        u"""按控件类找行: {row: 该行里第一个这种控件}。"""
+        out = {}
+        for r, kids in rows.items():
+            for c in kids:
+                if c.winfo_class() == cls:
+                    out[r] = c
+                    break
+        return out
+
+    def _visual_row_gaps(self, rows):
+        u"""相邻两行之间看得见的间隙 = 两行各自 ipady 之和。
+
+        行距是 32px, 而控件的框被 ipady 撑到正好 32px 并且一个挨一个,
+        所以「框与框之间」永远是 0px, 看得见的间隙全在框里头: 上一行
+        控件下边那半份 ipady + 下一行控件上边那半份。隔着间隙行的两行
+        不算 —— 那是区块边界, 由 _FORM_BLOCK_GAP 说话。
+        """
+        order = sorted(rows)
+        out = []
+        for a, b in zip(order, order[1:]):
+            if b != a + 1:
+                continue
+            ia = max(c.grid_info().get("ipady") or 0 for c in rows[a])
+            ib = max(c.grid_info().get("ipady") or 0 for c in rows[b])
+            out.append((a, b, ia + ib))
+        return out
+
+    def test_the_gap_is_nailed_down_in_code(self):
+        u"""静态: 区块间隙 = 行距的一半, 且与面板的区块间隙同数。
+
+        比例是正文: 写成 15 或 17 都是在按感觉调数, 而行距一改这个数
+        必须跟着走。§177 起 _BLOCK_GAP 也走同一条比例规矩(_ROW_H 与
+        _FORM_ROW_PITCH 同为 32), 所以两边现在是同一个数 —— 这条钉的
+        就是"同一个数", 回退成两个不同的数(或回退成 4)当场红。
+        """
+        import gpu_tray as gt
+        self.assertTrue(hasattr(gt, "_FORM_ROW_PITCH"),
+                        "表单行距没有命名常量了?")
+        self.assertEqual(
+            gt._FORM_BLOCK_GAP * 2, gt._FORM_ROW_PITCH,
+            "_FORM_BLOCK_GAP=%d 不是 _FORM_ROW_PITCH=%d 的一半"
+            % (gt._FORM_BLOCK_GAP, gt._FORM_ROW_PITCH))
+        self.assertEqual(
+            gt._FORM_BLOCK_GAP, gt._BLOCK_GAP,
+            "_FORM_BLOCK_GAP=%d 与 _BLOCK_GAP=%d 不是一个数: 一把尺"
+            "(32)只有一个一半(16)"
+            % (gt._FORM_BLOCK_GAP, gt._BLOCK_GAP))
+
+    def test_the_section_gap_beats_every_row_gap(self):
+        u"""真渲染: 两处区块间隙 = _FORM_BLOCK_GAP, 且大于每一个行间隙。
+
+        逐行量而不是跟一个写死的数比: 控件自然高度随字体变, ipady 跟着
+        变, 行间隙也跟着变 —— 拿死数比的话字体一换这条就成假的。
+        """
+        import gpu_tray as gt
+        root, _win, frm = self._build()
+        try:
+            rows = self._rows(frm)
+            texts = self._by_class(rows, "Text")
+            cbs = self._by_class(rows, "Checkbutton")
+            self.assertEqual(
+                len(texts), 2,
+                "名单 Text 应该是两段, 实际 %d 段: %s"
+                % (len(texts), sorted(texts)))
+            # 结构前提: 最后一个勾选与游戏名单之间正好隔着一个间隙行。
+            # 没有这条, 下面量的「勾选区 -> 游戏名单」可能跨着别的控件,
+            # 数字对上了也说明不了段落边界。
+            self.assertEqual(
+                min(texts) - max(cbs), 2,
+                "最后一个勾选(row %d)与游戏名单(row %d)之间不是"
+                "正好隔着一个间隙行(差 %d 行): 量的不是段落边界"
+                % (max(cbs), min(texts), min(texts) - max(cbs)))
+            games = texts[min(texts)]
+            excl = texts[max(texts)]
+            last_cb = cbs[max(cbs)]
+            gaps = [
+                ("勾选区 -> 游戏名单",
+                 games.winfo_y()
+                 - (last_cb.winfo_y() + last_cb.winfo_height())),
+                ("游戏名单 -> 排除名单",
+                 excl.winfo_y()
+                 - (games.winfo_y() + games.winfo_height())),
+            ]
+            for name, got in gaps:
+                self.assertEqual(
+                    got, gt._FORM_BLOCK_GAP,
+                    "%s 只有 %dpx(要 %dpx): 区块间隙必须由 "
+                    "rowconfigure(minsize=) 撑着"
+                    % (name, got, gt._FORM_BLOCK_GAP))
+            worst = max(g for _a, _b, g in self._visual_row_gaps(rows))
+            for name, got in gaps:
+                self.assertGreater(
+                    got, worst,
+                    "%s 的区块间隙 %dpx 不大于表单里最大的行间隙 "
+                    "%dpx: 段落边界比行边界还窄, 读不出分段"
+                    % (name, got, worst))
+        finally:
+            root.destroy()
+
+    def test_the_section_gap_survives_a_wider_font(self):
+        u"""漂移: 换宽一截的字体重建, 区块间隙仍赢过行间隙。
+
+        §175 踩过的坑同款: 左对齐键名列的间隙不是常量, 会随字体变。
+        行间隙同样不是常量(ipady 由控件自然高度算), 所以这里比的仍是
+        两个量的高矮, 不是两个写死的数。
+        """
+        import gpu_tray as gt
+        root, _win, frm = self._build(font=("Arial", 16))
+        try:
+            rows = self._rows(frm)
+            texts = self._by_class(rows, "Text")
+            cbs = self._by_class(rows, "Checkbutton")
+            games = texts[min(texts)]
+            last_cb = cbs[max(cbs)]
+            got = (games.winfo_y()
+                   - (last_cb.winfo_y() + last_cb.winfo_height()))
+            self.assertEqual(
+                got, gt._FORM_BLOCK_GAP,
+                "宽字体下「勾选区 -> 游戏名单」是 %dpx(要 %dpx): "
+                "间隙不是来自常量, 是来自字体量出来的某个数"
+                % (got, gt._FORM_BLOCK_GAP))
+            worst = max(g for _a, _b, g in self._visual_row_gaps(rows))
+            self.assertGreater(
+                got, worst,
+                "宽字体下行间隙涨到 %dpx, 已经追上区块间隙 %dpx"
+                % (worst, got))
+        finally:
+            root.destroy()
 class TrayLifecycleLog(unittest.TestCase):
     """托盘退出必须留一行日志。
 
@@ -4355,6 +4589,67 @@ class TrayMonitorDeath(unittest.TestCase):
         self.assertTrue(app.paused)
 
 
+def release_tray_icon_class(app):
+    """反注册 TrayApp 建 pystray.Icon 时注册的托盘窗口类。
+
+    pystray._win32.Icon.__init__ 会注册窗口类, 类名是
+    '%s%dSystemTrayIcon' % (name, id(self)); 而反注册只发生在
+    mainloop 收尾的 finally 里。测试里 TrayApp 建完从来不 run 这个
+    图标, 注册就一直漏在进程里: 之后哪个新 Icon 的 id(self) 复用了
+    同一个地址, RegisterClassEx 立刻撞 WinError 1410
+    (ERROR_CLASS_ALREADY_EXISTS, "类已存在"), 而且报在 setUp 里,
+    看着像随机故障。实测连建 300 个 TrayApp、中间穿插正常分配,
+    第 9 个就炸(脚本 .tmptest/rea/_repro_1410b.py)。
+
+    建完立刻反注册是安全的: 窗口类只在 CreateWindowEx 时用得到,
+    而测试从不 run 这个图标; 真程序里图标一直 run 到退出, mainloop
+    收尾时 pystray 自己反注册, 走不到这条路。
+    """
+    icon = getattr(app, "icon", None)
+    atom = getattr(icon, "_atom", None)
+    if atom and hasattr(icon, "_unregister_class"):
+        icon._unregister_class(atom)
+
+
+class TrayIconClassIsReleased(unittest.TestCase):
+    """建 TrayApp 注册的托盘窗口类, 建完必须已经不在 user32 里。
+
+    这不是洁癖: pystray 的 Icon.__init__ 注册窗口类, 反注册只发生在
+    mainloop 收尾。测试里 TrayApp 建完从不 run, 注册漏在进程里,
+    之后新 Icon 复用同一地址就撞 WinError 1410 —— 偶发挂在
+    TraySingleInterpreter / TrayPanelKeyboardNav 的 setUp 里, 报的是
+    "类已存在", 查半天查不到用例头上(详见 HANDOFF §180)。
+    直接查窗口类还在不在, 比"跑全套看红不红"确定性高得多。
+    """
+
+    def _registered(self, class_name):
+        """user32 里还注册着这个窗口类吗(GetClassInfoExW)。"""
+        from pystray._util import win32
+        info = win32.WNDCLASSEX()
+        info.cbSize = ctypes.sizeof(win32.WNDCLASSEX)
+        get = ctypes.windll.user32.GetClassInfoExW
+        get.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p,
+                        ctypes.POINTER(win32.WNDCLASSEX))
+        get.restype = ctypes.c_int
+        return bool(get(win32.GetModuleHandle(None), class_name,
+                        ctypes.byref(info)))
+
+    def test_the_class_is_gone_right_after_construction(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = os.path.join(d, "config.json")
+            with io.open(cfg, "w", encoding="utf-8") as f:
+                json.dump({"threshold_percent": 30}, f)
+            app = gpu_tray.TrayApp(cfg)
+            icon = app.icon
+            class_name = "%s%dSystemTrayIcon" % (icon.name, id(icon))
+            self.assertTrue(self._registered(class_name),
+                            "前提没变: TrayApp.__init__ 确实注册了窗口类")
+            release_tray_icon_class(app)
+            self.assertFalse(self._registered(class_name),
+                             "建完 TrayApp 必须把窗口类反注册掉, 不然"
+                             "后面同地址的 Icon 会撞 WinError 1410")
+
+
 class TraySingleInterpreter(unittest.TestCase):
     """三个窗口必须共用同一个 Tcl 解释器, 而且整个进程只有一个 mainloop。
 
@@ -4411,6 +4706,7 @@ class TraySingleInterpreter(unittest.TestCase):
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump({"threshold_percent": 30}, f)
         self.app = gpu_tray.TrayApp(self.path)
+        release_tray_icon_class(self.app)
 
     def tearDown(self):
         self.release.set()
@@ -5414,6 +5710,81 @@ class TrayPanelRows(unittest.TestCase):
         self.assertIn("已把 game.exe 加入", tip.text)
 
 
+class TrayPanelRenderGate(unittest.TestCase):
+    """§181 面板周期刷新的"值变才重绘"闸。
+
+    _refresh_tree 是整树 delete + insert 的 O(N) 重画, 采样周期默认 5s,
+    于一秒一刷里 4/5 是同一份快照的重复重画。_panel_render_due 让数据/排序/
+    筛选都没变时返回 False(跳过重画), 任一变了才 True。每种放行与跳过都钉死:
+    漏一种, 要么该更新时不更新(闸太严), 要么退回每秒整树重画(闸太松)。
+    """
+
+    def setUp(self):
+        import gpu_tray
+        self.tray = gpu_tray
+        self.app = object.__new__(gpu_tray.TrayApp)
+        self.app.lock = threading.Lock()
+        self.app.sort_state = {"col": "auto", "desc": True}
+        self.app.filter_text = ""
+        self.app.snapshot = None
+        self.app._last_render_sig = None
+
+    def _snap(self, ts):
+        return {"snap_ts": ts}
+
+    def test_first_frame_always_due(self):
+        self.app.snapshot = self._snap(100.0)
+        self.assertTrue(self.app._panel_render_due(), "首帧必须重画")
+
+    def test_same_snapshot_second_tick_skipped(self):
+        self.app.snapshot = self._snap(100.0)
+        self.assertTrue(self.app._panel_render_due())
+        self.assertFalse(self.app._panel_render_due(),
+                         "同一份快照的第二次周期刷新必须跳过")
+
+    def test_new_sample_redraws(self):
+        self.app.snapshot = self._snap(100.0)
+        self.assertTrue(self.app._panel_render_due())
+        self.app.snapshot = self._snap(105.0)
+        self.assertTrue(self.app._panel_render_due(), "新样本(snap_ts 变)必须放行")
+
+    def test_sort_column_change_redraws(self):
+        self.app.snapshot = self._snap(100.0)
+        self.assertTrue(self.app._panel_render_due())
+        self.app.sort_state = {"col": "name", "desc": True}
+        self.assertTrue(self.app._panel_render_due(), "换排列列必须放行")
+
+    def test_sort_direction_change_redraws(self):
+        self.app.snapshot = self._snap(100.0)
+        self.assertTrue(self.app._panel_render_due())
+        self.app.sort_state = {"col": "auto", "desc": False}
+        self.assertTrue(self.app._panel_render_due(), "反向排序必须放行")
+
+    def test_filter_change_redraws(self):
+        self.app.snapshot = self._snap(100.0)
+        self.assertTrue(self.app._panel_render_due())
+        self.app.filter_text = "chrome"
+        self.assertTrue(self.app._panel_render_due(), "改筛选必须放行")
+
+    def test_none_then_data(self):
+        self.app.snapshot = None
+        self.assertTrue(self.app._panel_render_due(), "空快照首帧也画一次")
+        self.assertFalse(self.app._panel_render_due(), "仍空就跳过")
+        self.app.snapshot = self._snap(1.0)
+        self.assertTrue(self.app._panel_render_due(), "来数据必须放行")
+
+    def test_gate_wired_into_periodic_refresh(self):
+        """闸必须真挂在周期刷新链上, 不是没人调的死方法。"""
+        import io, re
+        with io.open(self.tray.__file__, encoding="utf-8") as _f:
+            src = _f.read()
+        self.assertIn("if self._panel_render_due():", src,
+                      "周期 refresh 里少了这道闸")
+        calls = re.findall(r"self\._safe_refresh\(", src)
+        self.assertEqual(len(calls), 1,
+                         "_safe_refresh 只应有一个调用点(在闸内), 现有 %d" % len(calls))
+
+
 class TrayPanelKeyboardNav(unittest.TestCase):
     u"""面板的键盘导航: 方向键选行 / 回车详情 / Del 永不迁移 / / 回筛选框。
 
@@ -5445,6 +5816,7 @@ class TrayPanelKeyboardNav(unittest.TestCase):
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump({"threshold_percent": 30}, f)
         self.app = gpu_tray.TrayApp(self.path)
+        release_tray_icon_class(self.app)
         self.app.monitor_dead = False
         self.app._ui_root = self.host
         self.app._ui_windows = 0
@@ -6302,6 +6674,228 @@ class EveryConfigurableKeyIsCoerced(unittest.TestCase):
         self.assertFalse(
             gm.is_ai_protected(cfg, "x.exe", 1, {1: 3000 * MB}),
             "负数阈值不许变成全都要保护")
+
+class AiProtectionSeesInterpreterHosts(unittest.TestCase):
+    u"""AI 保护不能只认进程名: 最常见的本地推理负载跑在 python.exe 底下。
+
+    官方文档(docs.comfy.org/installation/comfyui_portable_windows)写明
+    ComfyUI 便携版 "integrated an independent Python (python_embeded)",
+    启动命令是 `./python_embeded/python.exe -s ComfyUI/main.py`; vLLM /
+    SGLang / text-generation-webui 同理。也就是说 DEFAULT_AI_PROCESSES 里
+    comfyui.exe / vllm.exe / sglang.exe / webui.exe 这几个名字对应的真实
+    进程名是 python.exe, 名单那一层永远匹配不上 —— 而这些进程恰恰是最该
+    被保护的: 它们抓着几 GB 到几十 GB 已加载的权重, 被自动重启等于全部
+    白加载一遍。
+
+    本机实测(11-09): 在跑的 AI 负载只有 `ollama.exe serve` 命中名单;
+    同一个机器上另有一个 `python.exe -m pytest` —— 进程名相同、干的活正好
+    相反。所以"认类"(解释器宿主 + 一大块显存)与"认窝"(安装目录)必须独立
+    成层, 且第 4 层只对 python*.exe 收窄, 免得把游戏和浏览器一起保护掉。
+
+    单位: igpu_mem_bytes 是字节, protect_vram_mb 是 MiB, 1024 * 1024 换算。
+    """
+
+    MB = 1024 * 1024
+
+    def setUp(self):
+        self.cfg = dict(gm.DEFAULT_CONFIG)
+
+    # ---- 第 2 层: 安装目录 ----
+
+    def test_a_python_under_an_ai_install_dir_is_protected(self):
+        u"""坐在推理服务安装目录里的 python 必须认出来。
+
+        几条路径都是真的: 官方文档给的是 `./python_embeded/python.exe`
+        (相对 ComfyUI 根), 便携版解压出来的是
+        `C:/ComfyUI/_windows/_portable/python/_embeded/python.exe` ——
+        两种布局的目录名不一样(前者叫 python_embeded, 后者叫 _embeded),
+        所以"分量比前缀"这条必须比"整条路径比子串"宽一层才不漏。
+        """
+        for full in (
+                r"C:\ComfyUI_windows_portable\ComfyUI\python_embeded\python.exe",
+                r"C:\ComfyUI\_windows\_portable\python\_embeded\python.exe",
+                r"D:\ai\stuff\python_embeded\python.exe",
+                r"E:\vllm\Scripts\python.exe",
+                r"C:\text-generation-webui\venv\Scripts\python.exe",
+                r"D:\KoboldCpp-1.79\python.exe"):
+            why = gm.ai_protect_reason(self.cfg, "python.exe", 1, {}, full, 0)
+            self.assertIsNotNone(why, full + " 没被认出来")
+            self.assertIn("安装目录", why)
+
+    def test_a_python_outside_every_ai_dir_is_not_protected(self):
+        u"""反方向: 普通 python 不许被顺手保护。
+
+        C:/Python314/python.exe 是本机真在跑的那个(pytest)。把这一类
+        也保护掉, 等于用户每装一个 Python 就少一块 auto_restart。
+        """
+        for full in (r"C:\Python314\python.exe",
+                     r"C:\Users\x\projects\mygame\python.exe",
+                     r"D:\tools\python\python.exe"):
+            self.assertIsNone(
+                gm.ai_protect_reason(self.cfg, "python.exe", 1, {}, full, 0),
+                full + " 不该被认成 AI")
+            self.assertFalse(gm.is_ai_protected(self.cfg, "python.exe", 1,
+                                                {}, full, 0))
+
+    def test_the_path_match_ignores_case(self):
+        u"""Windows 路径大小写本来就说不准。"""
+        why = gm.ai_protect_reason(self.cfg, "PYTHON.EXE", 1, {},
+                                   r"C:\COMFYUI\PYTHON_EMBEDED\PYTHON.EXE", 0)
+        self.assertIsNotNone(why, "路径匹配必须大小写不敏感")
+
+    def test_the_markers_are_specific_enough(self):
+        u"""特征词必须够特异: 短单词会命中任何同名目录。
+
+        "jan" 这种一个词的没收进来 —— 它会命中任何叫 jan* 的目录, 把
+        用户无关的进程保护掉。长度下限 4 是这条规矩的机械形式, 防止有人
+        往表里加 ai / gpu / ml 这类词。
+        """
+        self.assertTrue(gm.AI_PATH_MARKERS, "安装目录特征表空了")
+        for mark in gm.AI_PATH_MARKERS:
+            self.assertEqual(mark, mark.lower(),
+                             mark + " 必须小写: 匹配时路径已 lower, 大写特征永远不命中")
+            self.assertGreaterEqual(
+                len(mark), 4,
+                mark + " 太短, 会命中无关目录")
+        self.assertNotIn("jan", gm.AI_PATH_MARKERS)
+        # 两种便携版布局的目录名都得在表里, 少一个就漏一类真路径
+        self.assertIn("python_embeded", gm.AI_PATH_MARKERS)
+        self.assertIn("_embeded", gm.AI_PATH_MARKERS)
+
+    # ---- 第 4 层: 解释器宿主 + 显存 ----
+
+    def test_an_interpreter_host_holding_a_model_is_protected(self):
+        u"""名单与目录都认不出的自建推理服务, 靠显存兜底。
+
+        迁移路径上进程还待在核显, 独显那个数字恒为 0 —— 第 3 层在这个
+        位置是瞎的, 第 4 层补的正是这个位。
+        """
+        why = gm.ai_protect_reason(self.cfg, "python.exe", 7, {},
+                                   None, 3 * 1024 * self.MB)
+        self.assertIsNotNone(why, "握着 3GiB 显存的 python 必须被保护")
+        self.assertIn("解释器宿主", why)
+
+    def test_an_interpreter_host_without_real_memory_is_not_protected(self):
+        u"""反方向: 没握着显存的 python 不是推理服务。"""
+        self.assertIsNone(gm.ai_protect_reason(self.cfg, "python.exe", 7, {},
+                                               None, 100 * self.MB))
+
+    def test_every_python_flavour_counts(self):
+        u"""python.exe / pythonw.exe / python3.13.exe 全是解释器宿主。"""
+        for name in ("python.exe", "pythonw.exe", "python3.13.exe",
+                     "python3.13-arm64.exe"):
+            self.assertIsNotNone(
+                gm.ai_protect_reason(self.cfg, name, 7, {}, None,
+                                     3 * 1024 * self.MB),
+                name + " 也是解释器宿主")
+
+    def test_the_interpreter_rule_does_not_swallow_games_or_browsers(self):
+        u"""第 4 层只对 python*.exe 收窄, 这是它不碰核心功能的全部依据。
+
+        游戏/浏览器/Electron 界面握着大块显存是常态, 而它们正是这个工具
+        要迁移的对象。把这一条打穿, 迁移功能当场少生效一大片。
+
+        只量核显侧: 独显侧那条(第 3 层)本来就与进程名无关, 而且是故意的 ——
+        一个握着 8GiB 待在独显上的游戏, 也不该被省电逻辑拽回核显。这里要证的
+        是新加的第 4 层没有把"大块显存"扩大成"谁大保护谁"。
+        """
+        for name in ("game.exe", "chrome.exe", "msedge.exe", "node.exe",
+                     "blender.exe", "ffmpeg.exe", "notepad.exe"):
+            self.assertIsNone(
+                gm.ai_protect_reason(self.cfg, name, 7, {}, None,
+                                     8 * 1024 * self.MB),
+                name + " 握着 8GiB 核显显存也不该被 AI 保护")
+
+    def test_zero_threshold_switches_the_interpreter_rule_off_too(self):
+        u"""protect_vram_mb=0 是显式关闭两层显存兜底, 不只是关第 3 层。"""
+        cfg = dict(self.cfg, protect_vram_mb=0)
+        self.assertIsNone(gm.ai_protect_reason(cfg, "python.exe", 7, {},
+                                               None, 9000 * self.MB))
+
+    def test_a_negative_threshold_is_not_honoured_either(self):
+        u"""负数阈值不许变成"全都保护"(第 4 层同一个坑)。
+
+        `if limit` 对负数为真, 而 `ded >= 负数` 恒成立 —— 老代码在这里
+        把每个进程都判成保护, auto_restart 被静默关掉。现在写 `> 0`,
+        绕过 merged_config 的负数也得关回去。
+        """
+        cfg = dict(self.cfg, protect_vram_mb=-5)
+        self.assertIsNone(gm.ai_protect_reason(cfg, "python.exe", 7,
+                                               {7: 3000 * self.MB}))
+
+    # ---- 两层之间的关系 ----
+
+    def test_the_boolean_and_the_reason_never_disagree(self):
+        u"""is_ai_protected 与 ai_protect_reason 必须同一个答案。
+
+        包装函数是给旧调用方留的。两边漂移的话, 日志里念的理由和实际保
+        不保护会说出两句话 —— 而用户只看得见日志。
+        """
+        cfg = dict(self.cfg, ai_processes=["my-infer.exe"])
+        cases = [
+            ("ollama.exe", {}, None, 0),
+            ("python.exe", {}, r"C:\ComfyUI\python_embeded\python.exe", 0),
+            ("python.exe", {}, None, 3 * 1024 * self.MB),
+            ("python.exe", {}, r"C:\Python314\python.exe", 0),
+            ("game.exe", {7: 9000 * self.MB}, None, 0),
+            ("my-infer.exe", {}, None, 0),
+            ("notepad.exe", {}, None, 0),
+        ]
+        for pname, ded, full, ig in cases:
+            got = gm.is_ai_protected(cfg, pname, 7, ded, full, ig)
+            why = gm.ai_protect_reason(cfg, pname, 7, ded, full, ig)
+            self.assertEqual(got, why is not None,
+                             "%r 两边答案不一致: %r" % (pname, why))
+
+    def test_the_reason_names_the_layer_that_fired(self):
+        u"""理由必须说清命中哪一层, 否则用户不知道该去改哪个名单。"""
+        cfg = dict(self.cfg, ai_processes=["my-infer.exe"])
+        self.assertIn("名单", gm.ai_protect_reason(cfg, "ollama.exe", 1, {}))
+        self.assertIn("用户", gm.ai_protect_reason(cfg, "my-infer.exe", 1, {}))
+        self.assertIn("安装目录",
+                      gm.ai_protect_reason(cfg, "python.exe", 1, {},
+                                           r"C:\ComfyUI\python.exe", 0))
+        self.assertIn("独显",
+                      gm.ai_protect_reason(cfg, "x.exe", 1,
+                                           {1: 3000 * self.MB}))
+        self.assertIn("解释器宿主",
+                      gm.ai_protect_reason(cfg, "python.exe", 1, {},
+                                           None, 3000 * self.MB))
+
+    # ---- 调用点必须真把新参数递进去 ----
+
+    def test_every_call_site_hands_over_the_new_signals(self):
+        u"""静态: 每个调用点都得把路径与核显显存递进探测器。
+
+        第 2、4 层是这轮新加的。要是调用点还按老三参调, 这两层在生产里
+        就是死代码 —— 单测全绿而线上一点没变, 正是"守卫量的是替身"那类
+        盲区。ast 一层盯的就是这个, 不靠人记。
+        """
+        import ast
+        with io.open(gm.__file__, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+        want = {"is_ai_protected": 1, "advance_power_saver": 1,
+                "cmd_monitor": 1}
+        got = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.FunctionDef):
+                continue
+            hits = [c for c in ast.walk(node)
+                    if isinstance(c, ast.Call)
+                    and getattr(c.func, "id", None) == "ai_protect_reason"]
+            if hits:
+                got[node.name] = hits
+        self.assertEqual(set(got), set(want),
+                         "ai_protect_reason 的调用函数变了: %s" % sorted(got))
+        for fname, hits in got.items():
+            self.assertEqual(len(hits), want[fname],
+                             "%s 里的调用点数量变了" % fname)
+            for call in hits:
+                self.assertGreaterEqual(
+                    len(call.args), 6,
+                    "%s 里的调用点少递了参数(至少 6 个位置参数: "
+                    "cfg/pname/pid/独显显存/路径/核显显存), "
+                    "第 2、4 层会是死代码" % fname)
 
 class OneContrastRuler(unittest.TestCase):
     u"""WCAG 亮度和对比度只能有一把尺。
@@ -7414,6 +8008,7 @@ class CrossSurfaceRowOrder(unittest.TestCase):
             with open(cfg, "w", encoding="utf-8") as f:
                 json.dump({"threshold_percent": 20}, f)
             app = gpu_tray.TrayApp(cfg)
+            release_tray_icon_class(app)
         self.assertEqual(app.sort_state, {"col": "auto", "desc": True},
                          "托盘默认应落在三面共用的活动量顺序上")
 
@@ -8991,17 +9586,26 @@ class SettingsListKeyValueGap(unittest.TestCase):
                     out.append((name, kw.value))
         return out
 
-    def test_the_two_list_rows_declare_the_gap_on_the_value_column(self):
-        u"""静态: 全窗恰好两个 padx, 都长在名单 Text 上, 值是 (_CTL_GAP, 0)。
+    def test_every_value_column_widget_declares_the_gap(self):
+        u"""静态: 值列每一个控件都声明 padx, 值是 (_CTL_GAP, 0)(§178)。
 
-        钉三件事: padx 的总数(多一个就是有人往键名列或输入行上写, 少一个
-        就是有一行退回到 0px); 属主(只许长在 t_games/t_excl 身上, 每个
-        间隙只许一个属主); 取值(左 _CTL_GAP 右 0, 与 §162 筛选栏、§173
-        详情窗同一把尺)。
+        §175 当时钉的是"恰好两个 padx, 都长在名单 Text 上"。那个契约本身
+        就是缺陷的一半: 同一列三种控件(Entry / Text), 只有 Text 声明左边
+        那一份 6px, 六个 Entry 不声明 —— 值列于是有两条左缘(默认字体实测
+        Entry 110 / Text 116)。本轮把属主从"恰好两个"改成"值列每个控件",
+        回退成只给 Text 补就当场红。
+
+        仍钉三件事: padx 的总数(多一个就是有人往键名列上写, 少一个就是
+        有控件退回 0px); 属主(只许长在值列控件身上, 每个间隙只许一个
+        属主); 取值(左 _CTL_GAP 右 0, 与 §162 筛选栏、§173 详情窗同一把尺)。
         """
         padx = self._grid_padx(self.tray.TrayApp._settings_build)
-        self.assertEqual([n for n, _ in padx], ["t_games", "t_excl"],
-                         "设置窗 grid 的 padx 不是恰好长在两个名单 Text 上: "
+        # sorted: ast.walk 是广度优先, 闭包 add_entry 里那个 grid 比两个
+        # 名单 Text 的 grid 深一层, 出来顺序是 t_games/t_excl/e, 不是源码
+        # 顺序。比集合, 别比顺序。
+        self.assertEqual(sorted(n for n, _ in padx),
+                         ["e", "t_excl", "t_games"],
+                         "设置窗 grid 的 padx 不是恰好长在值列三个控件上: "
                          "%s" % [n for n, _ in padx])
         for name, node in padx:
             self.assertTrue(isinstance(node, ast.Tuple)
@@ -9058,11 +9662,16 @@ class SettingsListKeyValueGap(unittest.TestCase):
                            col0 + self.tray._CTL_GAP))
                 elif all(isinstance(c, _tk.Entry) for c in kids[1:]):
                     entries += 1
-                    self.assertGreaterEqual(
-                        self._gap(a, b), self.tray._CTL_GAP,
-                        "第 %d 行输入框与键名之间只差 %dpx: 输入行的键名短, "
-                        "这个间隙是键名字数凑出来的, 不是声明出来的"
-                        % (r, self._gap(a, b)))
+                    # §178: 从 ">=" 加强成等式。从前这里只敢问"没磨在一起",
+                    # 因为输入行的 6px 是键名短凑出来的; 现在输入行也声明
+                    # padx, 左缘必须与两个名单 Text 落在同一条线上。
+                    self.assertEqual(
+                        b.winfo_x(), col0 + self.tray._CTL_GAP,
+                        "第 %d 行输入框左缘 %d, 而键名列宽 %d + _CTL_GAP "
+                        "%d = %d: 输入行没声明值列左边那一份(§178 前实测 "
+                        "比名单框凸出 6px)"
+                        % (r, b.winfo_x(), col0, self.tray._CTL_GAP,
+                           col0 + self.tray._CTL_GAP))
                 else:
                     others.append(r)
             self.assertEqual(len(texts), 2,
@@ -9153,7 +9762,9 @@ class SettingsListKeyValueGap(unittest.TestCase):
         是同一个数。这条把两个 _build 函数里的每个 grid padx 都抠出来:
         哪边写成字面量 6、哪边多写一个、哪边少写一个, 当场红。
         """
-        cases = (("设置窗", self.tray.TrayApp._settings_build, 2),
+        # §178: 设置窗从 2 个(只两个名单 Text)变成 3 个(加六个输入行共用
+        # 的那一个 grid 调用) —— 同一个 grid 调用服务六行, 属主仍是一处。
+        cases = (("设置窗", self.tray.TrayApp._settings_build, 3),
                  ("详情窗", self.tray.TrayApp._detail_build, 1))
         for name, fn, want in cases:
             padx = self._grid_padx(fn)
@@ -9166,6 +9777,193 @@ class SettingsListKeyValueGap(unittest.TestCase):
                               "%s %s 的 padx 没来自 _CTL_GAP: %r —— 两个"
                               "对话框的键 -> 值间隙要同一个数, 写成字面量"
                               "就会各自漂移" % (name, target, node))
+
+
+class SettingsValueColumnHasOneLeftEdge(unittest.TestCase):
+    u"""设置窗的"值列"只许有一条左缘(§178)。
+
+    §173/§175 修的是"键名列 -> 值列"那 6px 有没有; 这一条修的是另一件
+    事: 值列自己是**一列**还是**两列**。_settings_build 里 column=1 上住着
+    三种控件 —— 六个 Entry(闭包 add_entry 里那一个 grid 调用)和两个名单
+    Text。§175 只给 Text 补了 padx=(_CTL_GAP, 0), Entry 一个都没补, 于是
+    真渲染实测值列左缘有两条: 默认字体下 Entry 110 / Text 116, 宽字体下
+    195 / 201 —— 恒定差 6px, 不随字体变(因为差的是 padx 的有无, 不是列宽)。
+
+    为什么是缺陷而不是"紧凑":
+    - "值列"在用户的眼里是一个东西: 六个数字格子和两个名单框是同一种
+      输入位, 左边没对齐读起来就是表单自己歪了, 而没有人说得清歪在哪。
+    - §175 的注释当时写着"上面六个输入行看着没问题是因键名短(67~83px),
+      后面自然空 27~43px"—— 那句话描述的是键名字数的巧合。哪天有人把
+      "迁移阈值 %"改成"迁移阈值(百分比, 0-100)", 这六行的键名一长, 同样的
+      不声明立刻变成 0px 磨在一起(与 §173/§175 同款)。
+    - 外部参照(反编译 AIDA64 Engineer 5.20 的二进制 DFM, 全量 1734 例真
+      并排兄弟间隙): 横向间隙的结构性数值是 6px(非标签->非标签 62 例),
+      而一列多种控件的地方只有一条左缘; AIDA64 没有任何一处同列控件
+      互为 6px 错位。
+
+    取值不争论: 6 就是 §162 立的 _CTL_GAP, 与两个名单 Text、筛选栏四项、
+    详情窗三个按钮同一把尺。这条守卫只钉"一条左缘", 不重新选数。
+
+    三层守卫:
+    1. 静态: ast 抠 _settings_build 里所有 column=1 的 grid 调用, 每一个
+       都必须带 padx=(_CTL_GAP, 0)。少一个就是有一类控件退回去。
+    2. 真渲染: 值列所有控件的 winfo_x() 去重后必须只剩一个值, 且正好等于
+       键名列宽 + _CTL_GAP。
+    3. 漂移: 换宽字体重建, 仍只剩一个值(证明对齐来自常量, 不来自"当前
+       键名列有多宽")。
+    """
+
+    def setUp(self):
+        import gpu_tray
+        self.tray = gpu_tray
+
+    def _build(self, font=None):
+        u"""真建一次设置窗, 返回 (root, win, frm)。"""
+        import json as _json
+        import tkinter as _tk
+        tmp = tempfile.mkdtemp(prefix="gpumig_p178_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        cfg = os.path.join(tmp, "config.json")
+        with io.open(cfg, "w", encoding="utf-8") as fh:
+            _json.dump({"threshold_percent": 40,
+                        "game_processes": ["game.exe"],
+                        "exclude_processes": ["chat.exe"]}, fh)
+        root = _tk.Tk()
+        saved = self.tray._FONT_UI
+        try:
+            if font is None:
+                self.tray._rebuild_fonts()
+            else:
+                self.tray._FONT_UI = font
+            app = object.__new__(self.tray.TrayApp)
+            app._ui_root = root
+            app._ui_windows = 0
+            app._settings_open = False
+            app.config_path = cfg
+            app._settings_build()
+            for _ in range(6):
+                root.update_idletasks()
+            root.update()
+            wins = [w for w in root.winfo_children()
+                    if isinstance(w, _tk.Toplevel)]
+            self.assertTrue(wins, "设置窗没建出来, 后面全是空转")
+            win = wins[-1]
+            frm = next(c for c in win.winfo_children()
+                       if isinstance(c, _tk.Frame)
+                       and c.pack_info().get("padx")
+                       == self.tray._DIALOG_PAD_X)
+        finally:
+            self.tray._FONT_UI = saved
+        return root, win, frm
+
+    def _value_column(self, frm):
+        u"""值列控件 [(class, x, width)], 按 column==1 筛。"""
+        import tkinter as _tk
+        out = []
+        for c in frm.winfo_children():
+            info = c.grid_info()
+            if not info or info.get("column") != 1:
+                continue
+            out.append((c.winfo_class(), c.winfo_x(), c.winfo_width()))
+        return out
+
+    def _key_column_width(self, frm):
+        u"""键名列实占宽度: 多控件行里第一个控件的最大宽度。"""
+        rows = {}
+        for c in frm.winfo_children():
+            info = c.grid_info()
+            if not info:
+                continue
+            rows.setdefault(info.get("row"), []).append(c)
+        return max(kids[0].winfo_width() for kids in rows.values()
+                   if len(kids) > 1)
+
+    def _value_column_grids(self, fn):
+        u"""fn 源码里所有 column=1 的 grid 调用: [(目标名, padx 节点或 None)]。"""
+        import ast
+        import inspect
+        import textwrap
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        out = []
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "grid"):
+                continue
+            cols = [kw for kw in node.keywords if kw.arg == "column"]
+            if not cols:
+                continue
+            val = cols[0].value
+            if not (isinstance(val, ast.Constant) and val.value == 1):
+                continue
+            padx = [kw for kw in node.keywords if kw.arg == "padx"]
+            out.append((getattr(node.func.value, "id", None)
+                        or getattr(node.func.value, "attr", ""),
+                        padx[0].value if padx else None))
+        return out
+
+    def test_every_value_column_grid_declares_the_padx(self):
+        u"""静态: column=1 上每一个 grid 调用都带 padx=(_CTL_GAP, 0)。
+
+        少一个就是有一类控件(从前是六个 Entry)不声明, 值列当场裂成两条
+        左缘。属主规矩不变: 只许值列自己写, 键名列写就叠成 12px。
+        """
+        grids = self._value_column_grids(self.tray.TrayApp._settings_build)
+        self.assertEqual(sorted(n for n, _ in grids),
+                         ["e", "t_excl", "t_games"],
+                         "column=1 上的 grid 调用不是预期的三个: %s"
+                         % [n for n, _ in grids])
+        for name, node in grids:
+            self.assertIsNotNone(
+                node, "%s 的 grid 没写 padx: 值列又只剩一部分控件声明 "
+                      "这一份 6px(§178 前 Entry 全不写)" % name)
+            self.assertIn("_CTL_GAP", ast.dump(node),
+                          "%s 的 padx 没来自 _CTL_GAP: 写成字面量就会与 "
+                          "筛选栏/详情窗各漂各的" % name)
+
+    def test_the_value_column_has_exactly_one_left_edge(self):
+        u"""真渲染: 值列左缘去重后只剩一个, 且 = 键名列宽 + _CTL_GAP。"""
+        import tkinter as _tk
+        root, win, frm = self._build()
+        try:
+            col = self._value_column(frm)
+            self.assertGreaterEqual(len(col), 8,
+                                    "值列控件不足 8 个(6 Entry + 2 Text): "
+                                    "%s" % [c[0] for c in col])
+            xs = sorted(set(x for _, x, _ in col))
+            self.assertEqual(len(xs), 1,
+                             "值列有 %d 条左缘 %s: %s —— 同列控件互为错位"
+                             % (len(xs), xs,
+                                ["%s@%d" % (c[0], c[1]) for c in col]))
+            key_w = self._key_column_width(frm)
+            self.assertEqual(
+                xs[0], key_w + self.tray._CTL_GAP,
+                "值列唯一左缘 %d, 而键名列宽 %d + _CTL_GAP %d = %d: 这 6px "
+                "没落在常量上" % (xs[0], key_w, self.tray._CTL_GAP,
+                                 key_w + self.tray._CTL_GAP))
+            self.assertEqual(win.winfo_width(), 460,
+                             "设置窗窗宽被改了: %d(不许靠改窗宽腾这 6px)"
+                             % win.winfo_width())
+        finally:
+            root.destroy()
+
+    def test_one_left_edge_survives_a_wider_font(self):
+        u"""宽字体下仍只剩一条左缘(对齐来自常量, 不来自键名宽度)。"""
+        import tkinter as _tk
+        root, _win, frm = self._build(font=("Arial", 16))
+        try:
+            col = self._value_column(frm)
+            xs = sorted(set(x for _, x, _ in col))
+            self.assertEqual(len(xs), 1,
+                             "宽字体下值列有 %d 条左缘 %s: %s"
+                             % (len(xs), xs,
+                                ["%s@%d" % (c[0], c[1]) for c in col]))
+            key_w = self._key_column_width(frm)
+            self.assertEqual(xs[0], key_w + self.tray._CTL_GAP,
+                             "宽字体下值列左缘 %d != 键名列宽 %d + _CTL_GAP "
+                             "%d" % (xs[0], key_w, self.tray._CTL_GAP))
+        finally:
+            root.destroy()
 
 
 class TrayIconRedrawGuard(unittest.TestCase):
@@ -11160,7 +11958,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
                       "设置窗的外层内边距又是裸数字, 或者又和详情窗"
                       "不是同一套")
         self.assertIn("saver.pack(pady=_DIALOG_PAD_Y)", sbody,
-                      "设置窗保存键的上下留白又是裸数字: 它进 460x520"
+                      "设置窗保存键的上下留白又是裸数字: 它进 460x536"
                       "那笔纵向账")
         dbody = inspect.getsource(gt.TrayApp._detail_build)
         self.assertIn("padx=_DIALOG_PAD_X, pady=_DIALOG_PAD_Y", dbody,
@@ -11172,7 +11970,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         try:
             gt._rebuild_fonts()
             gt._apply_fluent_theme()
-            for geom in ("460x520", "520x320"):
+            for geom in ("460x536", "520x320"):
                 for w in root.winfo_children():
                     w.destroy()
                 root.geometry(geom)
@@ -11275,8 +12073,10 @@ class TrayPanelStatusFloor(unittest.TestCase):
         try:
             gt._rebuild_fonts()
             gt._apply_fluent_theme()
-            # 460x520 是设置窗的真尺寸: 比内容高 28px, 有松弛可吞。
-            root.geometry("460x520")
+            # 460x536 是设置窗的真尺寸(§176 从 520 提上来的: 区块
+            # 间隙 4 -> 16, 内容长 24px, 窗高只提 16px): 比内容高
+            # 20px, 有松弛可吞。
+            root.geometry("460x536")
             frm = _tk.Frame(root)
             frm.pack(fill="both",
                      padx=gt._DIALOG_PAD_X, pady=gt._DIALOG_PAD_Y)
@@ -12096,7 +12896,7 @@ class TrayPanelStatusFloor(unittest.TestCase):
         u"""读到的窗口太矮要提到保底高度(老存档正是 1046x470)。"""
         import gpu_tray as gt
         got = gt._onscreen_geometry("1046x470+55+55", 1512, 949)
-        self.assertEqual(got, "1046x644+55+55",
+        self.assertEqual(got, "1046x680+55+55",
                          "老存档的矮窗口原样还回去, 趋势图就被压成 1px")
 
     def test_a_tall_window_keeps_the_height_the_user_chose(self):
@@ -12330,6 +13130,193 @@ class TrayPanelStatusFloor(unittest.TestCase):
         self.assertEqual(int(hit.group(1)), gt._SPARK_GAP,
                          "托盘 %dpx / Web %spx: 同一个趋势图两种间距"
                          % (gt._SPARK_GAP, hit.group(1)))
+
+class PanelBlockGapBeatsTableRowGap(unittest.TestCase):
+    u"""面板的区块间隙不许窄于表格自己的视觉行间隙(§177)。
+
+    _BLOCK_GAP 从前是 4px, 而表格的视觉行间隙是 16px: 行高 _ROW_H=32,
+    表格字体(_FONT_UI, Segoe UI Variable Text 9)的 linespace 实测 16px,
+    文字在行里垂直居中, 相邻两行**文字**之间空着 16px。区块边界只有
+    4px, 是最窄那条行边界的四分之一 —— 用户把「表格 -> 趋势图」读成表格
+    又多了几行, 没有人会把它当成另一个区块的开始, 而那里确实换了控件
+    类型(表格 -> 画布)。
+
+    外部参照(反编译 AIDA64 Engineer 5.20 的二进制 DFM, 脱壳后 63 个窗体
+    1986 个对象, 兄弟间隙全量统计见 HANDOFF §177): 窗体根级子控件之间的
+    区块间隙与**同一窗体自己的行间隙相等**(比例 1.0)是常态 ——
+    Form_CPUID 9/9、Form_CacheMemBenchSuite 25/25、Form_GPGPUBenchSuite
+    15/15、Form_DRAMTimings 15/15; 唯一成规模的「内容区 -> 按钮行」形态
+    (TTabControl -> TButton)量到 6px, 而那个程序的行间隙是 7px。也就是
+    说 AIDA64 没有任何一处区块间隙小于自己的行间隙。我们改前是 4/16 =
+    0.25, 是全程序最难看的一处。
+
+    取值 16 = 行距的一半(_ROW_H // 2), 与 _FORM_BLOCK_GAP 同一个数:
+    不是不巧相等, 是同一把尺的同一个输出 —— _ROW_H 与 _FORM_ROW_PITCH
+    都是 32。写成 15 或 17 都是按感觉调数, 行高一改这个数必须跟着走。
+
+    趋势图 -> 状态区那一处**不在**这条契约里: 它是 _SPARK_GAP(10), 对着
+    Web 面板的 .sparkwrap{margin:0 0 10px}, 有自己的跨面参照
+    (TrayPanelStatusFloor.test_the_spark_gap_matches_the_web_panel 盯着)。
+    """
+
+    def _build(self):
+        u"""真建一次面板, 返回 (root, win)。"""
+        import json as _json
+        import tkinter as _tk
+        import gpu_tray as gt
+        tmp = tempfile.mkdtemp(prefix="gpumig_p177_")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        cfg = os.path.join(tmp, "config.json")
+        with io.open(cfg, "w", encoding="utf-8") as fh:
+            _json.dump({"threshold_percent": 40, "game_processes": [],
+                        "exclude_processes": []}, fh)
+        root = _tk.Tk()
+        root.withdraw()
+        saved_font = gt._FONT_UI
+        saved_ui = gt._UI_FILE
+        try:
+            gt._rebuild_fonts()
+            procs = [{"pid": 1000 + i, "name": "proc%02d.exe" % i,
+                      "igpu": 5.0, "dgpu": 20.0, "igpu_mem": 1048576,
+                      "dgpu_mem": 64 * 1048576, "smem": 8 * 1048576,
+                      "pref": 0, "adapter": "", "engine": ""}
+                     for i in range(12)]
+            app = object.__new__(gt.TrayApp)
+            app._ui_root = root
+            app._ui_windows = 0
+            app.panel_open = False
+            # §181 的周期刷新闸(_panel_render_due)过 self.lock 读快照、
+            # 拿 self._last_render_sig 比签名: 生产里两个都由 __init__ 给,
+            # object.__new__ 绕过了 __init__ 就得自己补。少任何一个, 面板
+            # 都会建到一半被 AttributeError 拆掉, 这里一个 Toplevel 都摸不到。
+            app.lock = threading.Lock()
+            app._last_render_sig = None
+            app.config_path = cfg
+            app.sort_state = {"col": "auto", "desc": True}
+            app.snapshot = {"ts": 0, "procs": procs, "summary": {},
+                            "totals": {}, "conn": {}, "policy": {},
+                            "disk": {}, "gpuinfo": {}, "session": {}}
+            gt._UI_FILE = os.path.join(tmp, "panel_ui.json")
+            app._panel_build()
+            win = [w for w in root.winfo_children()
+                   if isinstance(w, _tk.Toplevel)][-1]
+            win.geometry("1040x%d" % gt._PANEL_MIN_H)
+            for _ in range(10):
+                root.update_idletasks()
+            root.update()
+            return root, win
+        finally:
+            gt._FONT_UI = saved_font
+            gt._UI_FILE = saved_ui
+
+    def _blocks(self, win):
+        u"""顶层 pack 子件 [(class, y, h)], 按 pack 顺序。
+
+        用 pack_slaves() 而不是 winfo_children(): 后者按叠放序返回, 而且
+        趋势图 Canvas 与它的容器 spark_box 几何完全一样(y/高/宽都一样) ——
+        靠几何去重会把两个一起滤掉(互相包含), 量出来只剩 4 个区块。
+        pack_slaves() 只列直接 slave, 容器里头的 Canvas 压根不在列表里。
+        """
+        return [(c.winfo_class(), c.winfo_y(), c.winfo_height())
+                for c in win.pack_slaves()]
+
+    def _canvas(self, win):
+        u"""整棵树里那个趋势图画布(面板只有一个 Canvas)。"""
+        stack = list(win.winfo_children())
+        while stack:
+            c = stack.pop(0)
+            if c.winfo_class() == "Canvas":
+                return c
+            stack.extend(c.winfo_children())
+        return None
+
+    def test_the_gap_is_nailed_down_in_code(self):
+        u"""静态: 区块间隙 = 行距的一半, 且与表单的区块间隙同数。
+
+        比例是正文: 行高一改这个数必须跟着走。与 _FORM_BLOCK_GAP 相等这
+        件事单独钉 —— §176 当时钉的是"表单必须大于面板的 4px"(防回退成
+        两边一个 4), §177 把面板也提到半个行距之后两边同数; 现在回退成
+        两个不同的数(表单 16 / 面板 12)同样当场红。
+        """
+        import gpu_tray as gt
+        self.assertTrue(hasattr(gt, "_ROW_H"), "表格行高没有命名常量了?")
+        self.assertEqual(
+            gt._BLOCK_GAP * 2, gt._ROW_H,
+            "_BLOCK_GAP=%d 不是 _ROW_H=%d 的一半: 区块间隙必须跟着行高走"
+            % (gt._BLOCK_GAP, gt._ROW_H))
+        self.assertEqual(
+            gt._BLOCK_GAP, gt._FORM_BLOCK_GAP,
+            "_BLOCK_GAP=%d 与 _FORM_BLOCK_GAP=%d 不是一个数: _ROW_H 与"
+            "_FORM_ROW_PITCH 同为 32(全程序一把尺), 一半只有一个"
+            % (gt._BLOCK_GAP, gt._FORM_BLOCK_GAP))
+
+    def test_the_block_gaps_beat_the_table_row_gap(self):
+        u"""真渲染: 三处区块间隙都不窄于表格的视觉行间隙。
+
+        表格的视觉行间隙不拿写死的数: 从活着的 Tk 里量 _FONT_UI 的
+        linespace, 行高减它就是文字之间的空隙 —— 字体一换这条跟着变。
+        区块间隙从顶层 pack 子件的实测 y/高度逐段相减, 不数引用处。
+        """
+        import tkinter.font as _tkfont
+        import gpu_tray as gt
+        root, win = self._build()
+        try:
+            blocks = self._blocks(win)
+            self.assertGreaterEqual(
+                len(blocks), 5,
+                "顶层区块应该至少有 5 个(卡片/筛选栏/表格/趋势图/状态区),"
+                "实际 %d 个: %s" % (len(blocks), blocks))
+            gaps = [b[1] - (a[1] + a[2]) for a, b in zip(blocks, blocks[1:])]
+            font = _tkfont.Font(root=root, font=gt._FONT_UI)
+            linespace = int(font.metrics("linespace"))
+            row_gap = gt._ROW_H - linespace
+            self.assertGreater(
+                row_gap, 0,
+                "表格行高 %d 不大于字体 linespace %d: 行距这把尺塌了"
+                % (gt._ROW_H, linespace))
+            # 前三处是 _BLOCK_GAP; 第四处是 _SPARK_GAP(自己的跨面参照)
+            self.assertEqual(
+                gaps[:3], [gt._BLOCK_GAP] * 3,
+                "前三处区块间隙 %s 不恒等于 _BLOCK_GAP=%d"
+                % (gaps[:3], gt._BLOCK_GAP))
+            for i, got in enumerate(gaps[:3]):
+                self.assertGreaterEqual(
+                    got, row_gap,
+                    "第 %d 处区块间隙 %dpx 窄于表格的视觉行间隙 %dpx"
+                    "(行高 %d - linespace %d): 区块边界读不出来, 用户会把"
+                    "下一个区块当成这个区块又多了几行"
+                    % (i, got, row_gap, gt._ROW_H, linespace))
+        finally:
+            root.destroy()
+
+    def test_the_window_floor_covers_the_bigger_block_gaps(self):
+        u"""保底高度装得下三处 16px 的区块间隙, 趋势图与状态区不满血就红。
+
+        §177 把三处区块间隙各涨 12px, 账面 640 -> 676。_PANEL_MIN_H 按
+        老的账面/保底之差(4px)留成 680。这条在真渲染下量: 底部状态区被
+        pack 压扁正是历史上那个坑(470 实测压成 1px)。
+        """
+        import gpu_tray as gt
+        root, win = self._build()
+        try:
+            blocks = self._blocks(win)
+            # 趋势图画布是 pack 在 spark_box 里头的, 不在顶层子件里 ——
+            # 所以它按"哪个 Frame 装着一个 Canvas"找, 不按类名找。
+            spark = self._canvas(win)
+            self.assertIsNotNone(spark, "趋势图画布没建出来")
+            self.assertEqual(
+                spark.winfo_height(), gt._SPARK_H,
+                "趋势图实测 %dpx, 需求 %dpx: 保底高度 %d 装不下三处 16px "
+                "的区块间隙" % (spark.winfo_height(), gt._SPARK_H,
+                                gt._PANEL_MIN_H))
+            self.assertEqual(
+                blocks[-1][2], gt._STATUS_H,
+                "底部状态区实测 %dpx, 需求 %dpx: 保底高度 %d 装不下三处 "
+                "16px 的区块间隙" % (blocks[-1][2], gt._STATUS_H,
+                                     gt._PANEL_MIN_H))
+        finally:
+            root.destroy()
+
 
 class TrayPanelCardGeometry(unittest.TestCase):
     u"""汇总卡的纵向内边距: 上下必须一样, 且必须等于 Web 面板那个数。
@@ -12992,7 +13979,7 @@ class TrayPanelGeometryGuard(unittest.TestCase):
         """
         import gpu_tray as gt
         self.assertEqual(gt._onscreen_geometry("1046x470+55+55", 1512, 949),
-                         "1046x644+55+55",
+                         "1046x680+55+55",
                          "老存档的矮窗口原样还回去, 趋势图就被压成 1px")
         self.assertEqual(gt._onscreen_geometry("1040x300+0+0", 1512, 949),
                          "1040x%d+0+0" % gt._PANEL_MIN_H)
@@ -13131,6 +14118,9 @@ class TrayPanelBuildFailureIsLoud(unittest.TestCase):
         app.sort_state = {"col": "auto", "desc": True}
         app.snapshot = None
         app.lock = threading.Lock()
+        # 同 PanelBlockGap 的 _build: §181 的渲染闸要读它, __init__ 被绕过
+        # 就得手工补。
+        app._last_render_sig = None
         app._name_cache = {}
         app._root_ref = None
         app._pref_of = lambda _full: False

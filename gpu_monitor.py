@@ -2450,6 +2450,24 @@ def verify_pending(pending_verify, usage, igpu_luids, dgpu_luids, now,
 
 # AI/推理服务: 模型加载进显存要数分钟, 空闲时利用率极低。对它们做
 # 省电切回或自动重启会丢掉已加载的模型, 必须完全豁免 (用户明确要求)。
+#
+# 认不认得出一个 AI 负载分四层, 从精确到兜底:
+#   1. 进程名在名单里 (DEFAULT_AI_PROCESSES + 用户 ai_processes);
+#   2. 可执行文件的某个路径分量带 AI_PATH_MARKERS 特征开头;
+#   3. 独显专用显存达到 protect_vram_mb;
+#   4. 解释器宿主(python*.exe)持有的 GPU 显存达到 protect_vram_mb。
+#
+# 为什么名字不能当唯一一层: 官方文档(docs.comfy.org/installation/
+# comfyui_portable_windows)写明 ComfyUI 便携版 "integrated an independent
+# Python (python_embeded)", 启动命令是
+#   .\python_embeded\python.exe -s ComfyUI\main.py --windows-standalone-build
+# —— 进程名是 python.exe; vLLM(python -m vllm...)、SGLang
+# (python -m sglang...)、text-generation-webui(python webui.py)同样如此。
+# 也就是说名单里 comfyui.exe / vllm.exe / sglang.exe / webui.exe 这几个名字
+# 对应的真实进程名是 python.exe, 第 1 层永远匹配不上。本机实测(11-09):
+# 在跑的 AI 负载只有 `ollama.exe serve` 命中名单, 而同一个机器上另有一个
+# `python.exe -m pytest` —— 进程名相同、干的活正好相反。所以名字只能当
+# 第一层, "认窝"(安装目录)与"认类"(解释器宿主握着一大块显存)才是兜底。
 DEFAULT_AI_PROCESSES = [
     "ollama.exe", "llama-server.exe", "llama-cli.exe", "llama-quantize.exe",
     "koboldcpp.exe", "comfyui.exe", "lm studio.exe", "gpt4all.exe",
@@ -2457,34 +2475,86 @@ DEFAULT_AI_PROCESSES = [
 ]
 
 
-def is_ai_protected(cfg, pname, pid, dedicated_by_pid):
-    """AI 显存保护: 命中 AI 名单, 或独显专用显存占用达到保护阈值。
+# 安装目录特征: 拿可执行文件的**路径分量**逐个比前缀, 不拿整条路径比子串。
+# 原因是便携版解压出来的目录名带后缀(ComfyUI_windows_portable /
+# ComfyUI_windows_portable_amd / KoboldCpp-1.79), 整条路径按分隔符切开的
+# 子串匹配会漏掉它们, 而分量比前缀 comfyui 全都命中。反过来也要求特征词本身
+# 够特异: "jan" 这种单词没收进来, 它会命中任何叫 jan* 的目录。
+# 只收"在本机持有模型的推理服务", 不收纯 API 客户端(Cherry Studio / Chatbox
+# 之类): 那些进程重启不丢任何模型, 保护它们只会让 auto_restart 平白少生效
+# 一片。用户自己的推理服务照 ai_processes 补进程名, 或靠第 4 层兜底。
+AI_PATH_MARKERS = (
+    "comfyui", "python_embeded", "_embeded", "vllm", "sglang",
+    "text-generation-webui", "stable-diffusion-webui",
+    "koboldcpp", "tabbyapi", "gpt4all", "lm studio", "ollama",
+    "llama.cpp", "llamacpp", "llamafile",
+)
 
-    模型一旦加载, 即使推理空闲也占着大量专用显存, 用显存兜底可以
-    覆盖名单外的自建推理服务。
+
+def ai_protect_reason(cfg, pname, pid, dedicated_by_pid,
+                      full_path=None, igpu_mem_bytes=0):
+    """AI 显存保护: 命中任一条件返回中文理由, 否则 None。
+
+    四层(为什么是四层见 DEFAULT_AI_PROCESSES 上面那段):
+      1. 进程名在名单里;
+      2. 可执行文件路径的某个分量带 AI_PATH_MARKERS 特征开头;
+      3. 独显专用显存达到阈值(进程已经在独显上时);
+      4. 解释器宿主(python*.exe)持有的 GPU 显存达到阈值。
+
+    第 4 层只对 python*.exe 生效, 这是有意的收窄: 游戏、浏览器、
+    Electron 界面从来不是 python.exe, 收窄之后"大块显存"这条兜底就碰不到
+    它们, 迁移功能本身不受影响。而一个 python 进程握着阈值以上的 GPU
+    显存, 基本就是在跑模型或别的长时 GPU 计算 —— 重启它丢的是真东西。
+
+    igpu_mem_bytes 是核显侧的"专用 + 共享"合计: 迁移路径上进程还待在
+    核显, 第 3 层那个独显数字恒为 0, 第 4 层补的正是这个位。
     """
-    if pname and pname.lower() in {x.lower()
-                                   for x in DEFAULT_AI_PROCESSES}:
-        return True
-    # `or []` 而不是 .get(..., []): 键存在但值是 null 时, 后者会拿到
-    # None 并让下面的集合推导式抛 TypeError(merged_config 通常已经挡掉
-    # 这种情况, 但守卫函数不该把命押在调用方身上)
-    if pname and pname.lower() in {x.lower()
-                                   for x in cfg.get("ai_processes") or []}:
-        return True
+    name = (pname or "").lower()
+    if name:
+        if name in {x.lower() for x in DEFAULT_AI_PROCESSES}:
+            return "AI 名单"
+        # `or []` 而不是 .get(..., []): 键存在但值是 null 时, 后者会拿到
+        # None 并让下面的集合推导式抛 TypeError(merged_config 通常已经挡掉
+        # 这种情况, 但守卫函数不该把命押在调用方身上)
+        if name in {x.lower() for x in cfg.get("ai_processes") or []}:
+            return "AI 名单(用户补充)"
+    if full_path:
+        low = full_path.lower().replace("/", chr(92))
+        parts = [p for p in low.split(chr(92)) if p]
+        for mark in AI_PATH_MARKERS:
+            if any(p.startswith(mark) for p in parts):
+                return "AI 安装目录 %s" % mark
     # isinstance 那一道不是多余的: merged_config 已经把这个键收进
     # _NUMBER_RULES, 但守卫函数也可能拿到别处攒的配置(测试替身、将来的
     # 调用方)。非数字在这里必须当作"没设阈值", 而不是让 * 1024 * 1024
-    # 抛 TypeError —— 那会顺着迁移分支回到监控循环。
+    # 抛 TypeError —— 那会顺着迁移分支回到监控循环。`> 0` 而不是真值:
+    # 负数同样让 `dedicated >= 负数` 恒成立, 一路把每个进程都判成保护。
     limit = cfg.get("protect_vram_mb", 2048)
-    if isinstance(limit, (int, float)) and limit:
-        if dedicated_by_pid.get(pid, 0) >= limit * MIB:
-            return True
-    return False
+    if isinstance(limit, (int, float)) and limit > 0:
+        ded = (dedicated_by_pid or {}).get(pid, 0) or 0
+        if ded >= limit * MIB:
+            return "独显专用显存 %d MiB" % (ded // MIB)
+        if name.startswith("python") and name.endswith(".exe"):
+            total = ded + (igpu_mem_bytes or 0)
+            if total >= limit * MIB:
+                return "解释器宿主持有显存 %d MiB" % (total // MIB)
+    return None
+
+
+def is_ai_protected(cfg, pname, pid, dedicated_by_pid,
+                    full_path=None, igpu_mem_bytes=0):
+    """AI 显存保护的布尔形式。
+
+    命中哪一层(日志里要念出来, 不然用户不知道该去改哪个名单)用
+    ai_protect_reason。两个可选参数不给时行为与从前完全一致。
+    """
+    return ai_protect_reason(cfg, pname, pid, dedicated_by_pid,
+                             full_path, igpu_mem_bytes) is not None
 
 
 def advance_power_saver(cfg, dgpu_util_by_pid, ps_streak, ps_notified,
-                        auto, logfile, dedicated_by_pid=None):
+                        auto, logfile, dedicated_by_pid=None,
+                        igpu_mem_by_pid=None):
     """独显上长期低负载、且是我们迁移上去的进程: 提醒或改回核显。
 
     末尾的 break 让每轮最多推进一个进程: 一轮里成批改注册表太激进,
@@ -2495,6 +2565,9 @@ def advance_power_saver(cfg, dgpu_util_by_pid, ps_streak, ps_notified,
     最该省电的那个场景永远攒不满 power_saver_samples。现在的口径是
       - 进程还活着且仍挂着高性能首选项 -> 本轮没有采样就按 0% 计;
       - 进程已退出, 或首选项已不是高性能 -> 移出跟踪 (streak 清零)。
+
+    igpu_mem_by_pid: 核显侧"专用 + 共享"表(字节), 给 ai_protect_reason
+        第 4 层用 —— 进程还待在核显时独显那个数字恒为 0, 认不出解释器宿主。
     """
     idle_pct = cfg.get("power_saver_idle_percent", 10.0)
     need = cfg.get("power_saver_samples", 60)
@@ -2513,8 +2586,11 @@ def advance_power_saver(cfg, dgpu_util_by_pid, ps_streak, ps_notified,
             ps_streak.pop(pid, None)
             ps_notified.discard(full)
             continue
-        if is_ai_protected(cfg, pname, pid, dedicated_by_pid or {}):
-            # AI 模型进程: 空闲是常态, 切回核显会毁掉已加载的模型
+        # AI 模型进程: 空闲是常态, 切回核显会毁掉已加载的模型。
+        # 这里不念理由: 每个受保护进程每一轮都会走到, 念一次就是几十轮
+        # 一条的日志洪水; 理由在迁移路径上念(那是一次性事件)。
+        if ai_protect_reason(cfg, pname, pid, dedicated_by_pid or {},
+                             full, (igpu_mem_by_pid or {}).get(pid, 0)):
             ps_streak.pop(pid, None)
             continue
         u = dgpu_util_by_pid.get(pid)
@@ -2999,7 +3075,8 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
             # 省电: 独显上持续低负载且已迁移过的程序 (提醒或自动切回核显)
             if cfg.get("power_saver_notify") or eff_ps_auto:
                 advance_power_saver(cfg, dgpu_util_by_pid, ps_streak, ps_notified,
-                                    eff_ps_auto, logfile, dedicated_by_pid)
+                                    eff_ps_auto, logfile, dedicated_by_pid,
+                                    mem_by_pid)
 
             for pid, pname, full, reason in hot:
                 streak[full] += 1
@@ -3045,11 +3122,14 @@ def cmd_monitor(cfg, config_path=None, hooks=None):
                     ar_list = {x.lower()
                                for x in cfg.get("auto_restart_processes", [])}
                     restarted = None
-                    if is_ai_protected(cfg, pname, pid, dedicated_by_pid):
+                    ai_why = ai_protect_reason(
+                        cfg, pname, pid, dedicated_by_pid, full,
+                        mem_by_pid.get(pid, 0))
+                    if ai_why:
                         # AI 模型进程: 重启会丢模型, 只写偏好, 让用户自己
                         # 挑没有推理任务的时机重启生效
-                        log(f"  -> AI 显存保护: 跳过 {pname} 的自动重启",
-                            logfile)
+                        log(f"  -> AI 显存保护({ai_why}): "
+                            f"跳过 {pname} 的自动重启", logfile)
                     elif cfg["auto_restart"] and (not ar_list
                                                   or pname.lower()
                                                   in ar_list):
