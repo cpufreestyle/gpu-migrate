@@ -4,10 +4,10 @@
 
 ## 0. 现状快照（2026-10-03 第三轮重写；下面 §1–§7 是**第一轮**的原样记录，只作历史）
 
-- 分支 `main`。**已 push**：§166 轮推 54 条（连同其 docs 提交 `66f04b1` 共 55 条）、§167 轮（第二写者）推 2 条，`3bf1c4a..02caf12` 共 57 条在 `origin/main`；§168 轮（第二写者）又推 1 条（`2d51419`）；§169 轮落 1 条 fix（`90e5084`）尚未 push，现共 59 条（`3bf1c4a..90e5084`）、未 push 1（本轮 docs 落地后为 2，push 后 `origin/main` 60 条、0 未 push）；release `v1.0.0` 已建，tag 仍指向 `fdea9ae`；release `v1.0.1` 已建（11-09，tag 指 `d097bf6`，即 §169 现网构建对应的源码树，<https://github.com/cpufreestyle/gpu-migrate/releases/tag/v1.0.1>）；§168 已把现网 exe 换成含 §155-§167 全部间距修复的新构建（活页阈值线实测 `<line class=thr x1=0 y1=10.7 x2=300 y2=10.7 />`）。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准；§170 – §174 五轮的 fix + docs 已提交（fix `4e6425f`、docs `0cf2027`）并 push，现共 65 条（`3bf1c4a..d87dcca`）、0 未 push（§0a 以后各节里 60 条那类旧计数以本节与 `git rev-list --count` 实况为准)。§175 轮(设置窗两个名单段 6px + 折行守卫 6px 补账 + 5 条守卫)的 fix `ed51b49` + docs `d87dcca` 已提交并 push(用户 11-09 放行), 现网 exe 也已同步(见下文现网状态)。
-- 体量（§175 轮）：`gpu_monitor.py` 3393 行、`gpu_tray.py` 2916 行、`tests/test_gpu_monitor.py` 13873 行、README 496 行、HANDOFF 8845 行（含 §175）。
-- 测试：**698 条**。§166 轮四种跑法实测（pytest 正序 `678 collected`，全量挂 2 条已知漂白、单独复跑全过，根因见 §166；`python -X utf8 tests/test_gpu_monitor.py` `Ran 678 tests ... OK`（40.2s）、`python -X utf8 -m unittest discover -s tests` `Ran 678`（45.7s，2 个 error 同为 `RegisterClassEx` 已知漂白）；整套倒序（含守卫自身）随上述各跑覆盖，倒序那条是仓库里的正式用例 `SuiteRunsInReverseOrder`（子进程按类名自排除防套娃），不再靠人记得手工跑）。§169 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（30.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（29.4s）；§170 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（31.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（30.7s），两种都带 `-B` 跑过一遍确认与 pyc 无关（见 §170 踩过的坑）；§171 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 685 tests ... OK`（30.7s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 685 tests ... OK`（32.5s），首次跑法一撞过一次 `WinError 1410` 已知漂白（Tk 建窗时序，复跑即绿，见 §171 踩过的坑）；§172 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 693 tests ... OK`（72.5s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 693`（72.7s，1 个 `RegisterClassEx` 已知漂白、单跑即过），本轮新增的 `DetailWrapWidth` 会真建一次详情窗（patch `pid_to_name`），两种跑法下都稳。§175 轮收尾复跑两种: `python -X utf8 -B tests/test_gpu_monitor.py` `Ran 698 tests ... OK`(48.4s)、`python -X utf8 -B -m unittest discover -s tests` `Ran 698 tests ... OK`(46.9s), 首跑各撞过一次 `WinError 1410` 已知漂白(复跑即绿, 见 §175 踩过的坑), 新类 `SettingsListKeyValueGap` 会真建设置窗、隔离 20 连跑全绿。**跑完整套后 7 个数据/日志文件逐字节不变**：`config.json` / `panel_ui.json` / `report.csv` / `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` / `gpu_monitor_error.log` —— 这句在 §111 时是假的，`tray_debug.log` 一直在被测试写穿，§113 才修真，§169 轮复跑实测仍旧不变（注意 `history.jsonl` 不在这 7 个里：活实例每 10s 往里追一行，拿它当"没变"的判据永远不成立，README 里那条旧声称只在没有活实例跑着的时候成立）。长行基线 §166 轮实测 `gpu_monitor.py 16 / gpu_tray.py 6 / tests 10`，§169 轮复测未变（后两个数比 §165 记录的 5/5 大，增量来自 §166 并入的第二写者内容，见 §166 踩过的坑；约定是别新增）。
-- 本文档 175 节、8845 行，最新节号 §175，且**节号有倒挂**（§108 排在 §105 前面，尾部 §92 在 §87 前面）。查某件事按节号搜（`grep -n "^## 105\."`），别按物理位置读；新轮次请续号并顺手确认没有比它更大的号。§173/§174/§175 三节文档本轮已补齐(§175 的代码+测试写盘未提交, 等放行; 现网 exe 仍不含 §175, 见下文现网状态)。
+- 分支 `main`。**已 push**：§166 轮推 54 条（连同其 docs 提交 `66f04b1` 共 55 条）、§167 轮（第二写者）推 2 条，`3bf1c4a..02caf12` 共 57 条在 `origin/main`；§168 轮（第二写者）又推 1 条（`2d51419`）；§169 轮落 1 条 fix（`90e5084`）尚未 push，现共 59 条（`3bf1c4a..90e5084`）、未 push 1（本轮 docs 落地后为 2，push 后 `origin/main` 60 条、0 未 push）；release `v1.0.0` 已建，tag 仍指向 `fdea9ae`；release `v1.0.1` 已建（11-09，tag 指 `d097bf6`，即 §169 现网构建对应的源码树，<https://github.com/cpufreestyle/gpu-migrate/releases/tag/v1.0.1>）；§168 已把现网 exe 换成含 §155-§167 全部间距修复的新构建（活页阈值线实测 `<line class=thr x1=0 y1=10.7 x2=300 y2=10.7 />`）。§87 那段历史（工作树里的东西连同本轮改动一起提交、`config.json` 摘跟踪并按 §76 进 `.gitignore`）仍有效；"工作树只有 HANDOFF.md 未跟踪"这类状态句只对落笔当时有效，以 `git status` 实况为准；§170 – §174 五轮的 fix + docs 已提交（fix `4e6425f`、docs `0cf2027`）并 push，现共 65 条（`3bf1c4a..d87dcca`）、0 未 push（§0a 以后各节里 60 条那类旧计数以本节与 `git rev-list --count` 实况为准)。§175 轮(设置窗两个名单段 6px + 折行守卫 6px 补账 + 5 条守卫)的 fix `ed51b49` + docs `d87dcca` 已提交并 push(用户 11-09 放行), 现网 exe 也已同步(见下文现网状态)。§176-§180 五轮(间距 §176/§177/§178 + AI 四层识别 §179 + pystray 窗口类泄漏 §180)的 fix + docs + README 已写盘未 commit/push, 等放行; `git rev-list --count HEAD` = 112, 工作树 5 个文件(`gpu_monitor.py` / `gpu_tray.py` / `tests/test_gpu_monitor.py` / `README.md` / `HANDOFF.md`)已修改未暂存。
+- 体量（§181 轮，python 数行）：`gpu_monitor.py` 3473 行、`gpu_tray.py` 3023 行、`tests/test_gpu_monitor.py` 14862 行、README 594 行、HANDOFF 9409 行（含 §177/§179/§180/§181 补记）。（§177 那节 HANDOFF 当时漏写，§178 轮按 README/git/源码补了一节，开头已注明是补记。）（§175 那行记的 3393/2916/13873/496/8845 与这里的差是数法不同：那边按 `git ls-files | wc -l` 量，这边按 `io.open().read().count(chr(10))` 量，两个数都自洽，别混着比。）
+- 测试：**721 条**。§178 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 721 tests ... OK`（48.5s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 721 tests ... OK`（45.3s），新类 `SettingsValueColumnHasOneLeftEdge` 3 条会真建设置窗（隔离单跑 3 条全绿，变异验证 3 条见 §178）。§181 轮：`TrayPanelRenderGate` 8 条隔离单跑全绿，全量两种跑法 `Ran 729 tests ... OK`（47.8s / 49.3s）—— 落盘当时曾是 `FAILED (failures=3, errors=2)`，原因与修法见 §181 踩过的坑。原记录：**698 条**。§166 轮四种跑法实测（pytest 正序 `678 collected`，全量挂 2 条已知漂白、单独复跑全过，根因见 §166；`python -X utf8 tests/test_gpu_monitor.py` `Ran 678 tests ... OK`（40.2s）、`python -X utf8 -m unittest discover -s tests` `Ran 678`（45.7s，2 个 error 同为 `RegisterClassEx` 已知漂白）；整套倒序（含守卫自身）随上述各跑覆盖，倒序那条是仓库里的正式用例 `SuiteRunsInReverseOrder`（子进程按类名自排除防套娃），不再靠人记得手工跑）。§169 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（30.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（29.4s）；§170 轮收尾复跑两种：`python -X utf8 tests/test_gpu_monitor.py` `Ran 679 tests ... OK`（31.7s）、`python -X utf8 -m unittest discover -s tests` `Ran 679`（30.7s），两种都带 `-B` 跑过一遍确认与 pyc 无关（见 §170 踩过的坑）；§171 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 685 tests ... OK`（30.7s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 685 tests ... OK`（32.5s），首次跑法一撞过一次 `WinError 1410` 已知漂白（Tk 建窗时序，复跑即绿，见 §171 踩过的坑）；§172 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 693 tests ... OK`（72.5s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 693`（72.7s，1 个 `RegisterClassEx` 已知漂白、单跑即过），本轮新增的 `DetailWrapWidth` 会真建一次详情窗（patch `pid_to_name`），两种跑法下都稳。§175 轮收尾复跑两种: `python -X utf8 -B tests/test_gpu_monitor.py` `Ran 698 tests ... OK`(48.4s)、`python -X utf8 -B -m unittest discover -s tests` `Ran 698 tests ... OK`(46.9s), 首跑各撞过一次 `WinError 1410` 已知漂白(复跑即绿, 见 §175 踩过的坑), 新类 `SettingsListKeyValueGap` 会真建设置窗、隔离 20 连跑全绿。§177 轮收尾复跑两种：`python -X utf8 -B tests/test_gpu_monitor.py` `Ran 718 tests ... OK`（43.6s）、`python -X utf8 -B -m unittest discover -s tests` `Ran 718 tests ... OK`（46.7s），新类 `PanelBlockGapBeatsTableRowGap` 3 条会真建面板（隔离单跑 3 条全绿，变异验证 4 条见 §177）。**跑完整套后 7 个数据/日志文件逐字节不变**：`config.json` / `panel_ui.json` / `report.csv` / `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` / `gpu_monitor_error.log` —— 这句在 §111 时是假的，`tray_debug.log` 一直在被测试写穿，§113 才修真，§169 轮复跑实测仍旧不变（注意 `history.jsonl` 不在这 7 个里：活实例每 10s 往里追一行，拿它当"没变"的判据永远不成立，README 里那条旧声称只在没有活实例跑着的时候成立）。§179/§180 两轮(补记)收尾复跑三种: `python -X utf8 -B tests/test_gpu_monitor.py` `Ran 721 tests ... OK`(51.6s)、`python -X utf8 -B -m unittest discover -s tests` `Ran 721 tests ... OK`(50.8s)、带前后 md5 的快照脚本 `Ran 721 tests ... OK`(51.6s)且 7 个数据/日志文件逐字节不变; 新类 `AiProtectionSeesInterpreterHosts` 13 条 + `TrayIconClassIsReleased` 1 条隔离单跑 `Ran 14 tests ... OK`; **首跑零漂白** —— §171 以来第一轮不需要"复跑即绿"借口的全量(1410 flake 的真因与修法见 §180)。长行基线 §166 轮实测 `gpu_monitor.py 16 / gpu_tray.py 6 / tests 10`，§169 轮复测未变（后两个数比 §165 记录的 5/5 大，增量来自 §166 并入的第二写者内容，见 §166 踩过的坑；约定是别新增）。
+- 本文档 181 节、9409 行，最新节号 §181，且**节号有倒挂**（§108 排在 §105 前面，尾部 §92 在 §87 前面）。查某件事按节号搜（`grep -n "^## 105\."`），别按物理位置读；新轮次请续号并顺手确认没有比它更大的号。§176-§181 六节的代码+测试+文档都已写盘，**六节都没 commit/push**，等放行；现网 exe 仍不含 §176-§181，见下文现网状态。
 - 现网状态：`GPUMigrate.exe --ensure` 父子对存活（11-09 04:11 换上的新实例，PID 28860/35560，§175 落地后的同步轮；换前 28076/28164），看门狗 `GPUMigrateWatchdog` 每 2 分钟一次，面板 `127.0.0.1:8787` 正常（head 三条 meta 完整、无幽灵文本、阈值线 `x1=0 y1=10.7 x2=300 y2=10.7` 实测正常，迁移态列/汇总卡/火花线都在）。**现网 exe 是 11-09 04:09 重建的构建**（两个 spec 构建 + 冒烟全过，十四条字节码级断言全过——§166 阈值线/`_FORM_BLOCK_GAP`、§167+§173 `_detail_build` 的 `LOAD_GLOBAL _CTL_GAP`==3(按钮行两处 + 值列一处)、§175 `_settings_build` 的 `LOAD_GLOBAL _CTL_GAP`==2(两个名单行值列, 改前 0 处)/模块级 `_DETAIL_WRAP_PX`=345(补账只改注释不改值)、§169 `_DETAIL_BTN_PAD_Y=8`/两表单框无 expand/全模块 expand==3、§170 `th,td{padding:8px 10px;line-height:15px;`/`_ROW_H=32`、§171 viewport 完整/color-scheme 独立/无 `width=device-width,<meta` 粘团签名），含 §155-§175 全部间距修复（§170 Web 行高、§171 head、§172 折行注释/守卫、§173 详情窗键名列->值列 6px、§174 `#gpuinfo` 规则、§175 设置窗两个名单段键名列->值列 6px + 折行守卫 6px 补账），§109 的崩溃日志滚动、§110 的温度保住、PDH 展开上界这些老修复同样已在其中。`gpu_monitor_crash.log` 的性质见 §109 —— 它是原生故障现场记录，**不是**死亡证明，§105 里"0 字节 = 没崩"和"165 条 = 一直崩"两种读法都错。
 
 ## 0a. 第一轮原文（历史，勿当作现状）
@@ -8842,4 +8842,568 @@ M4/M5 说明新守卫**不**负责按钮行 pady 的裸数字(既有守卫负责
 
 1. ~~§175 的改动(gpu_tray.py 两处 padx + 注释、`DetailWrapWidth` 6px 补账、新守卫类 5 条)已写盘未 commit/push, 等放行。~~ **已完成(11-09 用户放行: fix `ed51b49` + docs `d87dcca`, 698 条测试复跑全绿后提交并 push, `origin/main` 现 65 条)。**
 2. ~~现网同步(见顺带发现)。~~ **已完成(11-09 04:09 构建 -> 十四条字节码级断言 -> 04:11 换活实例, PID 28860/35560, 面板 200 实测正常)。**
-3. AIDA64 反编译的下一步(见顺带发现), 等用户决定。
+3. ~~AIDA64 反编译的下一步(见顺带发现), 等用户决定。~~ **阻塞已除(§176): 壳是 UPX, 已脱壳出 `_aida_unpacked.exe`(13.4MB), 62 个 TFORM_* 全解出; 还要不要继续挖是新的选题, 见 §176 顺带发现 2。**
+
+## 176. 续一百七十五：设置窗的段落边界比行边界还窄 —— _FORM_BLOCK_GAP 4 -> 16(行距的一半), 并与 _BLOCK_GAP 脱钩(布局)
+
+### 为什么是缺陷
+
+`_FORM_BLOCK_GAP` 是 4px, 而设置窗自己的视觉行间隙比它大。视觉行间隙的量法: 行距 `_FORM_ROW_PITCH`(32) 减
+控件的自然高度 —— §155 把全部松弛都挪进了 ipady, 所以控件的**框**被撑到正好 32px 并且一个挨一个("框与框之间"
+永远是 0px), 看得见的间隙全在框里头, 数值上正好等于相邻两行各自 ipady 之和。实测(`_probe_ipady.py`):
+
+| 控件 | 自然高度 | ipady | 视觉行间隙 |
+|---|---|---|---|
+| Entry | 20 | 6 | 12 |
+| Label | 22 | 5 | 10 |
+| Checkbutton | 26 | 3 | 6 |
+
+于是「勾选区 -> 游戏名单 -> 排除名单」这两处段落边界的真渲染实测(改前):
+
+- 最后一个勾选底边 -> 游戏名单 Label 顶边 = **4px**;
+- 相邻两个勾选之间 = **6px**。
+
+段落边界比最窄的行边界还窄。用户读到的是一个稍微松了一点的勾选行, 没有人会把它当成一个新段落的开始 ——
+而这里确实开始了一个新段落(勾选开关 -> 三行的多行文本框, 控件类型都换了)。
+
+为什么是缺陷而不是"紧凑":
+
+- 段落间隙的活就是比行间隙大。外部参照是反编译 AIDA64 Engineer 5.20 的二进制 DFM(UPX 脱壳后
+  TFORM_PREFERENCES 一个窗体 1435 个对象, `_pref_analyze.py` / `_pref_allgaps.py`): 兄弟控件纵向间隙的
+  直方图里, **7px 以 429 例是全程序最高频的结构性数值**(行间隙), **15px 以 107 例是第二高的结构性数值**
+  (段落间隙), 二者之比 15/28 ≈ 0.54, 约半个行距。AIDA64 没有任何一处段落间隙小于行间隙。
+- 我们自己的 Web 面板区块间隙是 10~12px(`.cards{margin:10px 0 12px}`、`.sparkwrap{margin:0 0 10px}`,
+  margin 折叠后实测 10/12), 只有托盘表单这边是 4px。
+- §169 把设置窗高度定在 520 时, 那 28px 余量一直落在保存键下方闲着(表单框不 expand 的既定决定),
+  而段落分界看不出来 —— 余量用错了地方。
+
+### 取值: 为什么是 16
+
+**行距的一半**(`_FORM_ROW_PITCH // 2` = 16), 与 AIDA64 的 15/28 ≈ 0.54 同一个比例量级。比例而不是绝对
+值: 我们的行间隙本来就比 AIDA64 松(12 vs 7), 所以取同一个绝对量级(15)也行、取同一个比例(2.14x = 26px)
+则不行 —— 460 宽的这个窗装不下(见下面那笔纵向账)。16 > 12, 两道边界因此分得开。
+
+预算实测(`_probe_budget.py` / `_probe_grid3.py`, 都量真渲染):
+
+| _FORM_BLOCK_GAP | grid 请求高 | 窗请求高 | 保存键 |
+|---|---|---|---|
+| 4(改前) | 432 | 492 | 28 满血 |
+| 16 | 456 | 516 | 28 满血 |
+| 18 | 460 | 520 | 28 满血 |
+| 20 | 464 | 524 | **24(被压扁)** |
+
+所以 16 是"保存键仍满血"这条线以内最接近半个行距的值, 再大 2px(18)就开始吃掉全部余量。窗高 460x520 ->
+460x536: 内容长 24px、窗高只长 16px, 用掉的正是 §169 那 28px 里的一部分, 保存键离窗底从 4px 回到 20px。
+(520 在 gap=16 时按钮也还满血, 但键下方只剩 4px, 而内容上边距是 `_DIALOG_PAD_Y`=8 —— 上下不对称, 键像贴在窗边上。)
+
+### 为什么与 _BLOCK_GAP 脱钩
+
+常量注释从前写着"与 `_BLOCK_GAP` 取同一个数(4)是有意的 —— 分成两个数的话, 用户在面板与设置窗之间看到的就是两种
+节奏"。这句话站不住, 有三层:
+
+1. **两个数量的活不一样**。表单里一个"区块"是几行 32px 的 grid 行, 行与行之间一个像素的内部 padding 都没有,
+   段落间隙是**唯一**的分界物, 必须赢过行间隙; 面板那边一个区块是 28~390px 高的一条横带, 4px 在它身上的比例是 1%。
+2. **"两边一个数"这个约定从来就没成立过**: Web 面板的区块间隙是 10~12px, 托盘表单这边 4px 才是少数。
+   拿一个自己都没守住的东西当理由, 说服力是零。
+3. **面板那 4px 与它自己的表格行间隙 16px 是同一处毛病, 而且比例比这里更难看**(4/16 vs 表单改前的 4/12)。
+   它不在这轮顺手改: 要动 `_PANEL_MIN_H`(630)与整套面板纵向账, 768 高屏幕上底部距屏底会从 83px 收到 53px,
+   那是另一个决定。记在顺带发现里。
+
+### 改动
+
+- gpu_tray.py `_FORM_BLOCK_GAP`: 4 -> 16, 注释整段重写(为什么从前是缺陷 / 为什么是 16 / 为什么与 `_BLOCK_GAP`
+  脱钩 / 改这个数进哪笔账)。
+- gpu_tray.py `_settings_build`: `root.geometry("460x520")` -> `"460x536"`, 纵向预算注释按实测重算
+  (432 -> 456、492 -> 516、余量 28 -> 20), 并把 §169 那段 expand 注释里的"520 比内容多 28px"改成 536/20。
+- tests `SettingsWindowFitsItsOwnFrame.test_the_form_block_gap_is_nailed_down_in_code`: 原来钉 `== 4` 与
+  `== _BLOCK_GAP` 的两条断言改成钉比例(`* 2 == _FORM_ROW_PITCH`)与"大于 `_BLOCK_GAP`"。
+- tests `TrayPanelStatusFloor` 里三处钉死的 460x520 跟上真尺寸(几何循环、真渲染那条、以及一条断言消息里的字面量)。
+- tests 新增 `SettingsBlockGapBeatsRowGap` 3 条(见下)。
+
+### 守卫怎么写的
+
+新类 `SettingsBlockGapBeatsRowGap` 3 条, 三层: 
+
+1. **静态**(`test_the_gap_is_nailed_down_in_code`): `_FORM_BLOCK_GAP * 2 == _FORM_ROW_PITCH`(比例是正文 ——
+   写成 15 或 17 都是按感觉调数, 而行距一改这个数必须跟着走), 且 `_FORM_BLOCK_GAP > _BLOCK_GAP`(钉住脱钩,
+   回退成"两边一个数"就红)。
+2. **真渲染**(`test_the_section_gap_beats_every_row_gap`): 真建一次设置窗(与 §175 的 `_build` 同一套取舍:
+   临时目录 config.json + `object.__new__(TrayApp)` + 6 次 `update_idletasks`), 量三件事 —— 两处区块间隙都正好是
+   `_FORM_BLOCK_GAP`; 结构前提(最后一个勾选与游戏名单之间正好隔着一个间隙行, 不然量的可能跨着别的控件);
+   以及**区块间隙严格大于表单里每一个视觉行间隙**。行间隙不拿写死的数: 逐行算 ipady 之和,
+   控件自然高度随字体变、ipady 跟着变, 拿死数比字体一换这条就成假的。
+3. **漂移**(`test_the_section_gap_survives_a_wider_font`): `_FONT_UI` 换 16 号 Arial 重建。实测宽字体下 ipady
+   从 6/5/3 掉到 2/1/0, 行间隙从 12/10/6 掉到 4/2/0 —— 比的仍是两个量的高矮, 不是两个写死的数。
+
+与 `SettingsWindowFitsItsOwnFrame` 的分工: 那类量的是一整套框架预算(保存键不被压平、表单内容不超窗),
+这里只量"段落边界比行边界宽"这一件几何事实。
+
+### 验证结果
+
+- 新类 3 条 OK; `SettingsWindowFitsItsOwnFrame` / `SettingsListKeyValueGap` 两类 12 条一起跑 OK。
+- 全量两种跑法: `python -X utf8 -B tests/test_gpu_monitor.py` `Ran 701 tests ... OK`(44.6s)、
+  `python -X utf8 -B -m unittest discover -s tests` `Ran 701 tests ... OK`(49.6s)。基线 698, +3。
+- 跑完整套前后 7 个数据/日志文件逐字节不变(config.json 不存在, 其余 6 个 md5 相同), 脚本 `_state_176.py`。
+
+### 变异验证(6 条, 全红)
+
+- G1 `_FORM_BLOCK_GAP` 退回 4 -> 红(4 条: 新类三条 + `test_the_form_block_gap_is_nailed_down_in_code`)。
+- G2 取 15(半个行距的邻居, "按感觉调数"的样子) -> 红(静态两条: 比例不对)。几何上量不到 —— 15 > 12,
+  真渲染那条仍然绿。**比例那条守卫补的正是这个位**: 没有它, 15/17/18 都能悄悄进来。
+- G3 取 20 -> 红(静态两条 + `test_the_save_button_is_not_squeezed_flat`: 保存键掉到 24px)。
+- G4 窗高退回 520 而间隙仍是 16 -> 红(`test_the_save_button_is_not_squeezed_flat` 的预算断言:
+  grid 请求 456 > 520 - 76 = 444)。几何上按钮仍满血, 是预算那条提前咬住的。
+- G5 / G6 各删一处 `rowconfigure(minsize=_FORM_BLOCK_GAP)` -> 红(真渲染两条 + 静态一条)。
+- 子进程 `-B` + `PYTHONDONTWRITEBYTECODE=1`, 还原后 sleep 1.2s 并逐字节断言。脚本 `_mut_176.py`。
+
+### 踩过的坑
+
+- **探针把 geometry 设在了隐藏的 `tk.Tk()` 上而不是 Toplevel 上**: 第一版 `_probe_grid.py` 扫 (gap, 窗高) 网格,
+  量出来 gap=20 在窗高 540 下保存键仍被压扁, 而 gap=16 在 520 下满血 —— 自相矛盾。真因是 `root.geometry()`
+  改的是宿主根窗口, 设置窗一直是 `_settings_build` 里那个 460x520。改成在 Toplevel 上调之后数据才单调
+  (`_probe_grid3.py`)。**教训: 量 Toplevel 的几何, geometry 必须落在 Toplevel 上。**
+- **"视觉行间隙"不是常量, 但也不是随机的**: 第一版真渲染守卫想直接量"框与框之间", 量出来全是 0px ——
+  §155 的 ipady 设计让控件的框一个挨一个。改用 ipady 之和才对(6+6=12 / 5+5=10 / 3+3=6), 与手工算的
+  "32 - 自然高度"完全一致, 且不依赖探针控件。
+- **node_repl 写长 Python 源码仍会被模板字面量背刺**: `_patch_176_c.py` 把一个 220 行的类用 `JSON.stringify`
+  塞进一行, 结果 Python 语法错误(字符串里的转义与物理行混在一起), 而且那个脚本在写盘之前就挂了, 前面两条
+  sub 静默没生效(第二次跑 `_patch_176_b.py` 才发现它连写盘都没有)。**教训: 长内容先落成独立 .py 文件,
+  补丁脚本只做 `io.open` + replace; 每条 sub 之后立刻确认落盘。**
+- PowerShell 的 `python -c` 仍然吃多行脚本与双引号, 一律落 `.tmptest/rea/_*.py` 再跑。
+
+### 顺带发现(未改, 记档)
+
+1. **面板的 `_BLOCK_GAP=4` 与它自己的表格行间隙 16px 是同一处毛病, 比例比表单改前更难看**(4/16 vs 4/12)。
+   不在这轮改: 要动 `_PANEL_MIN_H`(630)与整套面板纵向账, 768 高屏幕上底部距屏底从 83px 收到 53px。
+   下一轮的直接候选。
+2. **§175 顺带发现里“压缩机仍未识别”那条到此闭环: 壳是 UPX**
+   (aPLib/LZ4/snappy/zlib/bz2/lzma/liblzf 与参数扫描全都不是, 脱壳产物 `_aida_unpacked.exe` 13.4MB)。
+脱壳后 `_scan_unpacked.py` 扫到 47 个 TPF0 流、1326 个对象, **62 个 TFORM_* 已全部解出**,
+   不止 Preferences。根级兄弟间隙的总直方图里最高频仍是 15px(234)与 7px(201) ——  "行 7 / 段 15" 这个节奏
+   在 AIDA64 全程序成立, 不是 Preferences 一个窗的偶然。密集形态(Form_SensorPanelDefaults 112 对象、
+   Form_Tweakings 169 对象)的顶层子控件里 7px 仍是最高频(62 例), 但那些窗的顶层是一整片标签网格,
+   "区块"的边界不在顶层, 所以它们证明不了"密窗口可以用更小的段落间隙" —— 这条别再拿去当不改面板的理由。
+3. 现网 exe(11-09 00:23 构建)不含 §176; 同步需 build -> 字节码级验包 -> 换活实例, 需用户同意。
+4. §176 的改动已写盘未 commit/push, 等放行。
+
+### 用户决策待办
+
+1. §176 的改动(gpu_tray.py 常量 + 窗高 + 注释、tests 新类 3 条 + 三处几何字面量)已写盘未 commit/push, 等放行。
+2. 现网同步(见顺带发现 3)。
+3. 面板 `_BLOCK_GAP` 那一轮(见顺带发现 1), 等用户决定要不要动 `_PANEL_MIN_H`。
+
+## 177. 续一百七十六：面板的区块间隙 4 -> 16 —— 与表格自己的视觉行间隙看齐(布局)
+
+*(§176 轮只落了代码/测试/README, HANDOFF 这一节当时漏写; §178 轮按 README、git 与源码补记,
+数据以 README 那条与 §0 快照为准。)*
+
+`_BLOCK_GAP` 从前是 4px, 而表格自己的视觉行间隙是 16px: 行高 `_ROW_H=32`, 表格字体
+(`_FONT_UI`, Segoe UI Variable Text 9)的 linespace 实测 16px, 相邻两行**文字**之间空着
+16px。区块边界只有 4px, 是最窄那条行边界的四分之一 —— 用户把「表格 -> 趋势图」读成表格又多了
+几行, 没有人会把它当成另一个区块的开始, 而那里确实换了控件类型(表格 -> 画布)。
+
+外部参照是同一份反编译 AIDA64 Engineer 5.20 的二进制 DFM, 但这次扫**全程序**(脱壳后 63 个窗体、
+1986 个对象, 兄弟间隙全量统计): 窗体根级子控件之间的区块间隙与**同一窗体自己的行间隙相等**
+(比例 1.0)是常态 —— Form_CPUID 9/9、Form_CacheMemBenchSuite 25/25、Form_GPGPUBenchSuite
+15/15、Form_DRAMTimings 15/15; 唯一成规模的「内容区 -> 按钮行」形态(`TTabControl` ->
+`TButton`)量到 6px, 而那个程序的行间隙是 7px。AIDA64 没有任何一处区块间隙小于自己的行间隙,
+我们改前是 4/16 = 0.25, 是全程序最难看的一处。
+
+取值 16 = 行距的一半, 与 `_FORM_BLOCK_GAP` 同一个数: 不是不巧相等, 是同一把尺的同一个输出
+—— `_ROW_H` 与 `_FORM_ROW_PITCH` 都是 32。代价是纵向预算: 三处区块间隙各涨 12px, 账面
+640 -> 676, `_PANEL_MIN_H` 644 -> 680(趋势图与状态区之间那一处仍是 `_SPARK_GAP=10`, 对着
+Web 面板的 `.sparkwrap{margin:0 0 10px}`)。
+
+守卫 `PanelBlockGapBeatsTableRowGap` 3 条: 静态钉 `_BLOCK_GAP * 2 == _ROW_H` 且与
+`_FORM_BLOCK_GAP` 同数; 真渲染用 `pack_slaves()` 按 pack 顺序量三处区块间隙, 与从活 Tk 里量出来
+的字体 linespace 算出的视觉行间隙逐处比; 第三条在真渲染下钉趋势图 46px 与状态区 52px 都满血。
+变异验证 4 条: `_BLOCK_GAP` 退回 4、改成 12、`_PANEL_MIN_H` 退回 644 全红, `_SPARK_GAP` 退回 4
+由既有的跨面守卫 `test_the_spark_gap_matches_the_web_panel` 抓住。
+
+## 178. 续一百七十七：设置窗的"值列"有两条左缘 —— 六个 Entry 不声明 padx, 与两个名单 Text 错开 6px(布局)
+
+### 为什么是缺陷
+
+§173/§175 修的是"键名列 -> 值列"那 6px **有没有**; 这一处修的是另一件事: 值列自己是**一列**
+还是**两列**。
+
+`_settings_build` 里 `column=1` 上住着三种控件 —— 六个 `Entry`(闭包 `add_entry` 里那**一个**
+grid 调用, 服务六行)和两个名单 `Text`。§175 只给 Text 补了 `padx=(_CTL_GAP, 0)`, Entry 一个都
+没补, 于是真渲染实测值列左缘有两条:
+
+| 字体 | Entry 左缘 | Text 左缘 | 差 |
+|---|---|---|---|
+| 默认(`_FONT_UI`) | 110 | 116 | 6 |
+| 宽字体(Arial 16) | 195 | 201 | 6 |
+
+恒定差 6px, 不随字体变 —— 差的是 padx 的**有无**, 不是列宽。探针
+`.tmptest/rea/_probe_178e.py`(真建设置窗, 按 `grid_info()["column"] == 1` 筛控件)。
+
+为什么是缺陷而不是"紧凑":
+
+- **"值列"在用户眼里是一个东西**。六个数字格子和两个名单框是同一种输入位, 左边没对齐读起来
+  就是表单自己歪了, 而没有人说得清歪在哪、歪多少。
+- **§175 的注释当时写着"上面六个输入行看着没问题是因键名短(67~83px), 后面自然空
+  27~43px"** —— 那句话描述的是键名**字数**的巧合, 不是设计。哪天有人把"迁移阈值 %"改成
+  "迁移阈值(百分比, 0-100)", 这六行的键名一长, 同样的不声明立刻变成 0px 磨在一起, 与
+  §173/§175 同款。同一个 `column=1`、三种控件、两种结果, 靠的是键名长短, 这正是本轮要消灭的
+  东西。
+- **外部参照(反编译 AIDA64 Engineer 5.20 的二进制 DFM, 本轮重新量的全量直方图)**:
+  只量**真并排**(纵向重叠 >= 80% 的较矮者)的横向兄弟间隙, 47 个窗体 1734 例 —— 结构性数值是
+  **6px**(非标签 -> 非标签 62 例, 全量里仅次于贴附用的 0px; 按钮 -> 按钮清一色 6px, 样本
+  Button_SaveTree -> Button_SaveDSDT、Button_SaveTable -> Button_Find 等)。而一列多种控件的
+  地方在 AIDA64 里只有一条左缘, 没有任何一处同列控件互为错位。
+  (脚本 `.tmptest/rea/_deep_178f.py`; 纵向那份同时复扫了一遍, 15px(203)与 7px(191)仍是
+  全程序最高的两个结构性数值, 与 §176/§177 的结论一致。)
+
+### 取值: 为什么是 6(不争论)
+
+6 就是 §162 立的 `_CTL_GAP`, 与两个名单 Text、筛选栏四项、详情窗三个按钮、详情窗键名列 ->
+值列同一把尺。这条守卫只钉"一条左缘", 不重新选数 —— 重新选数是 §162 那一轮的事。
+
+### 改动
+
+- gpu_tray.py `_settings_build` -> `add_entry`: Entry 的 grid 补 `padx=(_CTL_GAP, 0)`, 注释
+  写清改前是两条左缘(默认 110/116、宽字体 195/201)、为什么 §175 那条"键名短所以看不出问题"
+  是巧合不是设计、属主规矩不变(pad 只长在值列自己身上)。
+- gpu_tray.py 两处名单段的注释(t_games / t_excl 上方那两段一字不差的复本)补记 §178, 并把
+  AIDA64 参照从"按钮 6 / 标签 5"换成本轮真并排直方图的原文(6px 62 例)。
+- tests `SettingsListKeyValueGap`:
+  - 静态那条从"恰好两个 padx, 都长在两个名单 Text 上"改成"值列每个控件都声明"
+    (期望 `["e", "t_excl", "t_games"]`, 比集合不比顺序 —— `ast.walk` 是广度优先, 闭包里那个
+    grid 比两个 Text 的深一层, 出来顺序是 t_games/t_excl/e)。那条契约本身从前就是缺陷的一半:
+    它钉的正是"只有 Text 声明"。
+  - 真渲染那条里输入行的断言从 `assertGreaterEqual(gap, _CTL_GAP)` 加强成
+    `assertEqual(b.winfo_x(), col0 + _CTL_GAP)` —— 从前只敢问"没磨在一起", 因为那 6px 是键名
+    短凑出来的; 现在输入行也声明, 左缘必须与两个名单 Text 落在同一条线上。
+  - `test_both_dialogs_declare_the_same_gap` 里设置窗的期望 padx 数 2 -> 3(同一个 grid 调用
+    服务六行, 属主仍是一处)。
+- tests 新增 `SettingsValueColumnHasOneLeftEdge` 3 条(见下)。
+
+### 守卫怎么写的
+
+新类 `SettingsValueColumnHasOneLeftEdge` 3 条, 三层:
+
+1. **静态**(`test_every_value_column_grid_declares_the_padx`): ast 抠 `_settings_build` 里所有
+   `column=1` 的 grid 调用, 每一个都必须带 `padx=(_CTL_GAP, 0)`。少一个就是有一类控件(从前是
+   六个 Entry)不声明, 值列当场裂成两条左缘。顺带钉属主清单仍是
+   `["e", "t_excl", "t_games"]`。
+2. **真渲染**(`test_the_value_column_has_exactly_one_left_edge`): 值列所有控件的 `winfo_x()`
+   去重后必须只剩一个值, 且正好等于键名列宽 + `_CTL_GAP`; 值列控件数 >= 8(6 Entry + 2 Text);
+   窗宽仍是 460(不许靠改窗宽腾这 6px)。
+3. **漂移**(`test_one_left_edge_survives_a_wider_font`): `_FONT_UI` 换 16 号 Arial 重建, 仍只剩
+   一个值, 且仍等于宽字体下的键名列宽 + `_CTL_GAP` —— 证明对齐来自常量, 不来自"当前键名列有
+   多宽"。
+
+与 `SettingsListKeyValueGap` 的分工: 那类问的是"键名列 -> 值列那 6px 在不在、等不等于常量",
+这一类只问"值列是不是一列"。§175 那条静态契约(恰好两个 padx)本轮一并改掉, 否则它会把本轮
+的修复当成违规。
+
+### 验证结果
+
+- 新类 3 条 OK; `SettingsListKeyValueGap` 5 条 / `SettingsWindowFitsItsOwnFrame` 4 条 /
+  `SettingsBlockGapBeatsRowGap` 3 条一起跑 OK。
+- 全量两种跑法: `python -X utf8 -B tests/test_gpu_monitor.py` `Ran 721 tests ... OK`
+  (48.5s)、`python -X utf8 -B -m unittest discover -s tests` `Ran 721 tests ... OK`
+  (45.3s)。基线 718, +3。
+- 跑完整套前后 6 个数据/日志文件逐字节不变(`config.json` 不存在, 其余 6 个 md5 相同),
+  脚本 `_state_178.py`。
+- 行宽复检: 新增行全部 <= 79; gpu_tray.py 6 处 / gpu_monitor.py 16 处 /
+  tests 11 处超宽, 与基线(7/14/3)的差全在 §176/§177 两轮已落盘的改动里, 本轮零新增。
+
+### 变异验证(3 条, 全红)
+
+- M1 去掉 Entry 的 `padx=(_CTL_GAP, 0)`(回到 §178 前) -> **6 条红**: 新类三条(静态 / 真渲染 /
+  漂移)+ `test_the_list_rows_measure_the_gap_in_a_real_window` +
+  `test_every_value_column_widget_declares_the_gap` + `test_both_dialogs_declare_the_same_gap`。
+- M2 把 `_CTL_GAP` 写成字面量 6 -> **3 条红**, 全是静态层(两个 padx 属主测试 +
+  `test_both_dialogs_declare_the_same_gap`)。几何上量不到 —— 6 == 6, 真渲染与漂移两条仍然绿。
+  **静态那层补的正是这个位**: 没有它, "按感觉调数"可以悄悄把常量换成字面量。
+- M3 把 padx 同时也长到键名列上(`padx=(0, _CTL_GAP)`, 两个属主) -> **2 条红**:
+  `test_both_dialogs_declare_the_same_gap` + `test_every_value_column_widget_declares_the_gap`。
+  新类那条静态只扫 `column=1`, 所以不响 —— 属主规矩归 §175 那类所有, 分工干净。
+- 基线(未变异的临时副本)8 条全绿。子进程 `-B` + `PYTHONDONTWRITEBYTECODE=1`, 每条变异后重新
+  拷一份干净树, 跑完删。脚本 `_mut_178.py`, 报告 `_mut_178.txt`。
+
+### 踩过的坑
+
+- **`ast.walk` 是广度优先, 静态断言别比顺序**: 第一版期望 `["e", "t_games", "t_excl"]`
+  (源码顺序), 实测出来是 `['t_games', 't_excl', 'e']` —— `add_entry` 是闭包, 它的 grid 调用在
+  AST 里比两个名单 Text 的 grid 深一层。改成 `sorted()` 比集合才对。
+- **unittest 的结果走 stderr 不走 stdout**: 变异脚本第一版只读 `p.stdout`, 8 条全绿的基线也
+  打出一片空白, 看着像"一条断言都没跑"。读 `stdout + stderr` 才有 `Ran / OK / FAILED`。
+
+### 顺带发现(未改, 记档)
+
+1. **HANDOFF 缺 §177 一节**: §177 轮(面板 `_BLOCK_GAP` 4 -> 16)只落了代码/测试/README,
+   HANDOFF 里没有 `## 177`。本节之前按 README、git 与源码补了一节(开头已注明是补记), 数据以
+   README 与 §0 快照为准。**§0 快照里"测试 718 条"那句在本轮之后是旧的**, 以 721 为准。
+2. **AIDA64 的横向间隙全量直方图里, 0px 有 115 例, 比 6px(72)还多**。逐条看样本, 几乎全是
+   `TEdit -> TUpDown`(微调按钮贴在输入框右边, 41 例)与 `TComboBox -> TLabel` 这类**有意贴附**,
+   不是"没声明"。这与 §162 立的"每个间隙只许一个属主"不冲突: 贴附是设计, 不声明是疏漏。
+   要引用这份直方图当参照时, 必须把 0px 排除掉再谈结构性数值, 否则会得出"0px 才是最高频"的
+   反结论。
+3. **§176 顺带发现 3(现网 exe 不含 §176)依旧有效**, 且现在也不含 §177/§178; 同步需
+   build -> 字节码级验包 -> 换活实例, 需用户同意。
+4. §176 的改动(gpu_tray.py `_FORM_BLOCK_GAP` + 窗高 + 注释、tests 新类 3 条)与 §177 的改动
+   (`_BLOCK_GAP` 4 -> 16、`_PANEL_MIN_H` 644 -> 680)连同本轮 §178 的改动都**已写盘未
+   commit/push**, 等放行。
+
+### 用户决策待办
+
+1. §176 + §177 + §178 三轮的改动已写盘未 commit/push, 等放行。
+2. 现网同步(见顺带发现 3)。
+3. §178 只钉了"值列一条左缘"。同一列还有第三种控件的一天: 设置窗以后若往 `column=1` 加
+   ComboBox / SpinBox, 静态那条会当场要求它也声明 padx —— 这是设计意图, 不是妨碍。
+
+## 179. 续一百七十八：AI 进程保护从"认名字"升级成四层识别(准确性/可用性)
+
+*(补记: 本轮只落了代码/测试/README, HANDOFF 这一节当时漏写; 按 README、git 与源码补记,
+数据以 README 那条与 §0 快照为准。)*
+
+### 为什么是缺陷
+
+`is_ai_protected` 从前只拿进程名比 `DEFAULT_AI_PROCESSES` + 用户 `ai_processes`, 而名单里
+`comfyui.exe` / `vllm.exe` / `sglang.exe` / `webui.exe` 这几个名字**永远匹配不上** ——
+ComfyUI 便携版官方文档写明它 "integrated an independent Python (python_embeded)",
+启动命令是 `.\python_embeded\python.exe -s ComfyUI\main.py`; vLLM(`python -m vllm...`)、
+SGLang(`python -m sglang...`)、text-generation-webui(`python webui.py`)同样跑在
+`python.exe` 底下 —— 进程名全是 python.exe。本机实测(11-09): 在跑的 AI 负载只有
+`ollama.exe serve` 命中名单, 而同一台机器上另有一个 `python.exe -m pytest` ——
+进程名相同、干的活正好相反。认名字这条判据在最常见的本地推理负载上整体失灵, 而失灵是
+静默的: 该被跳过自动重启的进程被重启, 已加载的模型丢在机器里。
+
+### 改动
+
+- gpu_monitor.py 新增 `AI_PATH_MARKERS`(15 个特征词)。只收"在本机持有模型的推理服务",
+  不收纯 API 客户端(Cherry Studio / Chatbox 之类): 那些进程重启不丢任何模型, 保护它们
+  只会让 auto_restart 平白少生效一片。用户自己的推理服务照 `ai_processes` 补进程名,
+  或靠第 3/4 层兜底。
+- 真判断搬进 `ai_protect_reason()`, 返回中文理由或 None; `is_ai_protected()` 改成薄包装
+  (`... is not None`), 两个可选参数不给时行为与从前完全一致。四层从精确到兜底:
+  ① 进程名在 `DEFAULT_AI_PROCESSES` 或用户 `ai_processes` 里;
+  ② 可执行文件的某个**路径分量**带 `AI_PATH_MARKERS` 特征开头 —— 便携版解压出来的目录名
+     带后缀(`ComfyUI_windows_portable` / `ComfyUI_windows_portable_amd` / `KoboldCpp-1.79`),
+     按分量比前缀全命中, 整条路径比子串会漏; 特征词本身够特异, "jan" 这种没收进来;
+  ③ 独显专用显存达到 `protect_vram_mb`;
+  ④ **解释器宿主**(`python*.exe`)持有的 GPU 显存(专用 + 核显)达到阈值 —— 迁移路径上进程
+     还待在核显, 第 3 层那个独显数字恒为 0, 第 4 层补的正是这个位。
+  第 4 层只对 `python*.exe` 生效是有意的收窄: 游戏、浏览器、Electron 界面从来不是
+  python.exe, 收窄之后"大块显存"这条兜底就碰不到它们, 迁移功能本身不受影响; 而一个
+  python 进程握着阈值以上的 GPU 显存, 基本就是在跑模型或别的长时 GPU 计算 ——
+  重启它丢的是真东西。
+- 迁移调用点(`:3125`)递 `full` 与 `mem_by_pid.get(pid, 0)`, 省电调用点
+  (`advance_power_saver` 里那处)递 `full` 与核显表 —— 两个调用点都递满 6 个位置参数,
+  ast 静态守卫钉着(见下)。
+- 命中哪一层会念在日志里(`AI 显存保护(独显专用显存 3072 MiB): 跳过 python.exe 的
+  自动重启`), 用户知道该去改哪个名单。
+- 顺手修一个负数阈值 bug: `if limit` -> `if limit > 0`。负数让 `dedicated >= 负数`
+  恒成立, 一路把每个进程都判成保护, auto_restart 被静默关掉。
+
+### 守卫怎么写的
+
+新类 `AiProtectionSeesInterpreterHosts` 13 条:
+
+1. `test_a_python_under_an_ai_install_dir_is_protected` —— 便携版真路径(带
+   `ComfyUI_windows_portable` 后缀那类)底下的 python 受保护;
+2. `test_a_python_outside_every_ai_dir_is_not_protected` —— 反方向: `C:/Python314/
+   python.exe`(本机真在跑 pytest 的那个)与用户项目目录里的 python 不受保护,
+   "认类"不许扩成"认编程语言";
+3. `test_the_path_match_ignores_case` —— 大小写不影响路径分量匹配;
+4. `test_the_markers_are_specific_enough` —— marker 特异性(短词不收);
+5. `test_an_interpreter_host_holding_a_model_is_protected` —— 解释器宿主 + 显存;
+6. `test_an_interpreter_host_without_real_memory_is_not_protected` —— 空闲 python
+   没显存, 不保护;
+7. `test_every_python_flavour_counts` —— python.exe / pythonw.exe / python3.13.exe
+   各变体都算宿主;
+8. `test_the_interpreter_rule_does_not_swallow_games_or_browsers` —— 游戏/浏览器
+   (大显存但非 python)不被吞;
+9. `test_zero_threshold_switches_the_interpreter_rule_off_too` —— 阈值 0 关闭第 3/4 层;
+10. `test_a_negative_threshold_is_not_honoured_either` —— 负数同样关闭(本轮 bug);
+11. `test_the_boolean_and_the_reason_never_disagree` —— 布尔与理由同源;
+12. `test_the_reason_names_the_layer_that_fired` —— 理由说清命中层;
+13. `test_every_call_site_hands_over_the_new_signals` —— ast 静态: 每个调用点必须递
+    ≥6 个位置参数。
+
+### 验证结果
+
+- 新类 13 条与 §180 那 1 条一起隔离单跑 `Ran 14 tests ... OK`(0.1s)。
+- 全量两种跑法本轮各复跑: `python -X utf8 -B tests/test_gpu_monitor.py`
+  `Ran 721 tests ... OK`(51.6s)、`python -X utf8 -B -m unittest discover -s tests`
+  `Ran 721 tests ... OK`(50.8s), **首跑零漂白**(1410 那条flake 已修, 见 §180;
+  此前 §171/§172/§175 每轮首跑都要撞一次)。
+- 跑完整套后 7 个数据/日志文件逐字节不变(脚本 `.tmptest/rea/_state_179.py`,
+  与 §178 同一套口径): `config.json` / `panel_ui.json` / `report.csv` /
+  `gpu_monitor.log` / `tray_debug.log` / `gpu_monitor_crash.log` /
+  `gpu_monitor_error.log`。
+- 长行复检: 本轮新增行零超宽(16 / 6 / 11 与基线一致)。
+
+### 变异验证(7 条, 全红)
+
+G1 删整个特征表 / G2 只删 comfyui / G3 第 4 层不收窄到 `python*.exe` /
+G4 `limit > 0` 退回真值 / G5 迁移调用点退回三参 / G6 省电调用点不传核显表 /
+G7 布尔与理由不同源。
+
+### 踩过的坑
+
+- PowerShell 的 `python -c` 吃多行脚本与双引号, 探针一律落成 `.tmptest/rea/_*.py`
+  再跑(与 §173/§175/§178 同一条约)。本轮源码替换走 `_patch_ai_1..4.py` +
+  `_ai_subs.json` 的"区域精确替换 + 自检语法": 每处替换前断言旧文本在全文件唯一,
+  区域替换断言旧区域尾巴是 `return False`(防上下文漂移后改错地方)。
+
+### 顺带发现(未改, 记档)
+
+1. 全套测试间歇撞 WinError 1410 的真因本轮定位并修掉, 独立成节, 见 §180。
+2. 第 4 层故意只收 `python*.exe`: 哪天用户报"我的 node/ollama 服务被重启了",
+   该改的是收窄条件, 不是把阈值调大 —— 调大会把游戏和浏览器一起吞了。
+
+### 用户决策待办
+
+1. §179 与 §176/§177/§178/§180 的改动已写盘未 commit/push, 等放行(合并 §178 待办 1)。
+
+## 180. 续一百七十九：pystray 托盘窗口类泄漏, 偶发把全套测试染成 WinError 1410(测试基建/稳定性)
+
+*(补记: 本轮只落了代码/测试/README, HANDOFF 这一节当时漏写; 按 README、git 与源码补记,
+数据以 README 那条与 §0 快照为准。)*
+
+### 为什么是缺陷
+
+pystray 的 `_win32.Icon.__init__` 注册窗口类, 类名是
+`'%s%dSystemTrayIcon' % (name, id(self))`, 而反注册只发生在 mainloop 收尾的 finally 里 ——
+测试里 `TrayApp` 建完从来不 run 这个图标, 注册就一直漏在进程里: 之后哪个新 Icon 的
+`id(self)` 复用了同一个地址, `RegisterClassEx` 立刻撞 WinError 1410
+(ERROR_CLASS_ALREADY_EXISTS, "类已存在")。它报在 `setUp` 里, 看着像随机故障 ——
+§171/§172/§175 三轮都把它当"已知漂白, 复跑即绿"记在踩过的坑里, 而它是确定性可复现的:
+拿脚本连建 300 个 TrayApp、中间穿插正常分配, 第 9 个就炸(`.tmptest/rea/_repro_1410b.py`;
+修复后同脚本 300 轮全过, `_repro_1410c.py`)。一个每轮都要靠"复跑"蒙混的 flake,
+会把真正的新故障一起掩埋。
+
+### 改动
+
+- tests 新增 `release_tray_icon_class(app)`(`:4592`): 建完 TrayApp 立刻把托盘窗口类
+  反注册掉(UnregisterClassW), 不等 mainloop。
+- 三处构造点全部接上: `TraySingleInterpreter.setUp`(`:4709`) /
+  `TrayPanelKeyboardNav.setUp`(`:5744`) / 活动序那条(`:7936`)。
+- 新类 `TrayIconClassIsReleased` 1 条, 拿 `GetClassInfoExW` 直接查窗口类还在不在 ——
+  比"跑全套看红不红"确定性高得多。
+
+### 守卫怎么写的
+
+`test_the_class_is_gone_right_after_construction` 两条断言:
+
+1. 前提: TrayApp 建完类确实注册着(证明测试量的东西存在, 不是空断言);
+2. `release_tray_icon_class(app)` 之后类必须已经不在 user32 里。
+
+### 验证结果
+
+- 隔离单跑 `Ran 14 tests ... OK`(与 §179 的 13 条一起)。
+- 全量两种跑法 `Ran 721 tests ... OK`, **首跑零漂白** —— 这是 §171 以来第一轮
+  不再需要"复跑即绿"借口的全量。
+- 7 个数据/日志文件逐字节不变(同 §179, `_state_179.py`)。
+
+### 踩过的坑
+
+- `GetClassInfoExW` 的 hInstance 参数是 `c_void_p` 不是 `c_int`: 不设 argtypes 时
+  ctypes 按 32 位传句柄, x64 上高位被砍, 查询永远失败 —— 守卫会变成"永远绿"的
+  空断言。设了 argtypes 才拿到真结果(类在/不在两种情况都验过)。
+
+### 顺带发现(未改, 记档)
+
+1. 这个 flake 与 §111(倒序跑红)、§113(测试写穿现网日志)是同一类病: 测试基建的
+   环境污染。§111/§113 修的是文件与全局状态, 本轮修的是 user32 的类表。
+   以后新增"建 TrayApp"的用例, 一律走 `release_tray_icon_class`。
+
+### 用户决策待办
+
+1. §176 + §177 + §178 + §179 + §180 五轮的改动已写盘未 commit/push, 等放行。
+2. 现网同步(见 §178 顺带发现 3): 现网 exe 是 11-09 04:09 的构建, 不含 §176-§180;
+   同步需 build -> 字节码级验包 -> 换活实例, 需用户同意。
+3. §178 只钉了"值列一条左缘"。同一列还有第三种控件的一天: 设置窗以后若往 `column=1`
+   加 ComboBox / SpinBox, 静态那条会当场要求它也声明 padx —— 这是设计意图, 不是妨碍。
+
+## 181. 续一百八十：面板周期刷新加"值变才重绘"闸 —— _panel_render_due(性能/AIDA64 反编译启示)
+
+### 为什么是缺陷
+
+面板开着时 `refresh()` 每秒跑一次, 而 `_refresh_tree` 是整树 delete + 逐行 insert 的
+O(N) 重画。采样周期默认 5s(`interval_seconds`), 于一秒一刷里 4/5 是同一份快照的重复
+重画: 白占 tkinter 主线程, 面板开着的时候和用户的点击/滚动/选中抢帧, 12 行的表不算大
+但整树重画无谓地把交互延迟垫高。AIDA64 反编译(§176 顺带发现 2 那条线)见闻里它的托盘
+图标/传感器都按值变化才更新, "值没变就不重绘"是那类常驻监控程序的通例, 本轮释照做:
+只有快照版本(`snap_ts`)、排列或筛选真的变了才重画, 否则只续约 `after`。
+
+### 改动
+
+- `gpu_tray.py` 新增 `_panel_render_due()`: 签名取 `(snap_ts, sort col, sort desc,
+  filter_text)`, 与 `_last_render_sig` 相比, 没变返回 False(跳过整树重画), 变了记下
+  新签名返回 True。读 `snap_ts` 过 `self.lock` —— 采样线程写、UI 线程读, 与
+  `_refresh_tree` 同一把锁。
+- `_panel_build` 里的 `refresh()`: `if self._panel_render_due():` 包住
+  `_safe_refresh(...)`; `after` 照续, 链不断。闸只挥周期空刷, 不挥交互 ——
+  事件驱动的改动(排序/筛选/新样本)都会改签名从而放行。
+- `__init__` 补 `self._last_render_sig = None`(与 `self.lock` 并列, 生产路径两个都由
+  `__init__` 给)。
+- `tests/test_gpu_monitor.py` 新类 `TrayPanelRenderGate` 8 条。
+- **测试账修复(本轮落地时发现的 §181 自身回归)**: `_panel_render_due` 要
+  `self.lock` 与 `self._last_render_sig`, 而两个绕开 `__init__` 的
+  `object.__new__(gt.TrayApp)` helper 都没声明 —— `PanelBlockGapBeatsTableRowGap._build`
+  (§177)与 `TrayPanelBuildFailureIsLoud.setUp` 各补一份。不补的后果见踩过的坑。
+
+### 守卫怎么写的
+
+- 8 条: 首帧必须重画 / 同一份快照第二次周期刷新必须跳过 / 新样本(`snap_ts` 变)放行 /
+  换排列列放行 / 反向排序放行 / 改筛选放行 / 空快照首帧画一次且仍空跳过 / 来数据放行。
+- 静态一条 `test_gate_wired_into_periodic_refresh`: 源码里必须有
+  `if self._panel_render_due():`, 且 `self._safe_refresh(` 全仓只有一个调用点(在闸
+  内) —— 防"闸是个没人调的死方法"和"闸外又开一条旁路Refresh"。
+
+### 验证结果
+
+- 隔离单跑 `Ran 8 tests ... OK`(0.0s)。
+- 全量两种跑法: `python -X utf8 -B tests/test_gpu_monitor.py` `Ran 729 tests ... OK`
+  (47.8s)、`python -X utf8 -B -m unittest discover -s tests` `Ran 729 tests ... OK`
+  (49.3s)。修复前同一棵树是 `FAILED (failures=3, errors=2)`, 见踩过的坑。
+
+### 变异验证(4 条, 全红)
+
+| 变异 | 红灯 |
+| --- | --- |
+| 闸恒 True(退化成每秒整树重画) | `test_same_snapshot_second_tick_skipped` / `test_none_then_data` |
+| 闸恒 False(面板再也不刷新) | 7 条(除静态那条全红) |
+| 周期链里少了这道闸 | `test_gate_wired_into_periodic_refresh` |
+| 签名里漏了 `filter_text` | `test_filter_change_redraws` |
+
+### 踩过的坑
+
+- **本轮最大的坑是 §181 代码落盘后没有接着跑全量**: `_panel_render_due` 一进
+  `refresh()`, 两个 `object.__new__` helper 当场 AttributeError, 面板建到一半被总
+  except 拆掉。直接红 3 条(`PanelBlockGapBeatsTableRowGap` 2 error +
+  `TrayPanelBuildFailureIsLoud.test_a_healthy_build_never_destroys_its_own_window`
+  1 failure: 健康构建的窗口被 destroy, 正是这条保险丝该抓的), 外加
+  `SuiteRunsInReverseOrder` 元测试 1 条。
+- **一条间接红更阴**: `PanelBlockGapBeatsTableRowGap._build` 失败在
+  `winfo_children()` 那行, 前面建的真 `Tk()` 根窗口没有任何 cleanup 收, 泄漏在
+  进程里; 后面 `PanelHtmlProcessNames` 再建一个 Tk, 字体数据库被带偏, 轮到
+  `TrayPanelStatusFloor.test_the_window_floor_covers_the_table_header` 实测表头
+  25px(应 32)。修掉 lock 账之后这条自己就好了 —— 全量绿才是绿, 单跑全绿不算。
+- 定位手法记档: 155 个测试类按 `dir(module)` 字母序跑, 拿"类区间 + 目标类"二分,
+  四轮缩到 55-60; 污染要两个类合谋才现形(单 57-59 不红、单 59-60 不红), 所以二分
+  不能停在"缩小到一类", 要缩到"去掉一类就不红"。
+- 教训(与 §180 同类): 新代码只要碰 `self.` 的新属性, 先 `rg "object.__new__"` 过
+  一遍 helper —— 本仓测试里有 13 处手工声明 `app.lock` 的先例, 就是这个契约的存量。
+
+### 顺带发现(未改, 记档)
+
+- `_safe_refresh` 目前只有周期链一个调用点; 以后若给事件(双击行/置顶按钮)单开
+  Refresh, 静态那条的"一个调用点"断言会当场要求重新表态 —— 那是设计意图。
+- 现网 exe(11-09 04:09 构建)不含 §176-§181, 同步见用户决策待办 2。
+
+### 用户决策待办
+
+1. §176 + §177 + §178 + §179 + §180 + §181 六节外加本轮的测试账修复已写盘未
+   commit/push, 等放行。
+2. 现网同步(见 §178 顺带发现 3): 现网 exe 不含 §176-§181; 同步需 build -> 字节码
+   级验包 -> 换活实例, 需用户同意。
+3. §178 只钉了"值列一条左缘"。同一列还有第三种控件的一天: 设置窗以后若往
+   `column=1` 加 ComboBox / SpinBox, 静态那条会当场要求它也声明 padx —— 这是设计
+   意图, 不是妨碍。

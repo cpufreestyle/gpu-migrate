@@ -124,8 +124,8 @@ python gpu_monitor.py --unset-all
 | `interval_seconds` | 5 | 采样周期(采样窗口与周期等长, 不存在看不见的盲区); 手改超过 60s 会夹到 60, 防一个手误把监控/`--list` 挂死 ; 设置窗“采样周期 秒”格可改, 保存后下一轮生效 |
 | `auto_restart` | false | 迁移后自动结束并重启该进程（慎用，进程会中断） |
 | `auto_restart_processes` | [] | 只对这些进程自动重启；留空 = 对所有超标进程生效 |
-| `ai_processes` | [] | AI 名单补充: 这些进程永不省电切回/自动重启（重启会丢掉已加载的模型） |
-| `protect_vram_mb` | 2048 | 独显专用显存 ≥ 该值的进程按 AI 保护（0 = 关闭），兜底覆盖名单外的推理服务 |
+| `ai_processes` | [] | AI 名单补充(四层识别的第 1 层): 这些进程永不省电切回/自动重启（重启会丢掉已加载的模型）；第 2 层认安装目录、第 3/4 层认显存，见 `protect_vram_mb` |
+| `protect_vram_mb` | 2048 | 显存兜底(第 3/4 层): 进程独显专用显存、或 python*.exe 持有的 GPU 显存(专用+共享) ≥ 该值就按 AI 保护（0 = 关闭）；第 4 层故意只收窄到 python*.exe，游戏/浏览器再大的显存也不误伤 |
 | `confirm_mode` | false | 迁移前弹窗询问；选择“忽略”的进程会记住，不再询问 |
 | `ignore_processes` | [] | 确认模式下被忽略的进程名（也可手动编辑） |
 | `exclude_processes` | [] | 按进程名排除，如 `["chrome.exe"]` |
@@ -277,7 +277,7 @@ python gpu_monitor.py --unset-all
   `test_the_table_row_box_matches_the_web_panel`, 两边都从现行来源算(托盘 `_ROW_H`、
   Web 从样式表正则抠), 并断言 `th,td` 规则唯一。浏览器实测 td 29.85 -> 31.59
   (offsetHeight 30 -> 32)、th 30 -> 31; 变异验证 7 条全红, 包括"把守卫退化成 §153 旧写法
-  (写死 28)"那条。顺手纠正 `_ROW_H` 注释: "linespace 17px"量的是 TkDefaultFont(Microsoft
+  (写死 28)"那条。顺手纠正 `_ROW_H` 注释: "linespace 17px"量的是 TkDefaultFont(Microsoft YaHei UI), 表格字体(Segoe UI Variable Text 9)实测 16, 留白数是 6/8 不是 5.5/7.5。
 - **Web 面板的 <head> 修好了: viewport 与 color-scheme 两条 meta 以前粘成了一团**:
   f443408(加深色模式)把 color-scheme 那条 meta 插进了 viewport 字符串的中间, 浏览器按标签解析,
   读到的是 `<meta name='viewport' content='width=device-width,<meta name='color-scheme' content='light dark'>initial-scale=1'>` ——
@@ -337,7 +337,105 @@ python gpu_monitor.py --unset-all
   每个 grid padx 都来自 _CTL_GAP。变异验证 6 条全红(M5/M6 几何上量不到, 静态那层补的位)。外加 §173 漏账的修复:
   §172 的 `DetailWrapWidth` 算式没减 §173 补的 6px(拿列宽当可用宽度 364/355, 真值 358/349, 盲区 (349, 352]) ——
   现在两条算式都减 `_CTL_GAP`, 对照实验量出盲区: 352 + 旧算式绿、352 + 新算式红。
-  YaHei UI), 表格字体(Segoe UI Variable Text 9)实测 16, 留白数是 6/8 不是 5.5/7.5。
+- **设置窗的段落边界比行边界还窄, 区块间隙 4 -> 16**: `_FORM_BLOCK_GAP` 从前是 4px, 而表单自己的
+  视觉行间隙 —— 行距 `_FORM_ROW_PITCH` 减控件自然高度(§155 把全部松弛都挪进了 ipady, 所以控件的框是
+  32px 一个挨一个的, 看得见的间隙在框里头) —— 实测 Entry 12 / Label 10 / Checkbutton 6。段落边界 4px 比最窄的
+  行边界 6px 还窄: 真渲染量出来「最后一个勾选底边 -> 游戏名单顶边」4px, 而相邻两个勾选之间是 6px ——
+  用户读到的是一个稍微松了一点的勾选行, 没有人会把它当成一个新段落的开始。外部参照是反编译 AIDA64
+  Engineer 5.20 的二进制 DFM(UPX 脱壳后 Preferences 一个窗体 1435 个对象): 行间隙 7px 是全程序最高频的
+  结构性数值(429 例), 段落间隙 15px(107 例), 15/28 ≈ 0.54, 约半个行距。我们的行间隙本来就比它松(12 vs 7),
+  所以段落间隙取同一个绝对量级、不取同一个比例(2.14x 会给 26px, 460 宽的这个窗装不下)。现在 `_FORM_BLOCK_GAP`
+  取行距的一半(16), 窗高 460x520 -> 460x536: 内容长 24px、窗高只长 16px, 用掉的正是 §169 一直落在保存键
+  下方闲着的那 28px 松弛(键下方从 28px 收到 20px, 保存键仍满血 28px)。同时与 `_BLOCK_GAP` 脱钩 —— 两个数量
+  的活不一样: 表单一个区块是几行 32px 的 grid 行、行间一个像素的内部 padding 都没有, 段落间隙是唯一的分界物;
+  面板一个区块是 28~390px 高的横带。而且「两边一个数」这个约定从来就没成立过: Web 面板的区块间隙是
+  `.cards{margin:10px 0 12px}` / `.sparkwrap{margin:0 0 10px}`, 量出来 10~12px。新类
+  `SettingsBlockGapBeatsRowGap` 3 条: 静态钉 `_FORM_BLOCK_GAP * 2 == _FORM_ROW_PITCH`(比例是正文, 写成 15/17
+  都是按感觉调数)且大于 `_BLOCK_GAP`; 真渲染量两处区块间隙都正好是 `_FORM_BLOCK_GAP`、且严格大于表单里每一个
+  视觉行间隙(逐行量 ipady 之和, 不跟写死的数比); 漂移测试换 16 号 Arial 重建, 段落间隙仍赢过行间隙。
+  变异验证 6 条全红(G1 退回 4、G2 取 15、G3 取 20 超预算压扁保存键、G4 窗高退回 520、G5/G6 各删一处
+  `rowconfigure(minsize=)`)。
+- **面板的区块间隙 4 -> 16, 与表格自己的视觉行间隙看齐(§177)**: `_BLOCK_GAP` 从前是 4px, 而表格的
+  视觉行间隙是 16px —— 行高 `_ROW_H=32`, 表格字体(`_FONT_UI`, Segoe UI Variable Text 9)的 linespace
+  实测 16px, 相邻两行**文字**之间空着 16px。区块边界只有 4px, 是最窄那条行边界的四分之一: 用户把
+  「表格 -> 趋势图」读成表格又多了几行, 没有人会把它当成另一个区块的开始, 而那里确实换了控件类型。
+  外部参照是同一份反编译 AIDA64 Engineer 5.20 的二进制 DFM, 但这次扫**全程序**(脱壳后 63 个窗体、
+  1986 个对象, 兄弟间隙全量统计): 窗体根级子控件之间的区块间隙与**同一窗体自己的行间隙相等**
+  (比例 1.0)是常态 —— Form_CPUID 9/9、Form_CacheMemBenchSuite 25/25、Form_GPGPUBenchSuite 15/15、
+  Form_DRAMTimings 15/15; 唯一成规模的「内容区 -> 按钮行」形态(`TTabControl` -> `TButton`)量到 6px,
+  而那个程序的行间隙是 7px。AIDA64 没有任何一处区块间隙小于自己的行间隙, 我们改前是 4/16 = 0.25,
+  是全程序最难看的一处。取值 16 = 行距的一半, 与 `_FORM_BLOCK_GAP` 同一个数 —— 不是不巧相等, 是
+  同一把尺的同一个输出: `_ROW_H` 与 `_FORM_ROW_PITCH` 都是 32。代价是纵向预算: 三处区块间隙各涨
+  12px, 账面 640 -> 676, `_PANEL_MIN_H` 644 -> 680(趋势图与状态区之间那一处仍是 `_SPARK_GAP=10`,
+  对着 Web 面板的 `.sparkwrap{margin:0 0 10px}`)。新类 `PanelBlockGapBeatsTableRowGap` 3 条: 静态钉
+  `_BLOCK_GAP * 2 == _ROW_H` 且与 `_FORM_BLOCK_GAP` 同数; 真渲染用 `pack_slaves()` 按 pack 顺序量三处
+  区块间隙, 与从活 Tk 里量出来的字体 linespace 算出的视觉行间隙逐处比; 第三条在真渲染下钉趋势图 46px
+  与状态区 52px 都满血。变异验证 4 条: `_BLOCK_GAP` 退回 4、改成 12、`_PANEL_MIN_H` 退回 644 全红,
+  `_SPARK_GAP` 退回 4 由既有的跨面守卫 `test_the_spark_gap_matches_the_web_panel` 抓住。
+- **设置窗的"值列"从前有两条左缘, 六个输入框比两个名单框凸出 6px**: §173/§175 修的是
+  "键名列 -> 值列"那 6px **有没有**, 这一处修的是另一件事 —— 值列自己是**一列**还是**两列**。
+  `_settings_build` 里 `column=1` 上住着三种控件: 六个 `Entry`(闭包 `add_entry` 里那**一个** grid
+  调用, 服务六行)和两个名单 `Text`。§175 只给 Text 补了 `padx=(_CTL_GAP, 0)`, Entry 一个都没补,
+  于是真渲染实测值列左缘有两条: 默认字体下 Entry 110 / Text 116, 宽字体(Arial 16)下 195 / 201
+  —— 恒定差 6px, 不随字体变(差的是 padx 的有无, 不是列宽)。§175 的注释当时写着"上面六个输入行
+  看着没问题是因键名短(67~83px), 后面自然空 27~43px", 那句话描述的是键名**字数**的巧合: 哪天把
+  "迁移阈值 %"改长, 同样的不声明立刻变成 0px 磨在一起(与 §173/§175 同款)。外部参照是同一份反编译
+  AIDA64 Engineer 5.20 的二进制 DFM, 这次只量**真并排**(纵向重叠 >= 80%)的横向兄弟间隙, 47 个窗体
+  1734 例: 结构性数值是 **6px**(非标签 -> 非标签 62 例, 全量里仅次于贴附用的 0px; 按钮 -> 按钮清一色
+  6px), 而一列多种控件的地方在 AIDA64 里只有一条左缘, 没有任何一处同列控件互为错位。(引用这份直方图
+  要先把 0px 排掉: 那 115 例几乎全是 `TEdit` -> `TUpDown` 这类**有意**贴附, 不是疏漏。)现在
+  `add_entry` 的 grid 也补 `padx=(_CTL_GAP, 0)`, 值列只剩一条左缘(116), 窗宽 460x536 与表单请求
+  宽度一个像素没动。新类 `SettingsValueColumnHasOneLeftEdge` 3 条: 静态 ast 抠 `_settings_build` 里
+  所有 `column=1` 的 grid 调用, 每一个都必须带 `padx=(_CTL_GAP, 0)`; 真渲染把值列所有控件的
+  `winfo_x()` 去重, 必须只剩一个值且正好等于键名列宽 + `_CTL_GAP`; 宽字体重建仍只剩一个值(对齐来自
+  常量, 不来自"当前键名列有多宽")。§175 那个静态契约本身也跟着改: 从"恰好两个 padx 长在两个 Text 上"
+  改成"值列每个控件都声明", 输入行的真渲染断言从 `>=` 加强成等式。变异验证 3 条全红: 去掉 Entry 的
+  padx 有 6 条红(新类 3 条 + §175 类 3 条)、`_CTL_GAP` 写成字面量 6 有 3 条红(几何上量不到, 静态那层
+  补的位)、padx 同时长到键名列上有 2 条红(每个间隙只许一个属主)。
+- **AI 进程保护从"认名字"升级成四层识别**: 老实现只拿进程名比 `DEFAULT_AI_PROCESSES` + 用户
+  `ai_processes`, 而名单里 `comfyui.exe` / `vllm.exe` / `sglang.exe` / `webui.exe` 这几个名字**永远匹配不上** ——
+  ComfyUI 便携版官方文档(docs.comfy.org/installation/comfyui_portable_windows)写明它
+  "integrated an independent Python (python_embeded)", 启动命令是
+  `.\python_embeded\python.exe -s ComfyUI\main.py`; vLLM(`python -m vllm...`)、SGLang
+  (`python -m sglang...`)、text-generation-webui(`python webui.py`)同样跑在 `python.exe` 下 ——
+  进程名全是 python.exe。本机实测: 在跑的 AI 负载只有 `ollama.exe serve` 命中名单, 而同一台机器上另有
+  一个 `python.exe -m pytest` —— 进程名相同、干的活正好相反。现在 `is_ai_protected` 改成薄包装,
+  真判断在 `ai_protect_reason` 里, 四层从精确到兜底: ①进程名在名单里; ②可执行文件的某个
+  **路径分量**带 `AI_PATH_MARKERS` 特征开头(便携版解压出来的目录名带后缀
+  `ComfyUI_windows_portable` / `ComfyUI_windows_portable_amd` / `KoboldCpp-1.79`, 按分量比前缀全命中,
+  整条路径比子串会漏; 特征词本身够特异, "jan" 这种没收进来); ③独显专用显存达到 `protect_vram_mb`;
+  ④**解释器宿主**(`python*.exe`)持有的 GPU 显存达到阈值 —— 迁移路径上进程还待在核显,
+  第 3 层那个独显数字恒为 0, 第 4 层补的正是这个位。第 4 层只对 `python*.exe` 生效是有意的收窄:
+  游戏、浏览器、Electron 界面从来不是 python.exe, 收窄之后"大块显存"这条兜底碰不到它们,
+  迁移功能本身不受影响; 而一个 python 进程握着阈值以上的 GPU 显存, 基本就是在跑模型或别的长时
+  GPU 计算, 重启它丢的是真东西。命中哪一层会念在日志里(`AI 显存保护(独显专用显存 3072 MiB):
+  跳过 python.exe 的自动重启`), 用户知道该去改哪个名单。顺手修了一个负数阈值把每个进程都判成
+  保护的 bug(`if limit` -> `if limit > 0`)。新类 `AiProtectionSeesInterpreterHosts` 13 条:
+  安装目录真路径 6 条 / 反方向普通 python 3 条 / 大小写 / marker 特异性 / 解释器宿主 + 显存 /
+  各 python 变体 / **不吞游戏浏览器** / 阈值 0 与负数关闭 / 布尔与理由永不分歧 / 理由说清命中层 /
+  ast 静态守卫(每个调用点必须递 ≥6 个位置参数)。变异验证 7 条全红(G1 删整个特征表、G2 只删
+  comfyui、G3 第 4 层不收窄、G4 `limit > 0` 退回真值、G5 迁移调用点退回三参、G6 省电调用点
+  不传核显表、G7 布尔与理由不同源)。
+- **顺手修掉一个测试基建的 flake: pystray 托盘窗口类泄漏, 偶发撞 WinError 1410**:
+  pystray 的 `_win32.Icon.__init__` 注册窗口类, 类名是
+  `'%s%dSystemTrayIcon' % (name, id(self))`, 而反注册只发生在 mainloop 收尾的 finally 里 ——
+  测试里 `TrayApp` 建完从来不 run 这个图标, 注册就一直漏在进程里: 之后哪个新 Icon 的
+  `id(self)` 复用了同一个地址, `RegisterClassEx` 立刻撞 WinError 1410
+  (ERROR_CLASS_ALREADY_EXISTS, "类已存在"), 而且报在 `setUp` 里, 看着像随机故障。实测连建 300 个
+  TrayApp、中间穿插正常分配, 第 9 个就炸(脚本 `.tmptest/rea/_repro_1410b.py`) —— 上一轮交接时
+  它正在全套测试里间歇发作。现在三处构造点(`TraySingleInterpreter.setUp` /
+  `TrayPanelKeyboardNav.setUp` / 活动序那条)建完立刻反注册; 新类 `TrayIconClassIsReleased`
+  拿 `GetClassInfoExW` 直接查窗口类还在不在, 比"跑全套看红不红"确定性高得多。
+- **面板周期刷新加了一道"值变才重绘"的闸(§181, AIDA64 反编译启示)**: 面板开着时
+  `refresh()` 每秒跑一次, 而 `_refresh_tree` 是整树 delete + 逐行 insert 的 O(N) 重画 ——
+  采样周期默认 5s, 于一秒一刷里 4/5 是同一份快照的重复重画, 白占 tkinter 主线程, 和用户的
+  点击/滚动/选中抢帧。反编译 AIDA64 时见它的托盘图标/传感器都按值变化才更新, "值没变就不
+  重绘"是那类常驻监控程序的通例, 本轮释照做: `_panel_render_due()` 拿
+  `(snap_ts, 排序列, 排序方向, 筛选词)` 比签名, 没变就跳过整树重画、只续约 `after`, 任一
+  变了才放行。新类 `TrayPanelRenderGate` 8 条(首帧必画/同快照第二次跳过/新样本/换列/反向/
+  改筛选/空->数据各自放行或跳过, 外加一条静态钉"闸真挂在周期链上且 `_safe_refresh` 只有
+  一个调用点")。变异验证 4 条全红(闸恒 True 退化成每秒重画、闸恒 False 面板再也不刷新、
+  闸没挂上、签名漏筛选词)。
 - **面板打不开不再无声无息**: `_panel_build` 的总 except 以前只退窗口计数、复位标志，异常本身吞得干干净净 —— `tray_debug.log` / `tray_error.log` 里一个字都没有，半建的 Toplevel 也没人 `destroy`。于是真出问题时用户看到的是“打开实时面板点了没反应”，而日志里连一行痕迹都没有，想排查都没有抓手；并且每点一次菜单就漏一个看不见的窗口。现在失败会把 traceback 写进 `tray_debug.log`（和 `_safe_refresh` 同一个规矩），并把半建窗口收掉。实测拿真 tkinter 灌 32 种敌意 `panel_ui.json`（`geometry` 畸形 / 越界、`widths` 是字符串或负数、`sort` 列名非法、`filter` / `topmost` 是 list / dict / int），面板全部正常打开。
 - **监控循环单轮异常不再杀死整个程序**: 采样循环 `cmd_monitor` 以前只在 `collect_gpu_sample` 外面接了 `OSError`＋聚合 / 进程名 / 注册表回读 / NVML 温度 / 迁移 / 面板回调任意一步抛个非 `OSError`（ctypes `ArgumentError`、解码错、回调里的 bug……），就会一路冒到托盘的 `_monitor_thread`，进而 `self.stop=True` 把**整个托盘退掉** —— `--noconsole` 下用户只看到“程序一直崩溃 / 图标没了”，而日志里连一行原因都没有（托盘那条路径以前只在异常时才写 `tray_error.log`，而进程若被 C 级段错故障拷死连这个文件都不会有）。现在整段循环兜底：一轮里任何 `Exception` 都把 traceback 同时写进 `gpu_monitor.log` 和永远落盘的 `gpu_monitor_error.log`，睡够一个周期再接着跑，宁可少采一帧也不让监控停摆（`KeyboardInterrupt` / `SystemExit` 仍照常退出，不误吞）。真正的 C 级访问冲突（`0xc0000005`）能不能被 Python 接住，取决于**被调方**内部有没有 SEH，不取决于 Python：`install_fault_dump()` 装的 faulthandler 挂的是**向量化**异常处理器，它在被调方自己的 SEH 之前先跑，所以哪怕冲突被 `nvml` / `kernel32` 内部接住、ctypes 照常返回、Python 一个异常都收不到，`gpu_monitor_crash.log` 里也照样落一条 `Windows fatal exception`。本机实测一个实例连跑 17.5 小时写了 165 条这种转储，五条线程 ID 全程一致、期间没有一次重启 —— **这份文件是原生故障现场记录，不是死亡证明**，判死活要拿它去对 `gpu_monitor.log` 里的“启动监控”行有没有重启（真被内核干掉的进程反而一条都写不出来，那一路才由 2 分钟一次的看门狗兜底）。现在这个文件**新建**时（首次运行或刚滚走）开头会写一行说明，旧文件超过 1MB 先滚成 `gpu_monitor_crash.log.1`，`gpu_monitor_crash.log` / `gpu_monitor_error.log` 也都登记进了 `.gitignore`（有测试从源码扫 `os.path.join(_DIR, "*.log")` 来守这张表，新加日志忘了登记会当场红）。说明只在文件是新建的时候写、绝不往已存在的文件里追加，是因为上一版每实例追加一行会被拿 `subprocess` 真跑脚本的用例打穿——一轮测试就往线上文件插了 3 行；现在有专门一条用例钉住“已存在的 crash log 一个字节都不许多写”。
 - **NVML 抖一下不再把温度读数冲掉, 也不再静默**: 温度块原来是无条件
@@ -364,7 +462,7 @@ python gpu_monitor.py --unset-all
   4 秒以上），而温度每 10s 读一次，隔离会把采样周期整个吃光，所以那种环境下老老实实
   进程内直读。实测子进程读一次 ~0.3s，进程内直读 ~42ms。
 - **PDH 通配展开的缓冲区有了上界**：`expand_counter_paths` 的缓冲区是照 `PdhExpandWildCardPathW` 报回的字符数现分配的（`size.value + 1024` 余量，防两次调用之间实例数增长）。对这个数不设上界，等于让一个外部 API 的返回值决定本进程一次分配多少内存：报回荒谬值时 `create_unicode_buffer` 直接 `MemoryError`，采样线程硬死，连 `_dbg` 那种"留一行痕迹"的机会都没有。现在超过 1M 字符就 `OSError` 拒绝分配，且不重试（荒谬的长度重试五次还是荒谬）。本机实测一次展开 507 条 GPU Engine 实例路径 / 54,943 字符，上限是它的约 19 倍 —— 拦不到正常用量，只拦荒谬值。
-- **测试**：`python tests/test_gpu_monitor.py`（纯标准库 unittest，693 用例；
+- **测试**：`python tests/test_gpu_monitor.py`（纯标准库 unittest，729 用例；
    跑测试不会碰仓库里的任何状态文件：  `TraySingleInterpreter` 只把 config.json 指去临时目录，`_UI_FILE` 还指着仓库里那份，而其中一条用例会真的走一遍 `on_close`。
   结果是每跑一遍 `python tests/test_gpu_monitor.py`，你的列宽/筛选词/排序列/置顶就被冲掉：列宽变成替身 `tree.column` 的返回值（一列不多一列不少全是同一个数），geometry 是替身 `Toplevel` 的返回值，而且没有任何恢复办法。
   现在 `_UI_FILE` 一起指到临时目录，并新增 `TrayPanelUiIsolation` 两条守卫：用例跑的时候 `_UI_FILE` 必须在临时目录里、跑完必须原样还原、磁盘上那份一个字节都不许动；实测跑完整套之后 `panel_ui.json` / `config.json` / `history.jsonl` / `report.csv` / `gpu_monitor.log` 全部逐字节不变。
